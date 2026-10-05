@@ -1,0 +1,16 @@
+# 白姬音乐 —— ArkTS 方舟混淆规则（release 构建自动生效）
+#
+# 由 ohos/entry/build-profile.json5 的 buildOptionSet.release.arkOptions.obfuscation 引用，
+# 配合 hvigor 在 release 模式自动执行混淆，无需手工介入。
+# 开启混淆能力
+-enable-property-obfuscation
+-enable-toplevel-obfuscation
+-enable-filename-obfuscation
+
+# 保留规则：
+# 1) 入口 Ability 与系统回调签名必须保留（系统按 manifest 反射调用）
+-keep-global-name
+-keep-property-name
+
+# 2) 若后续接入 Flutter 引擎侧桥接类（flutter_ohos），按需放开并细化为精确 keep，
+#    例如：-keep-global-name { com.baiji.music.*; }

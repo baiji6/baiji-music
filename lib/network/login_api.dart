@@ -1,0 +1,358 @@
+import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:baiji_music/core/app_logger.dart';
+import 'package:baiji_music/core/string_clip.dart';
+import 'package:baiji_music/crypto/qq_crypto.dart';
+import 'package:baiji_music/models/models.dart';
+
+import 'qq_music_client.dart';
+
+/// 二维码数据：图片字节 + qrsig（同一次请求获取）。
+class Qrcode {
+  final Uint8List image;
+  final String qrsig;
+
+  const Qrcode(this.image, this.qrsig);
+}
+
+/// 二维码状态事件。
+enum QrEvent { done, scan, conf, refuse, timeout, other }
+
+class QrCheck {
+  final QrEvent event;
+  final String uin;
+  final String sigx;
+
+  const QrCheck(this.event, {this.uin = '', this.sigx = ''});
+}
+
+/// QQ 音乐登录：二维码方式 + Cookie 方式。
+///
+/// 对应原生 `network/LoginApi.kt`，加密/签名逻辑全部走纯 Dart。
+class LoginApi {
+  LoginApi(this.client);
+
+  final QQMusicClient client;
+
+  static const String referer = 'https://xui.ptlogin2.qq.com/';
+  static final RegExp _qqStatusRe = RegExp(r'ptuiCB\((.*?)\)');
+  static final RegExp _qqArgsRe = RegExp(r"'((?:\\.|[^'])*)'");
+  static final RegExp _qqSigxRe = RegExp(r'(?:\?|&)ptsigx=(.+?)&s_url');
+  static final RegExp _qqUinRe = RegExp(r'(?:\?|&)uin=(.+?)&service');
+  static final RegExp _codeRe = RegExp(r'(?<=code=)(.+?)(?=&)');
+
+  final math.Random _rng = math.Random();
+
+  /// 获取 QQ 登录二维码。
+  Future<Qrcode> getQrcode() async {
+    final url = 'https://ssl.ptlogin2.qq.com/ptqrshow';
+    final params = <String, String>{
+      'appid': '716027609',
+      'e': '2',
+      'l': 'M',
+      's': '3',
+      'd': '72',
+      'v': '4',
+      't': _rng.nextDouble().toString(),
+      'daid': '383',
+      'pt_3rd_aid': '100497308',
+    };
+    final host = Uri.parse(url).replace(queryParameters: params);
+    final qr = await client.rawQrcode(
+      host.toString(),
+      headers: {'Referer': referer},
+    );
+    final qrsig = qr.cookies['qrsig'];
+    if (qrsig == null || qrsig.isEmpty) {
+      throw Exception('获取 qrsig 失败');
+    }
+    return Qrcode(qr.bytes, qrsig);
+  }
+
+  /// 检查二维码状态。
+  Future<QrCheck> checkQrcode(String qrsig) async {
+    final url = 'https://ssl.ptlogin2.qq.com/ptqrlogin';
+    final params = <String, String>{
+      'u1': 'https://graph.qq.com/oauth2.0/login_jump',
+      'ptqrtoken': '${hash33(qrsig)}',
+      'ptredirect': '0',
+      'h': '1',
+      't': '1',
+      'g': '1',
+      'from_ui': '1',
+      'ptlang': '2052',
+      'action': '0-0-${DateTime.now().millisecondsSinceEpoch}',
+      'js_ver': '20102616',
+      'js_type': '1',
+      'pt_uistyle': '40',
+      'aid': '716027609',
+      'daid': '383',
+      'pt_3rd_aid': '100497308',
+      'has_onekey': '1',
+    };
+    final host = Uri.parse(url).replace(queryParameters: params);
+    final resp = await client.rawRequest(
+      method: 'GET',
+      url: host.toString(),
+      headers: {'Referer': referer, 'Cookie': 'qrsig=$qrsig'},
+    );
+    final m = _qqStatusRe.firstMatch(resp.text);
+    if (m == null) return const QrCheck(QrEvent.other);
+    final inner = m.group(1);
+    if (inner == null) return const QrCheck(QrEvent.other);
+    final args = <String>[];
+    for (final am in _qqArgsRe.allMatches(inner)) {
+      final g = am.group(1);
+      if (g != null) args.add(g);
+    }
+    if (args.isEmpty) return const QrCheck(QrEvent.other);
+    final code = int.tryParse(args[0]) ?? -1;
+    final event = switch (code) {
+      0 => QrEvent.done,
+      66 => QrEvent.scan,
+      67 => QrEvent.conf,
+      65 => QrEvent.timeout,
+      _ => QrEvent.other,
+    };
+    if (event != QrEvent.done || args.length < 3) {
+      return QrCheck(event);
+    }
+    final sigxM = _qqSigxRe.firstMatch(args[2]);
+    final uinM = _qqUinRe.firstMatch(args[2]);
+    if (sigxM == null || uinM == null) return QrCheck(event);
+    return QrCheck(event, uin: uinM.group(1) ?? '', sigx: sigxM.group(1) ?? '');
+  }
+
+  /// 扫码确认后换取凭证。
+  Future<Credential> authorizeQr(String uin, String sigx) async {
+    // 1. check_sig（禁止重定向）
+    final checkUrl = 'https://ssl.ptlogin2.graph.qq.com/check_sig';
+    final checkParams = <String, String>{
+      'uin': uin,
+      'pttype': '1',
+      'service': 'ptqrlogin',
+      'nodirect': '0',
+      'ptsigx': sigx,
+      's_url': 'https://graph.qq.com/oauth2.0/login_jump',
+      'ptlang': '2052',
+      'ptredirect': '100',
+      'aid': '716027609',
+      'daid': '383',
+      'j_later': '0',
+      'low_login_hour': '0',
+      'regmaster': '0',
+      'pt_login_type': '3',
+      'pt_aid': '0',
+      'pt_aaid': '16',
+      'pt_light': '0',
+      'pt_3rd_aid': '100497308',
+    };
+    final checkHost = Uri.parse(checkUrl).replace(queryParameters: checkParams);
+    final checkResp = await client.rawRequestNoRedirect(
+      method: 'GET',
+      url: checkHost.toString(),
+      headers: {'Referer': referer},
+    );
+    final cookies = checkResp.cookies;
+    final pSkey = cookies['p_skey'] ??
+        cookies['p-skey'] ??
+        cookies['pskey'] ??
+        cookies['ptsigx'] ??
+        cookies['skey'];
+    if (pSkey == null) {
+      throw Exception(
+          '获取 p_skey 失败(status=${checkResp.status}, cookies=${cookies.keys})');
+    }
+    AppLog.d('BaiJiLogin',
+        'check_sig ok, pSkey=${pSkey.clip(6)}... cookies=${cookies.keys}');
+
+    // 2. authorize -> code（code 在 302 Location 头，必须禁止重定向）
+    final authUrl = 'https://graph.qq.com/oauth2.0/authorize';
+    final cookieStr = cookies.entries.map((e) => '${e.key}=${e.value}').join('; ');
+    final body = <String, String>{
+      'response_type': 'code',
+      'client_id': '100497308',
+      'redirect_uri':
+          'https://y.qq.com/portal/wx_redirect.html?login_type=1&surl=https://y.qq.com/',
+      'scope': 'get_user_info,get_app_friends',
+      'state': 'state',
+      'switch': '',
+      'from_ptlogin': '1',
+      'src': '1',
+      'update_auth': '1',
+      'openapi': '1010_1030',
+      'g_tk': '${hash33(pSkey, 5381)}',
+      'auth_time': '${DateTime.now().millisecondsSinceEpoch}',
+      'ui': client.randomUuid(),
+    }.entries
+        .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
+
+    final authResp = await client.rawRequestNoRedirect(
+      method: 'POST',
+      url: authUrl,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': referer,
+        'Cookie': cookieStr,
+      },
+      body: body,
+    );
+    AppLog.d('BaiJiLogin',
+        'authorize status=${authResp.status} location=${authResp.location.clip(200)}');
+    final code = _extractCode(authResp.location);
+    if (code == null) {
+      throw Exception(
+          '获取 code 失败(status=${authResp.status}, location=${authResp.location.clip(200)})');
+    }
+
+    // 3. QQConnectLogin -> Credential
+    final data = await client.executeRaw(
+      BizRequest(
+        module: 'QQConnectLogin.LoginServer',
+        method: 'QQLogin',
+        param: {'code': code},
+        allowErrorCodes: true,
+      ),
+      extraComm: {'tmeLoginType': 2},
+    );
+    AppLog.d('BaiJiLogin',
+        'QQLogin 响应 code=${data['code']} msg=${data['msg']} data=${jsonEncode(data['data']).clip(300)}');
+    final validated = _validateResult(data);
+    return Credential.fromDict(validated);
+  }
+
+  /// 使用 QQ 音乐 Cookie 登录（扫码失败后的备选方式）。
+  Future<Credential> loginByCookie(String cookie) async {
+    final trimmed = cookie.trim();
+    if (trimmed.isEmpty) throw Exception('Cookie 不能为空');
+
+    final pairs = <String, String>{};
+    final body = trimmed
+        .replaceFirst('Cookie', '')
+        .replaceFirst('cookie', '')
+        .replaceFirst(':', '')
+        .trimLeft();
+    for (final part in body.split(';')) {
+      final seg = part.trim();
+      if (seg.isEmpty) continue;
+      final idx = seg.indexOf('=');
+      if (idx <= 0) continue;
+      var v = seg.substring(idx + 1).trim();
+      if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+        v = v.substring(1, v.length - 1);
+      }
+      if (v.isNotEmpty) {
+        pairs[seg.substring(0, idx).trim()] = v;
+      }
+    }
+    AppLog.d('BaiJiLogin', 'cookie 键: ${pairs.keys.join(',')}');
+
+    final uinStr = (pairs['uin'] ??
+            pairs['qqmusic_uin'] ??
+            pairs['uin_android'] ??
+            pairs['w_uin'] ??
+            pairs['u'])
+            ?.trim()
+            .replaceAll('"', '')
+            .replaceAll("'", '') ??
+        '';
+    if (uinStr.isEmpty) {
+      throw Exception('Cookie 中缺少 uin（应为 QQ 音乐登录后的 uin）');
+    }
+    final uinNumeric = uinStr.replaceAll(RegExp('[^0-9]'), '');
+    final uinLong = int.tryParse(uinNumeric);
+    if (uinLong == null) {
+      throw Exception('Cookie 中的 uin 无效: $uinStr');
+    }
+
+    final musickey = (pairs['qm_keyst'] ??
+            pairs['qqmusic_key'] ??
+            pairs['qm_key'] ??
+            pairs['musickey'] ??
+            pairs['qm_keyst_android'] ??
+            pairs['qqmusic_keyst'])
+            ?.trim()
+            .replaceAll('"', '')
+            .replaceAll("'", '') ??
+        '';
+    if (musickey.isEmpty) {
+      throw Exception('Cookie 中缺少 qm_keyst / qqmusic_key');
+    }
+
+    final cred = Credential(
+      musicid: uinLong,
+      musickey: musickey,
+      strMusicid: uinStr,
+      loginType: musickey.startsWith('W_X') ? 1 : 2,
+      musickeyCreateTime: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      keyExpiresIn: 0,
+    );
+    AppLog.d('BaiJiLogin',
+        'cookie 解析: uin=$uinStr loginType=${cred.loginType} key=${musickey.clip(8)}...');
+
+    // 放宽校验：解析成功即返回凭证，校验失败仅记录日志
+    final prev = client.credential;
+    client.credential = cred;
+    try {
+      final data = await client.executeRaw(
+        BizRequest(
+          module: 'music.UserInfo.userInfoServer',
+          method: 'GetLoginUserInfo',
+          param: <String, dynamic>{},
+          allowErrorCodes: true,
+        ),
+      );
+      final code = data['code'] as int? ?? -1;
+      AppLog.d('BaiJiLogin', 'cookie 校验 GetLoginUserInfo code=$code');
+      if (code != 0) {
+        AppLog.w('BaiJiLogin',
+            'cookie 校验未通过 code=$code，仍返回凭证（可能网络/风控导致）');
+      }
+    } catch (e) {
+      AppLog.w('BaiJiLogin', 'cookie 校验异常(不阻断登录): $e');
+    } finally {
+      client.credential = prev;
+    }
+    return cred;
+  }
+
+  String? _extractCode(String text) {
+    final m = _codeRe.firstMatch(text);
+    return m?.group(1);
+  }
+
+  /// 校验 QQLogin 返回，解包 {code, data}，抛出可读登录错误。
+  Map<String, dynamic> _validateResult(Map<String, dynamic> resp) {
+    Map<String, dynamic> cur = resp;
+    for (var i = 0; i < 2; i++) {
+      if (cur.containsKey('code') && cur.containsKey('data')) {
+        final c = (cur['code'] as int?) ?? -1;
+        if (c != 0) {
+          final msg = switch (c) {
+            1000 || 104401 || 104400 => '登录鉴权已过期',
+            20261 => '登录参数错误',
+            20271 => '验证码错误',
+            20272 => '账号绑定异常',
+            20274 => '账号绑定缺失',
+            20277 || 20278 => '账号受限',
+            20279 => '登录设备数超限',
+            20450 => '账号已被封禁',
+            104604 => '操作过于频繁',
+            _ => '未知登录错误 $c',
+          };
+          throw Exception('$msg ($c)');
+        }
+        final data = cur['data'];
+        if (data is Map<String, dynamic>) {
+          cur = data;
+        } else {
+          return <String, dynamic>{};
+        }
+      }
+    }
+    return cur;
+  }
+}
