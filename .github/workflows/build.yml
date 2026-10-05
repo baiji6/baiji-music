@@ -58,13 +58,32 @@ jobs:
           keytool -list -keystore android/app/keystore/baiji9527.jks \
             -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" 2>&1 | head -6
 
-      - name: Build release APK（R8 + 签名）
+      - name: Build release APK（R8 + 资源压缩）
+        run: flutter build apk --release ${{ env.OBF_ARGS }}
+
+      # AGP 在新版本里可能只生成 v2/v3，这里用 apksigner 显式强制重签完整的 v1+v2+v3 签名链
+      - name: Force re-sign v1+v2+v3 (apksigner)
         env:
           ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/app/keystore/baiji9527.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: flutter build apk --release ${{ env.OBF_ARGS }}
+        run: |
+          set -euo pipefail
+          APKSIGNER="${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -1)/apksigner"
+          APP=$(find build/app/outputs -name "*.apk" | head -1)
+          echo "APK: $APP"
+          ls -la "$APP"
+          "$APKSIGNER" sign \
+            --ks "$ANDROID_KEYSTORE_PATH" \
+            --ks-pass "pass:${ANDROID_KEYSTORE_PASSWORD}" \
+            --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            "$APP"
+          echo "re-sign ok"
 
       - name: Verify v1+v2+v3 signatures
         run: |
@@ -74,12 +93,12 @@ jobs:
           APKSIGNER="${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -1)/apksigner"
           "$APKSIGNER" verify --verbose --print-certs "$APP" | tee sign-verify.log
           echo "---- signature scheme check ----"
-          grep -q "Verified using v1 scheme: true" sign-verify.log && echo "v1 OK"
-          grep -q "Verified using v2 scheme: true" sign-verify.log && echo "v2 OK"
-          grep -q "Verified using v3 scheme: true" sign-verify.log && echo "v3 OK"
-          grep -q "Verified using v1 scheme: true" sign-verify.log && \
-          grep -q "Verified using v2 scheme: true" sign-verify.log && \
-          grep -q "Verified using v3 scheme: true" sign-verify.log || {
+          grep -q "^Verified using v1 scheme (JAR signing): true" sign-verify.log && echo "v1 OK"
+          grep -q "^Verified using v2 scheme (APK Signature Scheme v2): true" sign-verify.log && echo "v2 OK"
+          grep -q "^Verified using v3 scheme (APK Signature Scheme v3): true" sign-verify.log && echo "v3 OK"
+          grep -q "^Verified using v1 scheme (JAR signing): true" sign-verify.log && \
+          grep -q "^Verified using v2 scheme (APK Signature Scheme v2): true" sign-verify.log && \
+          grep -q "^Verified using v3 scheme (APK Signature Scheme v3): true" sign-verify.log || {
             echo "::error::APK signature incomplete (must be v1+v2+v3)"; exit 1; }
 
       - name: Upload artifact
