@@ -69,6 +69,12 @@ jobs:
           keytool -list -keystore android/app/keystore/baiji9527.jks \
             -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" 2>&1 | head -6
 
+      # 提升所有插件的 compileSdk 以兼容主项目 compileSdk=36，避免 file_picker 等旧版插件的 AAR 元数据不匹配
+      - name: Bump plugin compileSdk to 36
+        run: |
+          find ~/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
+          find /home/runner/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
+
       - name: Build release APK（R8 + jks 直签 v1+v2+v3）
         env:
           ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/app/keystore/baiji9527.jks
