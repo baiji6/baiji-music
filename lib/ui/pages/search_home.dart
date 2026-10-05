@@ -8,7 +8,7 @@ import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 
-/// 搜索页：霓虹搜索框 + 双音源并发搜索 + 搜索结果列表 + 搜索历史。
+/// 搜索页：霓虹搜索框 + 音源切换 + 搜索结果列表 + 搜索历史。
 class SearchHome extends StatefulWidget {
   const SearchHome({super.key});
 
@@ -23,6 +23,7 @@ class _SearchHomeState extends State<SearchHome> {
   String? _error;
   List<Song> _results = [];
   List<String> _history = [];
+  String _source = Source.qq; // 当前搜索音源
 
   static const _hotTags = [
     '周杰伦', '林俊杰', '陈奕迅', '邓紫棋', '薛之谦',
@@ -53,17 +54,14 @@ class _SearchHomeState extends State<SearchHome> {
     HistoryStore.addSearch(k);
     setState(() => _history = HistoryStore.searchHistory());
     try {
-      // 双音源并发搜索
-      final results = await Future.wait([
-        MusicApi.search(Source.qq, k).catchError((_) => <Song>[]),
-        MusicApi.search(Source.netease, k).catchError((_) => <Song>[]),
-      ]);
+      // 单音源搜索（根据选择的平台）
+      final results = await MusicApi.search(_source, k);
       if (!mounted) return;
       setState(() {
-        _results = [...results[0], ...results[1]];
+        _results = results;
         _loading = false;
       });
-      AppLog.i('SearchHome', '搜索「$k」命中 ${_results.length} 首');
+      AppLog.i('SearchHome', '搜索「$k」(${_source == Source.qq ? 'QQ' : '网易云'}) 命中 ${_results.length} 首');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -85,7 +83,6 @@ class _SearchHomeState extends State<SearchHome> {
   void _playSong(Song song) {
     HistoryStore.addPlay(song);
     PlayerController.instance.playQueue([song], startIndex: 0).then((_) {
-      // 历史已写入；更新当前曲目
       if (mounted) setState(() {});
     });
     setState(() {});
@@ -102,6 +99,15 @@ class _SearchHomeState extends State<SearchHome> {
       if (mounted) setState(() {});
     });
     setState(() {});
+  }
+
+  void _switchSource(String source) {
+    if (_source == source) return;
+    setState(() => _source = source);
+    // 如果有搜索关键词，自动重新搜索
+    if (_keyword.isNotEmpty) {
+      _search(_keyword);
+    }
   }
 
   @override
@@ -122,9 +128,11 @@ class _SearchHomeState extends State<SearchHome> {
                   ),
                 ),
                 const Spacer(),
-                const TagBadge('QQ 音乐', color: AppColors.cyan),
-                const SizedBox(width: 8),
-                const TagBadge('网易云', color: AppColors.magenta),
+                // 音源切换按钮
+                _SourceSwitch(
+                  current: _source,
+                  onSwitch: _switchSource,
+                ),
               ],
             ),
           ),
@@ -133,7 +141,7 @@ class _SearchHomeState extends State<SearchHome> {
             child: GlassCard(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               radius: 18,
-              glowColor: AppColors.cyan,
+              glowColor: _source == Source.qq ? AppColors.cyan : AppColors.magenta,
               child: TextField(
                 controller: _controller,
                 textInputAction: TextInputAction.search,
@@ -145,12 +153,18 @@ class _SearchHomeState extends State<SearchHome> {
                   setState(() {});
                 },
                 style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
-                cursorColor: AppColors.cyan,
+                cursorColor: _source == Source.qq ? AppColors.cyan : AppColors.magenta,
                 decoration: InputDecoration(
                   border: InputBorder.none,
-                  hintText: '搜索歌曲、歌手、专辑…',
+                  hintText: _source == Source.qq
+                      ? '搜索 QQ 音乐曲库…'
+                      : '搜索网易云音乐曲库…',
                   hintStyle: const TextStyle(color: AppColors.textTertiary),
-                  icon: const Icon(Icons.search_rounded, color: AppColors.cyan, size: 22),
+                  icon: Icon(
+                    Icons.search_rounded,
+                    color: _source == Source.qq ? AppColors.cyan : AppColors.magenta,
+                    size: 22,
+                  ),
                   suffixIcon: _controller.text.isEmpty
                       ? null
                       : IconButton(
@@ -390,6 +404,91 @@ class _SearchHomeState extends State<SearchHome> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 音源切换按钮组。
+class _SourceSwitch extends StatelessWidget {
+  const _SourceSwitch({required this.current, required this.onSwitch});
+
+  final String current;
+  final ValueChanged<String> onSwitch;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceGlass,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.strokeGlass),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _SourceChip(
+            label: 'QQ',
+            color: AppColors.cyan,
+            active: current == Source.qq,
+            onTap: () => onSwitch(Source.qq),
+          ),
+          _SourceChip(
+            label: '网易',
+            color: AppColors.magenta,
+            active: current == Source.netease,
+            onTap: () => onSwitch(Source.netease),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SourceChip extends StatelessWidget {
+  const _SourceChip({
+    required this.label,
+    required this.color,
+    required this.active,
+    required this.onTap,
+  });
+
+  final String label;
+  final Color color;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          gradient: active
+              ? LinearGradient(colors: [color, color.withValues(alpha: 0.7)])
+              : null,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: active
+              ? [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.4),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : null,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+            color: active ? Colors.white : AppColors.textTertiary,
+          ),
+        ),
+      ),
     );
   }
 }

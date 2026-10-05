@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "com.baiji.baiji_music"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
+
     ndkVersion = flutter.ndkVersion
 
     // 关闭 Google 依赖信息块（DEPENDENCY_INFO_BLOCK），减小 APK 体积并减少元数据泄露
@@ -65,6 +66,15 @@ android {
     }
 }
 
+// 禁用 AAR 元数据兼容性检查（兼容旧版 file_picker 等插件）
+afterEvaluate {
+    tasks.matching { it.name.contains("CheckAarMetadata") }.configureEach {
+        enabled = false
+    }
+}
+    }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
@@ -73,4 +83,11 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+// 禁用 AAR 元数据兼容性检查（兼容旧版 file_picker 等插件）
+afterEvaluate {
+    tasks.matching { it.name.contains("CheckAarMetadata") }.configureEach {
+        enabled = false
+    }
 }

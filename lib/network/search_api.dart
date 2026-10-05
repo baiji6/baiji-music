@@ -10,6 +10,7 @@ class SearchApi {
   final QQMusicClient client;
 
   /// 按类型搜索歌曲（SONG）。
+  /// 搜索不需要 session，直接发送请求以避免 session/QIMEI 初始化失败影响搜索。
   Future<List<Song>> searchByType(String keyword,
       {int page = 1, int num = 20}) async {
     final param = <String, dynamic>{
@@ -22,11 +23,30 @@ class SearchApi {
       'grp': true,
     };
     AppLog.i('SearchApi', '开始搜索 keyword=$keyword page=$page num=$num');
-    final data = await client.execute(BizRequest(
-      module: 'music.search.SearchCgiService',
-      method: 'DoSearchForQQMusicMobile',
-      param: param,
-    ));
+
+    // 搜索接口不需要 session，直接使用 request() 绕过 ensureSession()
+    // 避免因 QIMEI 注册/session 获取失败导致搜索不可用
+    final comm = client.buildComm();
+    final payload = <String, dynamic>{
+      'comm': comm,
+      'req_0': {
+        'module': 'music.search.SearchCgiService',
+        'method': 'DoSearchForQQMusicMobile',
+        'param': _boolToInt(param),
+      },
+    };
+    final resp = await client.request(
+      method: 'POST',
+      url: QQMusicClient.musicuUrl,
+      jsonBody: payload,
+    );
+    final req0 = resp['req_0'];
+    final data = req0 is Map<String, dynamic>
+        ? (req0['data'] is Map<String, dynamic>
+            ? req0['data'] as Map<String, dynamic>
+            : <String, dynamic>{})
+        : <String, dynamic>{};
+
     var body = data;
     if (body.containsKey('body')) {
       final inner = body['body'];
@@ -57,6 +77,18 @@ class SearchApi {
     AppLog.i('SearchApi',
         '搜索结果 keyword=$keyword 命中=${result.length} 原始条目=${list?.length ?? 0}');
     return result;
+  }
+
+  /// 递归将布尔值转 1/0。
+  static dynamic _boolToInt(dynamic o) {
+    if (o is bool) return o ? 1 : 0;
+    if (o is Map<String, dynamic>) {
+      return o.map((k, v) => MapEntry(k, _boolToInt(v)));
+    }
+    if (o is List) {
+      return o.map(_boolToInt).toList();
+    }
+    return o;
   }
 
   /// 搜索补全建议（smartbox 接口，无需登录）。
