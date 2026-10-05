@@ -47,23 +47,15 @@ android {
             else
                 signingConfigs.getByName("release")
             // —— R8 全量混淆 + 资源压缩（防逆向核心开关）——
+            // AGP 9.3 之前：isShrinkResources 在 release 构建类型上启用资源压缩；
+            // 代码压缩 isMinifyEnabled 同时驱动 R8 全量混淆与资源混淆。
             isMinifyEnabled = true
             isShrinkResources = true
-            // 资源名混淆（AGP 8.x 用 androidResources 配置）
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
         }
-    }
-
-    // 资源名混淆：将 res 资源名缩短为 a/b/c，配合 R8 压缩非法未用资源
-    androidResources {
-        isShrink = true
-        // 保留启动图标与清单引用资源
-        keepNames += listOf("R.string.app_name", "R.string.ic_launcher")
-        // 无文本压缩；保留所有资源文件的扩展名
-        noCompress += listOf("resources.arsc")
     }
 }
 

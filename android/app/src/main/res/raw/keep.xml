@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  白姬音乐 · 资源混淆保留清单
+  AGP 9 中资源压缩由 release 构建类型的 isShrinkResources 控制；
+  需要保留的资源在此声明（等价于旧版 androidResources.keepNames）。
+  说明：清单引用的 icon/label、styles.xml 引用的 launch_background 会被 AGP 自动保留，
+  此处显式声明以防误删。
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@mipmap/ic_launcher,@drawable/launch_background" />
