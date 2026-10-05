@@ -58,39 +58,29 @@ jobs:
           keytool -list -keystore android/app/keystore/baiji9527.jks \
             -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" 2>&1 | head -6
 
-      - name: Build release APK（R8 + 资源压缩）
-        run: flutter build apk --release ${{ env.OBF_ARGS }}
-
-      # AGP 在新版本里可能只生成 v2/v3，这里用 apksigner 显式强制重签完整的 v1+v2+v3 签名链
-      - name: Force re-sign v1+v2+v3 (apksigner)
+      - name: Build release APK（R8 + jks 直签 v1+v2+v3）
         env:
           ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/app/keystore/baiji9527.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          APKSIGNER="${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -1)/apksigner"
-          APP=$(find build/app/outputs -name "*.apk" | head -1)
-          echo "APK: $APP"
-          ls -la "$APP"
-          "$APKSIGNER" sign \
-            --ks "$ANDROID_KEYSTORE_PATH" \
-            --ks-pass "pass:${ANDROID_KEYSTORE_PASSWORD}" \
-            --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
-            --ks-key-alias "$ANDROID_KEY_ALIAS" \
-            --v1-signing-enabled true \
-            --v2-signing-enabled true \
-            --v3-signing-enabled true \
-            "$APP"
-          echo "re-sign ok"
+        run: flutter build apk --release ${{ env.OBF_ARGS }}
 
-      - name: Verify v1+v2+v3 signatures
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baiji-android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      - name: Verify v1+v2+v3 signatures (apksigner)
         run: |
           set -euo pipefail
           APP=$(find build/app/outputs -name "*.apk" | head -1)
           echo "APK: $APP"
           APKSIGNER="${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -1)/apksigner"
+          ls -la "${ANDROID_HOME}/build-tools"
+          "$APKSIGNER" --version 2>&1 || true
           "$APKSIGNER" verify --verbose --print-certs "$APP" | tee sign-verify.log
           echo "---- signature scheme check ----"
           grep -q "^Verified using v1 scheme (JAR signing): true" sign-verify.log && echo "v1 OK"
@@ -100,13 +90,6 @@ jobs:
           grep -q "^Verified using v2 scheme (APK Signature Scheme v2): true" sign-verify.log && \
           grep -q "^Verified using v3 scheme (APK Signature Scheme v3): true" sign-verify.log || {
             echo "::error::APK signature incomplete (must be v1+v2+v3)"; exit 1; }
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: baiji-android-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
 
   # ---------------------------------------------------------------- iOS
   ios:
