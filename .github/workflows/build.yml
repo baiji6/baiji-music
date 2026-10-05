@@ -1,15 +1,22 @@
 # ==============================================================================
-# 白姬音乐 · 六端自动构建流水线（GitHub Actions）
+# 白姬音乐 · 五端自动构建 + GitHub Releases 发布流水线（GitHub Actions）
 # ------------------------------------------------------------------------------
-# 触发：push 到 main / 打 v* 标签 / 手动 workflow_dispatch
-# 每个平台构建后自动执行加固：
+# 触发：
+#   - push 到 main        ：构建五端并上传 Artifact（供持续验证/预发布检查）
+#   - 推送 v* 标签        ：构建五端并把产物发布到 GitHub Releases
+#   - workflow_dispatch   ：手动触发（按 tag 与否决定是否发布）
+# 产物格式：
+#   Android : .apk（R8 全量混淆 + 资源压缩 + Dart 混淆 + jks 正式签名 v1+v2+v3，apksigner 严格验证）
+#   iOS     : .ipa（Release 构建 + Dart 混淆，未签名，符号剥离）
+#   macOS   : .dmg ×2（Intel x64 + Apple Silicon arm64 双架构，Release + Dart 混淆 + strip）
+#   Windows : .exe（自解压安装包，UPX 加壳 + Dart 混淆，另附 .zip 绿色版）
+#   Linux   : .deb（Debian 安装包，UPX 加壳 + Dart 混淆）
+# 加固措施（打包阶段自动执行）：
 #   Android : R8 全量混淆 + 资源压缩（gradle 内置）+ Dart 混淆 + 正式 jks 签名(v1+v2+v3)
-#   iOS     : Release 构建 + Dart 混淆（未签名 ipa/app，供安装包提取使用）
-#   macOS   : Release 构建 + Dart 混淆 + strip 符号剥离
-#   Windows : Release 构建 + Dart 混淆 + UPX 加壳
-#   Linux   : Release 构建 + Dart 混淆 + UPX 加壳（使用仓库固化的 UPX 二进制）
-#   ohos    : 工程完整性校验（鸿蒙 SDK 需 DevEco Studio 本地构建，见 ohos/README.md）
-# 产物统一上传为 GitHub Actions Artifact，可直接下载。
+#   iOS     : Dart 混淆 + 符号剥离（等价 STRIP_INSTALLED_PRODUCT）
+#   macOS   : Dart 混淆 + 符号剥离
+#   Windows : Dart 混淆 + UPX 加壳
+#   Linux   : Dart 混淆 + UPX 加壳（仓库固化的 UPX 二进制）
 # ==============================================================================
 name: build
 
@@ -19,9 +26,13 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 env:
   FLUTTER_VERSION: '3.47.6'
-  # Dart 混淆参数（六端通用核心防逆向）
+  APP_VERSION: '2.0.0'
+  # Dart 混淆参数（五端通用核心防逆向）
   OBF_ARGS: --obfuscate --split-debug-info=build/out/debug-info
 
 jobs:
@@ -66,22 +77,20 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: flutter build apk --release ${{ env.OBF_ARGS }}
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: baiji-android-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
+      - name: Rename APK
+        run: |
+          APP=$(find build/app/outputs -name "*.apk" | head -1)
+          cp "$APP" "baiji-music-${{ env.APP_VERSION }}-android.apk"
 
       - name: Verify v1+v2+v3 signatures (apksigner)
         run: |
           set -euo pipefail
           APP=$(find build/app/outputs -name "*.apk" | head -1)
           echo "APK: $APP"
-          APKSIGNER="${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -1)/apksigner"
+          APKSI="${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -1)/apksigner"
           ls -la "${ANDROID_HOME}/build-tools"
-          "$APKSIGNER" --version 2>&1 || true
-          "$APKSIGNER" verify --verbose --print-certs "$APP" | tee sign-verify.log
+          "$APKSI" --version 2>&1 || true
+          "$APKSI" verify --verbose --print-certs --min-sdk-version 21 "$APP" | tee sign-verify.log
           echo "---- signature scheme check ----"
           grep -q "^Verified using v1 scheme (JAR signing): true" sign-verify.log && echo "v1 OK"
           grep -q "^Verified using v2 scheme (APK Signature Scheme v2): true" sign-verify.log && echo "v2 OK"
@@ -91,9 +100,16 @@ jobs:
           grep -q "^Verified using v3 scheme (APK Signature Scheme v3): true" sign-verify.log || {
             echo "::error::APK signature incomplete (must be v1+v2+v3)"; exit 1; }
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baiji-android-apk
+          path: baiji-music-${{ env.APP_VERSION }}-android.apk
+          if-no-files-found: error
+
   # ---------------------------------------------------------------- iOS
   ios:
-    name: iOS Release（未签名）
+    name: iOS Release ipa（未签名）
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -118,18 +134,39 @@ jobs:
             xcrun strip -x "$APP/$(basename "${APP%.app}")" || true
           done
 
+      # 组装标准 .ipa 结构（Payload/*.app），未签名，供签名/分发
+      - name: Package ipa
+        run: |
+          mkdir -p build/ios/ipa/Payload
+          APP=$(find build/ios/iphoneos -name "*.app" -maxdepth 2 | head -1)
+          echo "APP dir: $APP"
+          [ -n "$APP" ] || { echo "no .app found"; exit 1; }
+          cp -R "$APP" build/ios/ipa/Payload/
+          cd build/ios/ipa
+          zip -qry "../../../baiji-music-${{ env.APP_VERSION }}-ios.ipa" Payload
+          cd ../../..
+          ls -la baiji-music-${{ env.APP_VERSION }}-ios.ipa
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: baiji-ios-app
-          path: build/ios/iphoneos/*.app
+          name: baiji-ios
+          path: baiji-music-${{ env.APP_VERSION }}-ios.ipa
           if-no-files-found: error
 
-  # ---------------------------------------------------------------- macOS
+  # ---------------------------------------------------------------- macOS（双架构）
   macos:
-    name: macOS Release（strip 符号）
-    runs-on: macos-latest
+    name: macOS Release (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -152,24 +189,33 @@ jobs:
             strip -x "$BIN" 2>/dev/null || true
           done
 
-      - name: Package dmg/app zip
+      # 制作 .dmg（UDZO 压缩镜像，含 /Applications 拖拽入口）
+      - name: Package dmg
         run: |
           cd build/macos/Build/Products/Release
           APP=$(find . -maxdepth 1 -name "*.app" | head -1)
           [ -n "$APP" ] || { echo "no .app found"; exit 1; }
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "baiji-macos.zip" 2>/dev/null || \
-            zip -qr baiji-macos.zip "$APP"
+          rm -rf "$OLDPWD/dmg-staging"
+          mkdir -p "$OLDPWD/dmg-staging"
+          cp -R "$APP" "$OLDPWD/dmg-staging/"
+          ln -s /Applications "$OLDPWD/dmg-staging/Applications"
+          hdiutil create -volname "白姬音乐" -srcfolder "$OLDPWD/dmg-staging" \
+            -ov -format UDZO \
+            "$OLDPWD/baiji-music-${{ env.APP_VERSION }}-macos-${{ matrix.arch }}.dmg"
+          cd "$OLDPWD"
+          rm -rf dmg-staging
+          ls -la baiji-music-${{ env.APP_VERSION }}-macos-${{ matrix.arch }}.dmg
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: baiji-macos
-          path: build/macos/Build/Products/Release/baiji-macos.zip
+          name: baiji-macos-${{ matrix.arch }}
+          path: baiji-music-${{ env.APP_VERSION }}-macos-${{ matrix.arch }}.dmg
           if-no-files-found: error
 
   # ---------------------------------------------------------------- Windows
   windows:
-    name: Windows Release（UPX 加壳）
+    name: Windows Release exe（UPX 加壳）
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -198,21 +244,38 @@ jobs:
             .\upx-4.2.4-win64\upx.exe --best -f $e.FullName
           }
 
+      # 绿色版 zip（内含 exe 与运行库）
       - name: Package zip
         shell: pwsh
         run: |
-          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath baiji-windows.zip
+          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath "baiji-music-${{ env.APP_VERSION }}-windows-x64.zip"
+
+      # 自解压安装 exe（7-Zip SFX）
+      - name: Package sfx exe
+        shell: pwsh
+        run: |
+          $7z = "C:\Program Files\7-Zip\7z.exe"
+          if (-not (Test-Path $7z)) { choco install 7zip -y --no-progress | Out-Null }
+          if (-not (Test-Path $7z)) { Write-Error "7-Zip not available"; exit 1 }
+          $sfx = "C:\Program Files\7-Zip\7z.sfx"
+          if (-not (Test-Path $sfx)) { Write-Error "7z.sfx not found"; exit 1 }
+          Push-Location build/windows/x64/runner/Release
+          & $7z a -t7z "-sfx$sfx" -mx=9 -y "$env:GITHUB_WORKSPACE\baiji-music-${{ env.APP_VERSION }}-windows-x64.exe" * | Out-Null
+          Pop-Location
+          Get-Item "baiji-music-${{ env.APP_VERSION }}-windows-x64.exe" | Select-Object Name, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: baiji-windows
-          path: baiji-windows.zip
+          path: |
+            baiji-music-${{ env.APP_VERSION }}-windows-x64.exe
+            baiji-music-${{ env.APP_VERSION }}-windows-x64.zip
           if-no-files-found: error
 
   # ---------------------------------------------------------------- Linux
   linux:
-    name: Linux Release（UPX 加壳）
+    name: Linux Release deb（UPX 加壳）
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -244,37 +307,59 @@ jobs:
             ./tools/upx/upx-linux-x64 --best -f "$BIN" || true
           done
 
-      - name: Package zip
-        run: |
-          cd build/linux/x64/release
-          tar -czf ../../../../baiji-linux.tar.gz bundle
+      # 组装 .deb 安装包（脚本见 tools/package-linux-deb.sh）
+      - name: Package deb
+        run: bash tools/package-linux-deb.sh "${{ env.APP_VERSION }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: baiji-linux
-          path: baiji-linux.tar.gz
+          path: build/linux/baiji-music_${{ env.APP_VERSION }}_amd64.deb
           if-no-files-found: error
 
-  # ---------------------------------------------------------------- ohos（鸿蒙）
-  ohos:
-    name: HarmonyOS 壳工程校验
+  # ---------------------------------------------------------------- Releases 发布
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [android, ios, macos, windows, linux]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      # GitHub 托管 runner 无鸿蒙 SDK/DevEco，无法直接出包；
-      # 此任务校验壳工程完整性，正式 HAP 需用 DevEco Studio 5.0+ 本地构建（见 ohos/README.md）
-      - name: Validate ohos shell project
-        run: |
-          for f in \
-            ohos/build-profile.json5 \
-            ohos/entry/build-profile.json5 \
-            ohos/entry/obfuscation-rules.txt \
-            ohos/entry/src/main/module.json5 \
-            ohos/entry/src/main/ets/entryability/EntryAbility.ets \
-            ohos/entry/src/main/ets/pages/Index.ets ; do
-            test -f "$f" || { echo "MISSING: $f"; exit 1; }
-          done
-          echo "ohos shell project OK（含方舟混淆规则，release 构建自动生效）"
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release files
+        run: ls -laR dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/baiji-music-${{ env.APP_VERSION }}-android.apk
+            dist/baiji-music-${{ env.APP_VERSION }}-ios.ipa
+            dist/baiji-music-${{ env.APP_VERSION }}-macos-x64.dmg
+            dist/baiji-music-${{ env.APP_VERSION }}-macos-arm64.dmg
+            dist/baiji-music-${{ env.APP_VERSION }}-windows-x64.exe
+            dist/baiji-music-${{ env.APP_VERSION }}-windows-x64.zip
+            dist/baiji-music_${{ env.APP_VERSION }}_amd64.deb
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+          name: 白姬音乐 v${{ env.APP_VERSION }}
+          body: |
+            ## 白姬音乐 v${{ env.APP_VERSION }}
+
+            五端自动构建产物（由 GitHub Actions 流水线构建并加固）：
+
+            - **Android**：`.apk` — R8 全量混淆 + 资源压缩 + Dart 混淆 + jks 正式签名（v1+v2+v3）
+            - **iOS**：`.ipa` — Release 构建 + Dart 混淆（未签名，需自行用证书签名）
+            - **macOS**：`.dmg` — Intel x64 / Apple Silicon arm64 双架构 + Dart 混淆 + 符号剥离
+            - **Windows**：`.exe` 自解压安装包 + `.zip` 绿色版 — UPX 加壳 + Dart 混淆
+            - **Linux**：`.deb` — UPX 加壳 + Dart 混淆
+
+            更多信息见仓库 README。

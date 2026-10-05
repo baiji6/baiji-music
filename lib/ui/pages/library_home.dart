@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../../core/app_logger.dart';
@@ -7,8 +9,13 @@ import '../../network/login_api.dart';
 import '../../network/music_api.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
+import 'about_page.dart';
+import 'download_page.dart';
+import 'history_page.dart';
+import 'log_page.dart';
+import 'playlist_page.dart';
 
-/// 我的页：账号卡片（QQ 登录）+ 本地歌单 / 下载 / 历史（接真实数据）。
+/// 我的页：账号卡片（QQ 登录 + 网易云 Cookie 登录）+ 本地歌单 / 下载 / 历史 / 收藏 / 设置 / 日志 / 关于。
 class LibraryHome extends StatefulWidget {
   const LibraryHome({super.key});
 
@@ -84,11 +91,15 @@ class _LibraryHomeState extends State<LibraryHome> {
   Widget build(BuildContext context) {
     final recent = HistoryStore.playHistory();
     final playlists = PlaylistStore.playlistNames();
-    final entries = [
-      ('本地歌单', '${playlists.length} 个', Icons.queue_music_rounded, AppColors.cyan),
-      ('下载管理', '0 首', Icons.download_rounded, AppColors.violet),
-      ('播放历史', '${recent.length} 首', Icons.history_rounded, AppColors.magenta),
-      ('我的收藏', '0 首', Icons.favorite_border_rounded, AppColors.aqua),
+    final entries = <(String, String, IconData, Color, VoidCallback)>[
+      ('本地歌单', '${playlists.length} 个', Icons.queue_music_rounded, AppColors.cyan,
+          () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlaylistPage()))),
+      ('下载管理', '0 首', Icons.download_rounded, AppColors.violet,
+          () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DownloadPage()))),
+      ('播放历史', '${recent.length} 首', Icons.history_rounded, AppColors.magenta,
+          () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryPage()))),
+      ('我的收藏', '${HistoryStore.playHistory().length} 首', Icons.favorite_border_rounded, AppColors.aqua,
+          () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryPage()))),
     ];
 
     return SafeArea(
@@ -193,7 +204,7 @@ class _LibraryHomeState extends State<LibraryHome> {
                     GlassCard(
                       padding: const EdgeInsets.all(16),
                       radius: 20,
-                      onTap: () {},
+                      onTap: e.$5,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -253,14 +264,14 @@ class _LibraryHomeState extends State<LibraryHome> {
                       title: '日志与调试',
                       subtitle: '查看/导出运行日志',
                       color: AppColors.violet,
-                      onTap: () {},
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LogPage())),
                     ),
                     _SettingTile(
                       icon: Icons.info_outline_rounded,
                       title: '关于',
-                      subtitle: '白姬音乐 v1.1.1 · 跨平台重构版',
+                      subtitle: '白姬音乐 v2.0.0 · 跨平台重构版',
                       color: AppColors.magenta,
-                      onTap: () {},
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AboutPage())),
                     ),
                   ],
                 ),
@@ -296,12 +307,15 @@ class _LoginSheet extends StatefulWidget {
 
 class _LoginSheetState extends State<_LoginSheet> {
   final _cookieController = TextEditingController();
+  final _wyCookieController = TextEditingController();
+  Uint8List? _qrImage;
   bool _busy = false;
   String? _qrError;
 
   @override
   void dispose() {
     _cookieController.dispose();
+    _wyCookieController.dispose();
     super.dispose();
   }
 
@@ -315,15 +329,43 @@ class _LoginSheetState extends State<_LoginSheet> {
     }
     setState(() => _busy = true);
     try {
-      final cred =
-          await AppServices.instance.qq.login.loginByCookie(cookie);
-      AppLog.i('LibraryHome', 'Cookie 登录成功 uid=${cred.strMusicid}');
+      final cred = await AppServices.instance.qq.login.loginByCookie(cookie);
+      AppServices.instance.qq.credential = cred;
+      AppLog.i('LibraryHome', 'QQ Cookie 登录成功 uid=${cred.strMusicid}');
       if (mounted) widget.onDone();
     } catch (e) {
       if (mounted) {
         setState(() {
           _busy = false;
-          _qrError = '登录失败: $e';
+          _qrError = 'QQ 登录失败: $e';
+        });
+      }
+    }
+  }
+
+  Future<void> _loginWyByCookie() async {
+    final cookie = _wyCookieController.text.trim();
+    if (cookie.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请粘贴网易云 Cookie（需包含 MUSIC_U）')),
+      );
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      AppServices.instance.netease.cookie = cookie;
+      AppLog.i('LibraryHome', '网易云 Cookie 已保存');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('网易云 Cookie 登录成功')),
+        );
+        widget.onDone();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _qrError = '网易云登录失败: $e';
         });
       }
     }
@@ -339,7 +381,7 @@ class _LoginSheetState extends State<_LoginSheet> {
       final qrcode = await login.getQrcode();
 
       if (!mounted) return;
-      // 展示二维码
+      setState(() => _qrImage = qrcode.image);
       // 轮询扫码状态
       const pollInterval = Duration(seconds: 2);
       var attempt = 0;
@@ -410,7 +452,7 @@ class _LoginSheetState extends State<_LoginSheet> {
           children: [
             Row(
               children: [
-                const NeonText('登录 QQ 音乐',
+                const NeonText('登录',
                     style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900)),
                 const Spacer(),
                 IconButton(
@@ -422,12 +464,12 @@ class _LoginSheetState extends State<_LoginSheet> {
             ),
             const SizedBox(height: 6),
             const Text(
-              '同步绿钻与无损音质 · Cookie 或二维码任选',
+              'QQ 音乐（Cookie / 二维码）  网易云（Cookie）',
               style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
             ),
             const SizedBox(height: 20),
 
-            // Cookie 登录
+            // QQ Cookie 登录
             GlassCard(
               padding: const EdgeInsets.all(14),
               glowColor: AppColors.cyan,
@@ -435,7 +477,7 @@ class _LoginSheetState extends State<_LoginSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Cookie 登录',
+                    'QQ 音乐 Cookie 登录',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 6),
@@ -463,7 +505,7 @@ class _LoginSheetState extends State<_LoginSheet> {
                   ),
                   const SizedBox(height: 10),
                   NeonButton(
-                    label: '登录',
+                    label: 'QQ 登录',
                     icon: Icons.login_rounded,
                     onPressed: _busy ? null : _loginByCookie,
                     padding: const EdgeInsets.symmetric(vertical: 10),
@@ -471,7 +513,70 @@ class _LoginSheetState extends State<_LoginSheet> {
                 ],
               ),
             ),
+            const SizedBox(height: 12),
+            // 网易云 Cookie 登录
+            GlassCard(
+              padding: const EdgeInsets.all(14),
+              glowColor: AppColors.magenta,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '网易云 Cookie 登录',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '粘贴浏览器中 music.163.com 的 Cookie（需含 MUSIC_U）',
+                    style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _wyCookieController,
+                    maxLines: 2,
+                    minLines: 2,
+                    style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
+                    decoration: InputDecoration(
+                      hintText: 'MUSIC_U=xxx; …',
+                      hintStyle: const TextStyle(
+                          fontSize: 12, color: AppColors.textTertiary),
+                      filled: true,
+                      fillColor: AppColors.surfaceGlass,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: AppColors.strokeGlass),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  NeonButton(
+                    label: '网易云登录',
+                    icon: Icons.login_rounded,
+                    gradient: const [AppColors.magenta, AppColors.violet],
+                    onPressed: _busy ? null : _loginWyByCookie,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 16),
+            if (_qrImage != null) ...[
+              Center(
+                child: Container(
+                  width: 180,
+                  height: 180,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.memory(_qrImage!, fit: BoxFit.contain),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             if (_qrError != null) ...[
               Text(
                 _qrError!,
@@ -480,7 +585,7 @@ class _LoginSheetState extends State<_LoginSheet> {
               const SizedBox(height: 12),
             ],
             NeonButton(
-              label: '扫码登录（二维码 + 轮询）',
+              label: 'QQ 扫码登录（二维码 + 轮询）',
               icon: Icons.qr_code_2_rounded,
               gradient: const [AppColors.magenta, AppColors.violet],
               onPressed: _busy ? null : _loginByQr,

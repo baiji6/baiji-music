@@ -27,14 +27,22 @@ class SearchApi {
       method: 'DoSearchForQQMusicMobile',
       param: param,
     ));
-    final body = data['body'];
-    final bodyMap = body is Map<String, dynamic> ? body : null;
-    var list = bodyMap?['item_song'];
+    var body = data;
+    if (body.containsKey('body')) {
+      final inner = body['body'];
+      if (inner is Map<String, dynamic>) body = inner;
+    }
+    var list = body['item_song'];
     if (list is! List) {
-      final song = bodyMap?['song'];
+      final song = body['song'];
       list = song is Map<String, dynamic> ? song['list'] : null;
     }
-    if (list is! List) list = data['item_song'];
+    if (list is! List && body.containsKey('data')) {
+      final d = body['data'];
+      if (d is Map<String, dynamic>) {
+        list = d['item_song'] ?? d['song']?['list'];
+      }
+    }
 
     final result = <Song>[];
     if (list is List) {
