@@ -15,19 +15,9 @@ class DiscoverHome extends StatefulWidget {
 }
 
 class _DiscoverHomeState extends State<DiscoverHome> {
-  static const _playlists = [
-    ('经典华语', '周杰伦 / 林俊杰 / 陈奕迅', Icons.album_outlined),
-    ('纯音乐 · 白噪音', '专注学习工作', Icons.spa_outlined),
-    ('欧美流行', 'Billboard 热门', Icons.bolt_outlined),
-    ('日语动漫', 'ACG 精选', Icons.auto_awesome_outlined),
-  ];
+  static const _playlists = <(String, String, IconData)>[];
 
-  static const _quickActions = [
-    ('每日推荐', Icons.today_outlined, AppColors.cyan),
-    ('排行榜', Icons.leaderboard_outlined, AppColors.violet),
-    ('私人 FM', Icons.radio_outlined, AppColors.magenta),
-    ('收藏歌单', Icons.favorite_outline, AppColors.aqua),
-  ];
+  static const _quickActions = <(String, IconData, Color)>[];
 
   List<Song> get _recent => HistoryStore.playHistory();
 

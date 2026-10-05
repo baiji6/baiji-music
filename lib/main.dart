@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'core/kv_store.dart';
 import 'theme/app_theme.dart';
 import 'ui/pages/discover_home.dart';
 import 'ui/pages/library_home.dart';
@@ -8,6 +9,7 @@ import 'ui/shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await KvStore.ensureInit();
   runApp(const BaijiMusicApp());
 }
 
