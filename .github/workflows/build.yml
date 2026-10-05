@@ -68,10 +68,19 @@ jobs:
 
       - name: Verify v1+v2+v3 signatures
         run: |
+          set -euo pipefail
           APP=$(find build/app/outputs -name "*.apk" | head -1)
           echo "APK: $APP"
-          apksigner verify --verbose --print-certs "$APP" 2>&1 | head -20 || \
-            "${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -1)/apksigner" verify --verbose "$APP" 2>&1 | head -20
+          APKSIGNER="${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | tail -1)/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs "$APP" | tee sign-verify.log
+          echo "---- signature scheme check ----"
+          grep -q "Verified using v1 scheme: true" sign-verify.log && echo "v1 OK"
+          grep -q "Verified using v2 scheme: true" sign-verify.log && echo "v2 OK"
+          grep -q "Verified using v3 scheme: true" sign-verify.log && echo "v3 OK"
+          grep -q "Verified using v1 scheme: true" sign-verify.log && \
+          grep -q "Verified using v2 scheme: true" sign-verify.log && \
+          grep -q "Verified using v3 scheme: true" sign-verify.log || {
+            echo "::error::APK signature incomplete (must be v1+v2+v3)"; exit 1; }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
