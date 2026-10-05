@@ -9,6 +9,12 @@
 -keep class io.flutter.plugins.** { *; }
 -keep class io.flutter.embedding.** { *; }
 
+# ---- Flutter 可变分包（Optional Deferred Components）引用了 play-core，但本工程未引入该依赖 ----
+# 这些类属于可选功能（Play Store 动态交付），缺失时 R8 不应报错
+-dontwarn com.google.android.play.core.splitinstall.**
+-dontwarn com.google.android.play.core.splitcompat.**
+-dontwarn com.google.android.play.core.tasks.**
+
 # ---- Flutter 插件（just_audio / path_provider / shared_preferences 等）----
 -keep class com.ryanheise.audioservice.** { *; }
 -keep class com.ryanheise.audioplayer.** { *; }
