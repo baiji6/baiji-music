@@ -72,8 +72,6 @@ afterEvaluate {
         enabled = false
     }
 }
-    }
-}
 
 kotlin {
     compilerOptions {
@@ -83,11 +81,4 @@ kotlin {
 
 flutter {
     source = "../.."
-}
-
-// 禁用 AAR 元数据兼容性检查（兼容旧版 file_picker 等插件）
-afterEvaluate {
-    tasks.matching { it.name.contains("CheckAarMetadata") }.configureEach {
-        enabled = false
-    }
 }
