@@ -15,9 +15,9 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
     project.evaluationDependsOn(":app")
-    tasks.whenTaskAdded { task ->
-        if (task.name.contains("CheckAarMetadata")) {
-            task.enabled = false
+    tasks.configureEach {
+        if (name.contains("CheckAarMetadata")) {
+            enabled = false
         }
     }
 }
