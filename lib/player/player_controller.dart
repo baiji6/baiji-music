@@ -99,6 +99,10 @@ class PlayerController {
   List<Song> get queue => List.unmodifiable(_queue);
   int get queueIndex => _queueIndex;
 
+  /// 公开底层 Player 实例（供 UI 直接监听 durationStream 等）。
+  /// 注意：不要在外部调用 dispose()。
+  Player? get player => _player;
+
   // ===== 播放控制 =====
 
   Future<void> _playUrlInternal(String url) async {
@@ -107,13 +111,9 @@ class PlayerController {
       await _player!.open(Media(url));
       await _player!.play();
       AppLog.i('PlayerController', '播放: $url');
-    } on PlayerException catch (e) {
-      AppLog.e('PlayerController', '播放失败(${e.code}): ${e.message}');
-      _errorStream.add('播放失败: ${e.message}');
-      _playState.add(false);
     } catch (e) {
-      AppLog.e('PlayerController', '播放异常: $e');
-      _errorStream.add('播放异常: $e');
+      AppLog.e('PlayerController', '播放失败: $e');
+      _errorStream.add('播放失败: $e');
       _playState.add(false);
     }
   }
