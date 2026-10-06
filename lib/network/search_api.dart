@@ -39,6 +39,7 @@ class SearchApi {
       method: 'POST',
       url: QQMusicClient.musicuUrl,
       jsonBody: payload,
+      headers: {'Referer': 'https://y.qq.com/', 'Origin': 'https://y.qq.com'},
     );
     final req0 = resp['req_0'];
     final data = req0 is Map<String, dynamic>
