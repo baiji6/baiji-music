@@ -82,4 +82,46 @@ class HistoryStore {
   }
 
   static void clearPlay() => KvStore.instance.remove(_keyPlay);
+
+  // ---------- 收藏 ----------
+
+  static const _keyFav = 'favorite_songs';
+
+  static List<Song> favorites() {
+    final raw = KvStore.instance.getString(_keyFav);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final arr = jsonDecode(raw) as List<dynamic>;
+      final out = <Song>[];
+      for (final e in arr) {
+        if (e is! Map<String, dynamic>) continue;
+        final s = Song.fromJson(e);
+        if (s.mid.isNotEmpty) out.add(s);
+      }
+      return out;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static void writeFavorites(List<Song> list) {
+    KvStore.instance
+        .setString(_keyFav, jsonEncode(list.take(_max).map((s) => s.toJson()).toList()));
+  }
+
+  static bool isFavorite(String mid) =>
+      favorites().any((it) => it.mid == mid);
+
+  static void toggleFavorite(Song song) {
+    if (song.mid.isEmpty) return;
+    final list = favorites();
+    if (isFavorite(song.mid)) {
+      writeFavorites(list.where((it) => it.mid != song.mid).toList());
+    } else {
+      list.insert(0, song);
+      writeFavorites(list);
+    }
+  }
+
+  static void clearFavorites() => KvStore.instance.remove(_keyFav);
 }
