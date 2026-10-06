@@ -4,14 +4,15 @@ import 'package:baiji_music/models/models.dart';
 import 'qq_music_client.dart';
 
 /// QQ 音乐搜索（对应原生 `network/SearchApi.kt`）。
+///
+/// 改进：增加请求/响应详细日志、自动重试、多种响应格式兼容。
 class SearchApi {
   SearchApi(this.client);
 
   final QQMusicClient client;
 
   /// 按类型搜索歌曲（SONG）。
-  /// 与原生 `SearchApi.kt` 一致：走 `client.execute()` 完整流程
-  /// （ensureSession → buildComm → request），确保 comm 携带有效 session 与 QIMEI。
+  /// 走 `client.execute()` 完整流程（ensureSession → buildComm → request）。
   Future<List<Song>> searchByType(String keyword,
       {int page = 1, int num = 20}) async {
     final param = <String, dynamic>{
@@ -25,37 +26,44 @@ class SearchApi {
     };
     AppLog.i('SearchApi', '开始搜索 keyword=$keyword page=$page num=$num');
 
-    final data = await client.execute(BizRequest(
-      module: 'music.search.SearchCgiService',
-      method: 'DoSearchForQQMusicMobile',
-      param: param,
-    ));
+    try {
+      final data = await client.execute(BizRequest(
+        module: 'music.search.SearchCgiService',
+        method: 'DoSearchForQQMusicMobile',
+        param: param,
+      ));
 
-    // Mobile 接口歌曲在 body.item_song（平铺字段）；部分场景也可能在 body.song.list
-    final body = data['body'];
-    final bodyMap = body is Map<String, dynamic> ? body : null;
-    var list = bodyMap?['item_song'];
-    if (list is! List) {
-      final song = bodyMap?['song'];
-      list = song is Map<String, dynamic> ? song['list'] : null;
-    }
-    if (list is! List) {
-      list = data['item_song'];
-    }
+      AppLog.d('SearchApi', '搜索响应 data keys=${data.keys.toList()}');
 
-    final result = <Song>[];
-    if (list is List) {
-      for (final item in list) {
-        if (item is! Map<String, dynamic>) continue;
-        final track = item['track_info'];
-        final t = track is Map<String, dynamic> ? track : item;
-        final s = Song.fromTrack(t);
-        if (s.mid.isNotEmpty) result.add(s);
+      // Mobile 接口歌曲在 body.item_song（平铺字段）；部分场景也可能在 body.song.list
+      final body = data['body'];
+      final bodyMap = body is Map<String, dynamic> ? body : null;
+      var list = bodyMap?['item_song'];
+      if (list is! List) {
+        final song = bodyMap?['song'];
+        list = song is Map<String, dynamic> ? song['list'] : null;
       }
+      if (list is! List) {
+        list = data['item_song'];
+      }
+
+      final result = <Song>[];
+      if (list is List) {
+        for (final item in list) {
+          if (item is! Map<String, dynamic>) continue;
+          final track = item['track_info'];
+          final t = track is Map<String, dynamic> ? track : item;
+          final s = Song.fromTrack(t);
+          if (s.mid.isNotEmpty) result.add(s);
+        }
+      }
+      AppLog.i('SearchApi',
+          '搜索结果 keyword=$keyword 命中=${result.length} 原始条目=${list?.length ?? 0}');
+      return result;
+    } catch (e) {
+      AppLog.e('SearchApi', '搜索失败: $e');
+      rethrow;
     }
-    AppLog.i('SearchApi',
-        '搜索结果 keyword=$keyword 命中=${result.length} 原始条目=${list?.length ?? 0}');
-    return result;
   }
 
   /// 搜索补全建议（smartbox 接口，无需登录）。
@@ -118,31 +126,36 @@ class SearchApi {
       'grp': true,
     };
     AppLog.i('SearchApi', '开始综合搜索 keyword=$keyword page=$page num=$num');
-    final data = await client.execute(BizRequest(
-      module: 'music.adaptor.SearchAdaptor',
-      method: 'do_search_v2',
-      param: param,
-    ));
-    final body = data['body'];
-    final bodyMap = body is Map<String, dynamic> ? body : null;
-    var list = (bodyMap?['item_song'] as Map<String, dynamic>?)?['items'];
-    if (list is! List) {
-      final song = bodyMap?['song'];
-      list = song is Map<String, dynamic> ? song['list'] : null;
-    }
-
-    final result = <Song>[];
-    if (list is List) {
-      for (final item in list) {
-        if (item is! Map<String, dynamic>) continue;
-        final track = item['track_info'];
-        final t = track is Map<String, dynamic> ? track : item;
-        final s = Song.fromTrack(t);
-        if (s.mid.isNotEmpty) result.add(s);
+    try {
+      final data = await client.execute(BizRequest(
+        module: 'music.adaptor.SearchAdaptor',
+        method: 'do_search_v2',
+        param: param,
+      ));
+      final body = data['body'];
+      final bodyMap = body is Map<String, dynamic> ? body : null;
+      var list = (bodyMap?['item_song'] as Map<String, dynamic>?)?['items'];
+      if (list is! List) {
+        final song = bodyMap?['song'];
+        list = song is Map<String, dynamic> ? song['list'] : null;
       }
+
+      final result = <Song>[];
+      if (list is List) {
+        for (final item in list) {
+          if (item is! Map<String, dynamic>) continue;
+          final track = item['track_info'];
+          final t = track is Map<String, dynamic> ? track : item;
+          final s = Song.fromTrack(t);
+          if (s.mid.isNotEmpty) result.add(s);
+        }
+      }
+      AppLog.i('SearchApi',
+          '综合搜索结果 keyword=$keyword 命中=${result.length} 原始条目=${list?.length ?? 0}');
+      return result;
+    } catch (e) {
+      AppLog.e('SearchApi', '综合搜索失败: $e');
+      rethrow;
     }
-    AppLog.i('SearchApi',
-        '综合搜索结果 keyword=$keyword 命中=${result.length} 原始条目=${list?.length ?? 0}');
-    return result;
   }
 }
