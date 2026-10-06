@@ -914,22 +914,25 @@ Uint8List _aesExpandKey(Uint8List key) {
     w[i] = key[i];
   }
   for (var i = 4; i < 44; i++) {
-    var temp = w[(i - 1) * 4];
-    final t1 = w[(i - 1) * 4 + 1];
-    final t2 = w[(i - 1) * 4 + 2];
-    final t3 = w[(i - 1) * 4 + 3];
+    final a = w[(i - 1) * 4];
+    final b = w[(i - 1) * 4 + 1];
+    final c = w[(i - 1) * 4 + 2];
+    final d = w[(i - 1) * 4 + 3];
     if (i % 4 == 0) {
       // RotWord + SubWord + Rcon
-      temp = _aesSbox[t1] ^ _rcon(i ~/ 4);
-      w[i * 4] = w[(i - 4) * 4] ^ temp;
-      w[i * 4 + 1] = w[(i - 4) * 4 + 1] ^ _aesSbox[t2];
-      w[i * 4 + 2] = w[(i - 4) * 4 + 2] ^ _aesSbox[t3];
-      w[i * 4 + 3] = w[(i - 4) * 4 + 3] ^ _aesSbox[temp];
+      final new0 = _aesSbox[b] ^ _rcon(i ~/ 4);
+      final new1 = _aesSbox[c];
+      final new2 = _aesSbox[d];
+      final new3 = _aesSbox[a];
+      w[i * 4] = w[(i - 4) * 4] ^ new0;
+      w[i * 4 + 1] = w[(i - 4) * 4 + 1] ^ new1;
+      w[i * 4 + 2] = w[(i - 4) * 4 + 2] ^ new2;
+      w[i * 4 + 3] = w[(i - 4) * 4 + 3] ^ new3;
     } else {
-      w[i * 4] = w[(i - 4) * 4] ^ temp;
-      w[i * 4 + 1] = w[(i - 4) * 4 + 1] ^ t1;
-      w[i * 4 + 2] = w[(i - 4) * 4 + 2] ^ t2;
-      w[i * 4 + 3] = w[(i - 4) * 4 + 3] ^ t3;
+      w[i * 4] = w[(i - 4) * 4] ^ a;
+      w[i * 4 + 1] = w[(i - 4) * 4 + 1] ^ b;
+      w[i * 4 + 2] = w[(i - 4) * 4 + 2] ^ c;
+      w[i * 4 + 3] = w[(i - 4) * 4 + 3] ^ d;
     }
   }
   return Uint8List.fromList(w);
