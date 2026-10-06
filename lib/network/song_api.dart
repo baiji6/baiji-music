@@ -33,6 +33,7 @@ class SongApi {
 
   /// 获取单个播放链接（无效返回空串）。
   Future<String> getPlayUrl(String mid, Quality quality) async {
+    if (mid.isEmpty) return '';
     final urls = await getPlayUrls([mid], quality);
     return urls[mid] ?? '';
   }
