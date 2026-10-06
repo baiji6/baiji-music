@@ -1017,11 +1017,13 @@ void _aesBlockEncrypt(Uint8List key, Uint8List input, Uint8List out) {
     }
   }
 
+  // 注意：state 采用列主序布局（与 mixColumns 一致），即第 r 行第 c 列 =
+  // state[c * 4 + r]。ShiftRows 把第 r 行循环左移 r 位：新 (r, c) = 旧 (r, (c+r)%4)。
   void shiftRows() {
     final t = List<int>.from(state);
-    for (var i = 0; i < 4; i++) {
-      for (var j = 0; j < 4; j++) {
-        state[i * 4 + j] = t[i * 4 + ((j + i) % 4)];
+    for (var r = 0; r < 4; r++) {
+      for (var c = 0; c < 4; c++) {
+        state[c * 4 + r] = t[((c + r) % 4) * 4 + r];
       }
     }
   }
