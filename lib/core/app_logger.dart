@@ -7,8 +7,8 @@ import 'package:flutter/foundation.dart';
 class AppLog {
   static const String trace = 'TRACE';
   static const String debug = 'DEBUG';
-  static const String info = 'INFO';
-  static const String warn = 'WARN';
+  static const String info  = 'INFO';
+  static const String warn  = 'WARN';
   static const String error = 'ERROR';
   static const String fatal = 'FATAL';
 
@@ -42,6 +42,13 @@ class AppLog {
 
   void setEnabled(String level, bool on) => _enabled[level] = on;
 
+  /// 级别优先级数字（trace=0 … fatal=5），越大越严重。
+  static int levelIndex(String level) => levels.indexOf(level);
+
+  /// 判断 [level] 的严重程度是否 >= [minLevel]。
+  static bool isAtLeast(String level, String minLevel) =>
+      levelIndex(level) >= levelIndex(minLevel);
+
   void log(String level, String tag, String message, [Object? error]) {
     if (!isEnabled(level)) return;
     final line = error == null
@@ -69,6 +76,8 @@ class AppLog {
     }
   }
 
+  static void t(String tag, String msg, [Object? e]) =>
+      _instance.log(trace, tag, msg, e);
   static void d(String tag, String msg, [Object? e]) =>
       _instance.log(debug, tag, msg, e);
   static void i(String tag, String msg, [Object? e]) =>
@@ -79,6 +88,9 @@ class AppLog {
       _instance.log(error, tag, msg, e);
   static void f(String tag, String msg, [Object? e]) =>
       _instance.log(fatal, tag, msg, e);
+
+  /// 所有日志条目（含级别信息）。
+  List<({String level, String line})> get entries => List.unmodifiable(_entries);
 
   List<String> dump() => _entries.map((e) => e.line).toList();
 
