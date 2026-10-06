@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'core/kv_store.dart';
 import 'core/update_checker.dart';
@@ -10,6 +11,7 @@ import 'ui/shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
   await KvStore.ensureInit();
   runApp(const BaijiMusicApp());
 }
