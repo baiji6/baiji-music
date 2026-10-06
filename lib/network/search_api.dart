@@ -10,7 +10,7 @@ class SearchApi {
   final QQMusicClient client;
 
   /// 按类型搜索歌曲（SONG）。
-  /// 搜索不需要 session，直接发送请求以避免 session/QIMEI 初始化失败影响搜索。
+  /// 搜索不需要 session，但需要 QIMEI 和设备信息，直接发送请求以避免 session/QIMEI 初始化失败影响搜索。
   Future<List<Song>> searchByType(String keyword,
       {int page = 1, int num = 20}) async {
     final param = <String, dynamic>{
@@ -23,6 +23,13 @@ class SearchApi {
       'grp': true,
     };
     AppLog.i('SearchApi', '开始搜索 keyword=$keyword page=$page num=$num');
+
+    // 确保 QIMEI 已注册（搜索也需要 QIMEI 设备标识）
+    try {
+      await client.ensureQimei();
+    } catch (e) {
+      AppLog.w('SearchApi', 'QIMEI 注册失败但继续搜索: $e');
+    }
 
     // 搜索接口不需要 session，直接使用 request() 绕过 ensureSession()
     // 避免因 QIMEI 注册/session 获取失败导致搜索不可用
