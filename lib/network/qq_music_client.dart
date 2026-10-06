@@ -132,10 +132,18 @@ class QQMusicClient {
       cookieParts['qqmusic_key'] = cred.musickey;
     }
 
-    final finalHeaders = <String, String>{
-      ...?headers,
-      'User-Agent': getUserAgent(),
-    };
+    final finalHeaders = <String, String>{};
+    // 业务层指定 UA 时优先保留，避免大小写变体导致重复头
+    headers?.forEach((k, v) {
+      if (k.toLowerCase() == 'user-agent') {
+        finalHeaders['User-Agent'] = v;
+      } else {
+        finalHeaders[k] = v;
+      }
+    });
+    if (!finalHeaders.containsKey('User-Agent')) {
+      finalHeaders['User-Agent'] = getUserAgent();
+    }
     if (cookieParts.isNotEmpty) {
       finalHeaders['Cookie'] = cookieParts.entries
           .map((e) => '${e.key}=${e.value}')
