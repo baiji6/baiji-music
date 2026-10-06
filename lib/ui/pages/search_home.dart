@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/app_logger.dart';
 import '../../data/history_store.dart';
+import '../../download/download_manager.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
@@ -107,6 +108,95 @@ class _SearchHomeState extends State<SearchHome> {
     // 如果有搜索关键词，自动重新搜索
     if (_keyword.isNotEmpty) {
       _search(_keyword);
+    }
+  }
+
+  void _showSongActions(Song song) {
+    final isFav = HistoryStore.isFavorite(song.mid);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 30),
+        decoration: const BoxDecoration(
+          color: AppColors.bg2,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              song.name,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${song.singer} · ${song.album}',
+              style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: Icon(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                  color: isFav ? AppColors.magenta : AppColors.cyan, size: 22),
+              title: Text(isFav ? '取消收藏' : '收藏', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              onTap: () {
+                HistoryStore.toggleFavorite(song);
+                Navigator.pop(ctx);
+                _showSnack(isFav ? '已取消收藏' : '已收藏', isError: false);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.download_rounded, color: AppColors.cyan, size: 22),
+              title: const Text('下载', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _downloadSong(song);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.play_circle_outline_rounded, color: AppColors.cyan, size: 22),
+              title: const Text('播放', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _playSong(song);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSnack(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg, style: const TextStyle(fontSize: 13)),
+        backgroundColor: isError ? AppColors.danger : AppColors.cyan,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _downloadSong(Song song) async {
+    _showSnack('开始下载…', isError: false);
+    try {
+      final path = await DownloadManager.instance.download(
+        song,
+        qqQuality: PlayerController.instance.currentQuality,
+        neQuality: PlayerController.instance.currentNeteaseQuality,
+      );
+      if (path != null) {
+        _showSnack('下载完成: $path', isError: false);
+      } else {
+        _showSnack('下载失败（无可用直链）', isError: true);
+      }
+    } catch (e) {
+      _showSnack('下载失败: $e', isError: true);
     }
   }
 
@@ -400,6 +490,7 @@ class _SearchHomeState extends State<SearchHome> {
             itemBuilder: (context, i) => _SongTile(
               song: _results[i],
               onTap: () => _playSong(_results[i]),
+              onLongPress: () => _showSongActions(_results[i]),
             ),
           ),
         ),
@@ -495,10 +586,11 @@ class _SourceChip extends StatelessWidget {
 
 /// 搜索结果歌曲行。
 class _SongTile extends StatelessWidget {
-  const _SongTile({required this.song, required this.onTap});
+  const _SongTile({required this.song, required this.onTap, this.onLongPress});
 
   final Song song;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -506,6 +598,7 @@ class _SongTile extends StatelessWidget {
     final isCurrent = current?.mid == song.mid;
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: GlassCard(
