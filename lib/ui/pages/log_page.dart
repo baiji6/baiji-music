@@ -9,7 +9,7 @@ import '../../core/app_logger.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 
-/// 日志与调试页：展示应用运行日志，支持导出。
+/// 日志与调试页：展示应用运行日志，支持六级分级过滤与导出。
 class LogPage extends StatefulWidget {
   const LogPage({super.key});
 
@@ -19,6 +19,8 @@ class LogPage extends StatefulWidget {
 
 class _LogPageState extends State<LogPage> {
   bool _exporting = false;
+  String _filterLevel = AppLog.info;
+  final List<String> _levels = [AppLog.trace, AppLog.debug, AppLog.info, AppLog.warn, AppLog.error, AppLog.fatal];
 
   Future<void> _exportLogs() async {
     setState(() => _exporting = true);
@@ -29,11 +31,9 @@ class _LogPageState extends State<LogPage> {
         return;
       }
       final text = logs.join('\n');
-      // 写入临时文件
       final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/baiji_music_logs.txt');
       await file.writeAsString(text, encoding: utf8);
-      // 分享
       await Share.shareXFiles(
         [XFile(file.path)],
         text: '白姬音乐运行日志',
@@ -56,9 +56,36 @@ class _LogPageState extends State<LogPage> {
     );
   }
 
+  Color _levelColor(String level) {
+    switch (level) {
+      case AppLog.trace:
+        return AppColors.textTertiary.withValues(alpha: 0.6);
+      case AppLog.debug:
+        return AppColors.textTertiary;
+      case AppLog.info:
+        return AppColors.cyan;
+      case AppLog.warn:
+        return AppColors.warning;
+      case AppLog.error:
+        return AppColors.danger;
+      case AppLog.fatal:
+        return AppColors.magenta;
+      default:
+        return AppColors.textSecondary;
+    }
+  }
+
+  int _levelIndex(String level) => _levels.indexOf(level);
+
   @override
   Widget build(BuildContext context) {
-    final logs = AppLog.instance.dump();
+    final allLogs = AppLog.instance.dump();
+    final filterIdx = _levelIndex(_filterLevel);
+    final logs = allLogs.where((e) {
+      final level = e.level;
+      return _levelIndex(level) >= filterIdx;
+    }).toList();
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
@@ -74,7 +101,7 @@ class _LogPageState extends State<LogPage> {
             },
             child: const Text('清空', style: TextStyle(color: AppColors.danger, fontSize: 13)),
           ),
-          if (logs.isNotEmpty)
+          if (allLogs.isNotEmpty)
             TextButton(
               onPressed: _exporting ? null : _exportLogs,
               child: _exporting
@@ -87,35 +114,91 @@ class _LogPageState extends State<LogPage> {
             ),
         ],
       ),
-      body: logs.isEmpty
-          ? const Center(
-              child: Text(
-                '暂无日志',
-                style: TextStyle(color: AppColors.textTertiary, fontSize: 13),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              reverse: true,
-              itemCount: logs.length,
+      body: Column(
+        children: [
+          // 级别过滤栏
+          Container(
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: _levels.length,
               itemBuilder: (ctx, i) {
-                final line = logs[logs.length - 1 - i];
-                final color = line.contains('ERROR') || line.contains('FATAL')
-                    ? AppColors.danger
-                    : line.contains('WARN')
-                        ? AppColors.warning
-                        : line.contains('DEBUG')
-                            ? AppColors.textTertiary
-                            : AppColors.textSecondary;
+                final level = _levels[i];
+                final active = level == _filterLevel;
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: SelectableText(
-                    line,
-                    style: TextStyle(fontSize: 11, color: color, fontFamily: 'monospace'),
+                  padding: const EdgeInsets.only(right: 8),
+                  child: GestureDetector(
+                    onTap: () => setState(() => _filterLevel = level),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: active ? _levelColor(level).withValues(alpha: 0.2) : AppColors.surfaceGlass,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: active ? _levelColor(level) : AppColors.strokeGlass,
+                        ),
+                      ),
+                      child: Text(
+                        level,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                          color: active ? _levelColor(level) : AppColors.textTertiary,
+                        ),
+                      ),
+                    ),
                   ),
                 );
               },
             ),
+          ),
+          // 统计条
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Row(
+              children: [
+                Text(
+                  '显示 ${logs.length} / 共 ${allLogs.length} 条',
+                  style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                ),
+                const Spacer(),
+                Text(
+                  '当前过滤: ≥ $_filterLevel',
+                  style: TextStyle(fontSize: 11, color: _levelColor(_filterLevel)),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, color: AppColors.strokeGlass),
+          // 日志列表
+          Expanded(
+            child: logs.isEmpty
+                ? const Center(
+                    child: Text(
+                      '该级别暂无日志',
+                      style: TextStyle(color: AppColors.textTertiary, fontSize: 13),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    reverse: true,
+                    itemCount: logs.length,
+                    itemBuilder: (ctx, i) {
+                      final entry = logs[logs.length - 1 - i];
+                      final color = _levelColor(entry.level);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: SelectableText(
+                          entry.line,
+                          style: TextStyle(fontSize: 11, color: color, fontFamily: 'monospace', height: 1.4),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }
