@@ -56,7 +56,7 @@ class _HistoryPageState extends State<HistoryPage> {
                     child: SizedBox(
                       width: 44,
                       height: 44,
-                      child: recent[i].cover.isEmpty
+                      child: recent[i].coverUrl.isEmpty
                           ? GradientCover(
                               size: 44,
                               gradient: recent[i].isNetease
@@ -64,7 +64,7 @@ class _HistoryPageState extends State<HistoryPage> {
                                   : AppColors.accentGradient,
                             )
                           : Image.network(
-                              recent[i].cover,
+                              recent[i].coverUrl,
                               fit: BoxFit.cover,
                               errorBuilder: (_, __, ___) => const GradientCover(size: 44),
                             ),

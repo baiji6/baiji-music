@@ -352,9 +352,9 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
               child: SizedBox(
                 width: 46,
                 height: 46,
-                child: hasSong && song.cover.isNotEmpty
+                child: hasSong && song.coverUrl.isNotEmpty
                     ? Image.network(
-                        song.cover,
+                        song.coverUrl,
                         fit: BoxFit.cover,
                         errorBuilder: (_, _, _) => const _MiniCover(),
                       )

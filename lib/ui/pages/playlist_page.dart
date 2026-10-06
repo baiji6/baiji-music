@@ -168,9 +168,9 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
                     child: SizedBox(
                       width: 44,
                       height: 44,
-                      child: songs[i].cover.isEmpty
+                      child: songs[i].coverUrl.isEmpty
                           ? GradientCover(size: 44)
-                          : Image.network(songs[i].cover, fit: BoxFit.cover,
+                          : Image.network(songs[i].coverUrl, fit: BoxFit.cover,
                               errorBuilder: (_, __, ___) => const GradientCover(size: 44)),
                     ),
                   ),

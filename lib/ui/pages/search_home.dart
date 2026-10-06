@@ -612,12 +612,12 @@ class _SongTile extends StatelessWidget {
                 child: SizedBox(
                   width: 46,
                   height: 46,
-                  child: song.cover.isEmpty
+                  child: song.coverUrl.isEmpty
                       ? GradientCover(size: 46, gradient: song.isNetease
                           ? const [AppColors.magenta, AppColors.violet]
                           : AppColors.accentGradient)
                       : Image.network(
-                          song.cover,
+                          song.coverUrl,
                           fit: BoxFit.cover,
                           errorBuilder: (_, _, _) => GradientCover(
                               size: 46, gradient: AppColors.accentGradient),

@@ -147,6 +147,15 @@ class NeteaseQuality {
 
 // ==================== 歌曲 ====================
 
+/// 用专辑 mid 拼 QQ 音乐专辑封面 URL。
+///
+/// 搜索接口（`DoSearchForQQMusicMobile` / `do_search_v2`）返回的 `album`
+/// 只有 `{id, mid, name, pmid, subtitle, time_public, title}`，**不含 `picUrl`**，
+/// 因此封面必须回退到按 `T002R{size}x{size}M000{albumMid}.jpg` 规则拼，
+/// 与原生 `SongAdapter` 的 `song.cover.ifEmpty { albumMid -> photo_new }` 一致。
+String qqAlbumCoverUrl(String albumMid, {int size = 300}) =>
+    'https://y.qq.com/music/photo_new/T002R${size}x${size}M000$albumMid.jpg';
+
 /// 歌曲信息（对应 `network/Model.kt` 的 Song）。
 class Song {
   final String mid;
@@ -174,6 +183,17 @@ class Song {
   });
 
   bool get isNetease => source == Source.netease;
+
+  /// 实际可展示的封面 URL。
+  ///
+  /// `cover` 为空时（QQ 搜索接口不返回 `picUrl`；或历史/播放列表等旧持久化数据）
+  /// 回退用 `albumMid` 拼 QQ 专辑图，等价于原生 `SongAdapter` 的兜底逻辑。
+  /// 网易云歌曲 `cover` 一般自带，不参与此兜底。
+  String get coverUrl {
+    if (cover.isNotEmpty) return cover;
+    if (!isNetease && albumMid.isNotEmpty) return qqAlbumCoverUrl(albumMid);
+    return '';
+  }
 
   /// 从 QQ 音乐搜索/详情接口的 track JSON 解析。
   factory Song.fromTrack(Map<String, dynamic> t) {
@@ -205,9 +225,18 @@ class Song {
           : (t['singerName'] as String? ?? '');
     }
 
-    final cover = (albumObj?['picUrl'] as Map<String, dynamic>?)?['s']
-            as String? ??
-        '';
+    // 封面：优先 album.picUrl.s；搜索接口返回的 album 不含 picUrl，
+    // 此时回退用 albumMid 拼 QQ 专辑图（见 qqAlbumCoverUrl）。
+    final picUrlObj = albumObj?['picUrl'];
+    var cover = '';
+    if (picUrlObj is Map<String, dynamic>) {
+      cover = picUrlObj['s'] as String? ?? '';
+    } else if (picUrlObj is String) {
+      cover = picUrlObj;
+    }
+    if (cover.isEmpty && albumMid.isNotEmpty) {
+      cover = qqAlbumCoverUrl(albumMid);
+    }
     final duration = ((t['interval'] as num?)?.toInt() ?? 0) * 1000;
 
     return Song(
