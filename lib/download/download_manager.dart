@@ -37,14 +37,30 @@ class DownloadManager {
     }
   }
 
-  /// 获取下载目录（优先用户自定义）。
+  /// 获取下载目录（优先用户自定义，并验证可写性）。
   Future<Directory> getDownloadDir() async {
     final path = KvStore.instance.getString('$_prefs:$_keyPath');
     if (path != null && path.isNotEmpty) {
       final f = Directory(path);
-      if (f.existsSync() || f.parent.existsSync()) return f;
+      if (await _isWritable(f)) return f;
+      AppLog.w('DownloadManager', '自定义目录不可写，回退到默认: $path');
     }
     return getDefaultDownloadDir();
+  }
+
+  /// 验证目录是否可写（尝试创建测试文件）。
+  Future<bool> _isWritable(Directory dir) async {
+    try {
+      if (!dir.existsSync()) {
+        dir.createSync(recursive: true);
+      }
+      final test = File('${dir.path}${Platform.pathSeparator}.baiji_test');
+      test.writeAsStringSync('test', flush: true);
+      test.deleteSync();
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   Future<void> setDownloadDir(String path) =>
@@ -102,29 +118,21 @@ class DownloadManager {
           '${sanitize(song.singer)} - ${sanitize(song.name)}$ext';
       final target = File('${dir.path}${Platform.pathSeparator}$fileName');
 
-      final resp = await _dio.get(
+      // 流式下载：边收边写，避免整曲驻留内存
+      int downloaded = 0;
+      int? total;
+      await _dio.download(
         resolved.url,
-        options: Options(responseType: ResponseType.bytes),
+        target.path,
+        onReceiveProgress: (received, totalBytes) {
+          downloaded = received;
+          total = totalBytes;
+          onProgress?.call(received, totalBytes);
+        },
       );
-      if (resp.statusCode != 200 || resp.data is! List) {
-        AppLog.e('DownloadManager', '下载失败 HTTP=${resp.statusCode}');
-        return null;
-      }
-      final bytes = (resp.data as List).cast<int>();
-      final total = bytes.length;
-      const chunk = 64 * 1024;
-      final raf = target.openSync(mode: FileMode.write);
-      try {
-        for (var i = 0; i < bytes.length; i += chunk) {
-          final end = i + chunk > bytes.length ? bytes.length : i + chunk;
-          raf.writeFromSync(bytes.sublist(i, end));
-          onProgress?.call(end, total);
-        }
-      } finally {
-        raf.closeSync();
-      }
+
       AppLog.d('DownloadManager',
-          '下载完成: ${target.path} (${resolved.qualityNote})');
+          '下载完成: ${target.path} (${resolved.qualityNote}) size=${total ?? downloaded}');
       return target.path;
     } catch (e) {
       AppLog.e('DownloadManager', '下载失败: $e');
