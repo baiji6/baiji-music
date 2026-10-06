@@ -224,7 +224,7 @@ class QQMusicClient {
         'module': 'music.getSession.session',
         'method': 'GetSession',
         'param': {
-          'uid': device.sessionUid,
+          'uid': device.sessionUid.toString(),
           'vkey': 0,
           'caller': 0,
         },

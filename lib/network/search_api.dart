@@ -10,7 +10,8 @@ class SearchApi {
   final QQMusicClient client;
 
   /// 按类型搜索歌曲（SONG）。
-  /// 搜索不需要 session，但需要 QIMEI 和设备信息，直接发送请求以避免 session/QIMEI 初始化失败影响搜索。
+  /// 与原生 `SearchApi.kt` 一致：走 `client.execute()` 完整流程
+  /// （ensureSession → buildComm → request），确保 comm 携带有效 session 与 QIMEI。
   Future<List<Song>> searchByType(String keyword,
       {int page = 1, int num = 20}) async {
     final param = <String, dynamic>{
@@ -24,52 +25,22 @@ class SearchApi {
     };
     AppLog.i('SearchApi', '开始搜索 keyword=$keyword page=$page num=$num');
 
-    // 确保 QIMEI 已注册（搜索也需要 QIMEI 设备标识）
-    try {
-      await client.ensureQimei();
-    } catch (e) {
-      AppLog.w('SearchApi', 'QIMEI 注册失败但继续搜索: $e');
-    }
+    final data = await client.execute(BizRequest(
+      module: 'music.search.SearchCgiService',
+      method: 'DoSearchForQQMusicMobile',
+      param: param,
+    ));
 
-    // 搜索接口不需要 session，直接使用 request() 绕过 ensureSession()
-    // 避免因 QIMEI 注册/session 获取失败导致搜索不可用
-    final comm = client.buildComm();
-    final payload = <String, dynamic>{
-      'comm': comm,
-      'req_0': {
-        'module': 'music.search.SearchCgiService',
-        'method': 'DoSearchForQQMusicMobile',
-        'param': _boolToInt(param),
-      },
-    };
-    final resp = await client.request(
-      method: 'POST',
-      url: QQMusicClient.musicuUrl,
-      jsonBody: payload,
-      headers: {'Referer': 'https://y.qq.com/', 'Origin': 'https://y.qq.com'},
-    );
-    final req0 = resp['req_0'];
-    final data = req0 is Map<String, dynamic>
-        ? (req0['data'] is Map<String, dynamic>
-            ? req0['data'] as Map<String, dynamic>
-            : <String, dynamic>{})
-        : <String, dynamic>{};
-
-    var body = data;
-    if (body.containsKey('body')) {
-      final inner = body['body'];
-      if (inner is Map<String, dynamic>) body = inner;
-    }
-    var list = body['item_song'];
+    // Mobile 接口歌曲在 body.item_song（平铺字段）；部分场景也可能在 body.song.list
+    final body = data['body'];
+    final bodyMap = body is Map<String, dynamic> ? body : null;
+    var list = bodyMap?['item_song'];
     if (list is! List) {
-      final song = body['song'];
+      final song = bodyMap?['song'];
       list = song is Map<String, dynamic> ? song['list'] : null;
     }
-    if (list is! List && body.containsKey('data')) {
-      final d = body['data'];
-      if (d is Map<String, dynamic>) {
-        list = d['item_song'] ?? d['song']?['list'];
-      }
+    if (list is! List) {
+      list = data['item_song'];
     }
 
     final result = <Song>[];
@@ -85,18 +56,6 @@ class SearchApi {
     AppLog.i('SearchApi',
         '搜索结果 keyword=$keyword 命中=${result.length} 原始条目=${list?.length ?? 0}');
     return result;
-  }
-
-  /// 递归将布尔值转 1/0。
-  static dynamic _boolToInt(dynamic o) {
-    if (o is bool) return o ? 1 : 0;
-    if (o is Map<String, dynamic>) {
-      return o.map((k, v) => MapEntry(k, _boolToInt(v)));
-    }
-    if (o is List) {
-      return o.map(_boolToInt).toList();
-    }
-    return o;
   }
 
   /// 搜索补全建议（smartbox 接口，无需登录）。
