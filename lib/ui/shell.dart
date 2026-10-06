@@ -290,11 +290,11 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
         });
       }),
     ];
-    // 拉取当前曲目总时长
-    pc.player.durationStream.listen((d) {
+    // 拉取当前曲目总时长（media_kit: Player.stream.duration）
+    pc.onDurationChanged.listen((d) {
       if (!mounted) return;
       setState(() {
-        _duration = d ?? Duration.zero;
+        _duration = d;
         _updateProgress();
       });
     });
