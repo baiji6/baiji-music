@@ -75,6 +75,12 @@ class _LogPageState extends State<LogPage> {
     }
   }
 
+  /// 从日志行文本中提取级别，格式: "MM-DD HH:MM:SS.mmm LEVEL/tag ..."
+  String _extractLevel(String line) {
+    final match = RegExp(r'\d{2}:\d{2}:\d{2}\.\d{3}\s+([A-Z]+)/').firstMatch(line);
+    return match?.group(1) ?? AppLog.info;
+  }
+
   int _levelIndex(String level) => _levels.indexOf(level);
 
   @override
@@ -82,7 +88,7 @@ class _LogPageState extends State<LogPage> {
     final allLogs = AppLog.instance.dump();
     final filterIdx = _levelIndex(_filterLevel);
     final logs = allLogs.where((e) {
-      final level = e.level;
+      final level = _extractLevel(e);
       return _levelIndex(level) >= filterIdx;
     }).toList();
 
@@ -186,11 +192,11 @@ class _LogPageState extends State<LogPage> {
                     itemCount: logs.length,
                     itemBuilder: (ctx, i) {
                       final entry = logs[logs.length - 1 - i];
-                      final color = _levelColor(entry.level);
+                      final color = _levelColor(_extractLevel(entry));
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 4),
                         child: SelectableText(
-                          entry.line,
+                          entry,
                           style: TextStyle(fontSize: 11, color: color, fontFamily: 'monospace', height: 1.4),
                         ),
                       );
