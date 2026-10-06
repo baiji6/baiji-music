@@ -789,13 +789,69 @@ Map<String, String> qimeiBuild(Map<String, dynamic> device) {
   };
 }
 
+/// 从 X.509 SubjectPublicKeyInfo DER 中解析 RSA 公钥模数（128 字节）。
+///
+/// 此前实现用尾部硬编码切片 `der.sublist(len-130, len-2)`，该偏移对 1024 位
+/// 公钥 DER 并不正确（会吞掉模数尾部字节、混进指数字节），导致 QIMEI 注册时
+/// RSA 加密用的是错误模数，服务端解密失败 → QIMEI 注册失败 → session 无法建立
+/// → 所有依赖 session 的 QQ 操作（搜索、取流）全部失败（对应 baiji-music 的
+/// "QQ 音乐无法搜索" 根因）。
+/// 这里改为正规 DER 解析，等价于原生 mbedtls_pk_parse_public_key 的结果。
+Uint8List _rsaModulusFromDer(Uint8List der) {
+  var pos = 0;
+  int readLen() {
+    final b = der[pos++];
+    if (b & 0x80 == 0) return b;
+    final n = b & 0x7f;
+    var len = 0;
+    for (var j = 0; j < n; j++) {
+      len = (len << 8) | der[pos++];
+    }
+    return len;
+  }
+
+  void expect(int tag) {
+    if (pos >= der.length || der[pos] != tag) {
+      throw const FormatException('RSA 公钥 DER 解析失败');
+    }
+    pos++;
+  }
+
+  // 外层 SEQUENCE
+  expect(0x30);
+  readLen();
+  // AlgorithmIdentifier SEQUENCE
+  expect(0x30);
+  readLen();
+  // OID
+  expect(0x06);
+  final oidLen = readLen();
+  pos += oidLen;
+  // 可选参数（NULL）
+  if (pos < der.length && der[pos] == 0x05) {
+    pos++;
+    readLen();
+  }
+  // BIT STRING（subjectPublicKey），首字节是未使用位数
+  expect(0x03);
+  readLen();
+  pos++;
+  // RSAPublicKey SEQUENCE
+  expect(0x30);
+  readLen();
+  // 模数 INTEGER
+  expect(0x02);
+  final modLen = readLen();
+  // 1024 位模数的 INTEGER 首字节通常是 0x00（符号位），跳过它
+  final skipped = pos < der.length && der[pos] == 0x00;
+  if (skipped) pos++;
+  return der.sublist(pos, pos + modLen - (skipped ? 1 : 0));
+}
+
 /// RSA PKCS#1 v1.5 加密（1024 位公钥，对应 C 中 mbedtls_rsa_pkcs1_encrypt）。
 Uint8List rsaPkcs1Encrypt(Uint8List input) {
-  // n: 公钥模数（base64 解码 DER 后取 128 字节）
   final der = base64.decode(_publicKeyDerB64);
-  // DER 解析：SEQUENCE (30 82 xx xx) -> SEQUENCE -> BIT STRING -> OCTET STRING
-  // 简化：1024 位 RSA 公钥 DER 定长，模数位于尾部 128 字节前 2 字节索引
-  final mod = der.sublist(der.length - 130, der.length - 2);
+  final mod = _rsaModulusFromDer(der);
   final e = 65537;
   // RSA-OAEP 未使用；PKCS#1 v1.5：PS = 0xFF 填充
   final k = mod.length; // 128
