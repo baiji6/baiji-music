@@ -31,7 +31,7 @@ permissions:
 
 env:
   FLUTTER_VERSION: '3.47.6'
-  APP_VERSION: '2.0.3-fix1'
+  APP_VERSION: '2.0.4'
   # Dart 混淆参数（五端通用核心防逆向）
   OBF_ARGS: --obfuscate --split-debug-info=build/out/debug-info
 
