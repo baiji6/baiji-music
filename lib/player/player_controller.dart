@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/music_api.dart';
@@ -9,6 +10,7 @@ import 'package:just_audio/just_audio.dart';
 ///
 /// 基于 just_audio 实现六端统一播放；在线播放默认 128k（QQ）/ exhigh（网易云），
 /// 各自音质默认值持久化保存；支持队列与播放完成自动下一首。
+/// 关键改进：增加解码错误监听与自动降级重试（QQ: 128k AAC → 128k MP3）。
 class PlayerController {
   PlayerController._();
 
@@ -25,7 +27,7 @@ class PlayerController {
   Quality currentQuality = Quality.playbackDefault;
   NeteaseQuality currentNeteaseQuality = NeteaseQuality.playbackDefault;
 
-  /// 播放状态变化（播放/暂停），供 UI 刷新图标。
+  /// 播放状态变化（播放/暂停/错误），供 UI 刷新图标。
   final StreamController<bool> _playState = StreamController.broadcast();
   Stream<bool> get onPlayStateChanged => _playState.stream;
 
@@ -41,6 +43,10 @@ class PlayerController {
   final StreamController<void> _completedStream = StreamController.broadcast();
   Stream<void> get onCompleted => _completedStream.stream;
 
+  /// 播放错误事件（code, message）。
+  final StreamController<(int, String)> _errorStream = StreamController.broadcast();
+  Stream<(int, String)> get onError => _errorStream.stream;
+
   AudioPlayer get player {
     final p = _player;
     if (p != null) return p;
@@ -52,6 +58,19 @@ class PlayerController {
       }
     });
     np.positionStream.listen((pos) => _positionStream.add(pos));
+    // 监听解码/网络错误
+    np.playbackEventStream.listen((event) {
+      if (event.processingState == ProcessingState.error) {
+        AppLog.e('PlayerController',
+            '播放错误: ${event.androidAudioSessionId} state=error');
+        _errorStream.add((-1, '播放错误，尝试切换音质重试'));
+        _playState.add(false);
+      }
+    }, onError: (Object e, StackTrace st) {
+      AppLog.e('PlayerController', 'playbackEventStream 错误: $e');
+      _errorStream.add((-2, '播放器异常: $e'));
+      _playState.add(false);
+    });
     _player = np;
     return np;
   }
@@ -83,18 +102,42 @@ class PlayerController {
     KvStore.instance.setString(_neteaseQualityKey, quality.level);
   }
 
-  /// 取播放直链并播放。
+  /// 取播放直链并播放（带错误降级：QQ FLAC/AAC 解码失败时自动降到 128k MP3）。
   Future<void> play(Song song, String url) async {
     _currentSong = song;
     _songStream.add(song);
-    await player.setUrl(url);
-    player.play();
+    try {
+      await player.setUrl(url);
+      await player.play();
+    } on PlayerException catch (e) {
+      AppLog.e('PlayerController', '播放失败(${e.code}): ${e.message}，尝试降级');
+      _playState.add(false);
+      _errorStream.add((e.code, '播放失败，尝试切换音质重试'));
+      // QQ 非 128k：降级到 128k MP3
+      if (!song.isNetease && currentQuality != Quality.mp3_128) {
+        await _tryFallback(song, Quality.mp3_128);
+      }
+    } catch (e) {
+      AppLog.e('PlayerController', '播放异常: $e');
+      _playState.add(false);
+      _errorStream.add((-1, '播放异常: $e'));
+    }
   }
 
   /// 直接播放指定 URL（不更新歌曲信息）。
   Future<void> playUrl(String url) async {
-    await player.setUrl(url);
-    player.play();
+    try {
+      await player.setUrl(url);
+      await player.play();
+    } on PlayerException catch (e) {
+      AppLog.e('PlayerController', 'playUrl 失败(${e.code}): ${e.message}');
+      _errorStream.add((e.code, '播放失败: ${e.message}'));
+      _playState.add(false);
+    } catch (e) {
+      AppLog.e('PlayerController', 'playUrl 异常: $e');
+      _errorStream.add((-1, '播放异常: $e'));
+      _playState.add(false);
+    }
   }
 
   /// 播放队列（设置队列并从头播放）。
@@ -113,8 +156,7 @@ class PlayerController {
       _onTrackCompleted();
       return;
     }
-    await player.setUrl(url);
-    player.play();
+    await play(first, url);
   }
 
   /// 下一首（队列存在时）。
@@ -130,8 +172,7 @@ class PlayerController {
       _onTrackCompleted();
       return;
     }
-    await player.setUrl(url);
-    player.play();
+    await play(song, url);
   }
 
   /// 上一首。
@@ -147,8 +188,7 @@ class PlayerController {
       _onTrackCompleted();
       return;
     }
-    await player.setUrl(url);
-    player.play();
+    await play(song, url);
   }
 
   void toggle() {
@@ -179,6 +219,23 @@ class PlayerController {
   Future<String> _resolveUrl(Song song) =>
       MusicApi.playUrl(song, currentQuality, currentNeteaseQuality);
 
+  /// QQ 降级重试：使用 128k MP3 音质重新取链播放。
+  Future<void> _tryFallback(Song song, Quality fallback) async {
+    try {
+      final fallbackUrl = await MusicApi.playUrl(song, fallback, currentNeteaseQuality);
+      if (fallbackUrl.isNotEmpty) {
+        AppLog.i('PlayerController', '降级到 ${fallback.label} 重试: ${song.name}');
+        await player.setUrl(fallbackUrl);
+        await player.play();
+      } else {
+        _errorStream.add((-1, '该歌曲暂无可用播放链接'));
+      }
+    } catch (e) {
+      AppLog.e('PlayerController', '降级重试失败: $e');
+      _errorStream.add((-1, '降级重试失败'));
+    }
+  }
+
   void _onTrackCompleted() {
     if (_queue.isNotEmpty && _queueIndex < _queue.length - 1) {
       // 播放完成自动下一首
@@ -188,8 +245,7 @@ class PlayerController {
       _songStream.add(song);
       _resolveUrl(song).then((url) async {
         if (url.isNotEmpty) {
-          await player.setUrl(url);
-          player.play();
+          await play(song, url);
         }
       });
     } else {
