@@ -58,14 +58,9 @@ class PlayerController {
       }
     });
     np.positionStream.listen((pos) => _positionStream.add(pos));
-    // 监听解码/网络错误
+    // 监听解码/网络错误（just_audio 错误通过 onError 回调传播，不通过 ProcessingState）
     np.playbackEventStream.listen((event) {
-      if (event.processingState == ProcessingState.error) {
-        AppLog.e('PlayerController',
-            '播放错误: ${event.androidAudioSessionId} state=error');
-        _errorStream.add((-1, '播放错误，尝试切换音质重试'));
-        _playState.add(false);
-      }
+      // processingState 无 error 值，依赖 onError 捕获异常
     }, onError: (Object e, StackTrace st) {
       AppLog.e('PlayerController', 'playbackEventStream 错误: $e');
       _errorStream.add((-2, '播放器异常: $e'));
