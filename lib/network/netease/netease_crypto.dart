@@ -142,11 +142,12 @@ List<int> _aesExpandKey128(Uint8List key) {
     final t2 = w[(i - 1) * 4 + 2];
     final t3 = w[(i - 1) * 4 + 3];
     if (i % 4 == 0) {
+      final t0saved = temp;
       temp = _aesSbox[t1] ^ rcon(i ~/ 4);
       w[i * 4] = w[(i - 4) * 4] ^ temp;
       w[i * 4 + 1] = w[(i - 4) * 4 + 1] ^ _aesSbox[t2];
       w[i * 4 + 2] = w[(i - 4) * 4 + 2] ^ _aesSbox[t3];
-      w[i * 4 + 3] = w[(i - 4) * 4 + 3] ^ _aesSbox[temp];
+      w[i * 4 + 3] = w[(i - 4) * 4 + 3] ^ _aesSbox[t0saved];
     } else {
       w[i * 4] = w[(i - 4) * 4] ^ temp;
       w[i * 4 + 1] = w[(i - 4) * 4 + 1] ^ t1;
