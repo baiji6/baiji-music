@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/models.dart';
 import '../player/player_controller.dart';
 import '../theme/app_theme.dart';
+import 'pages/player_page.dart';
 
 /// 主界面导航外壳。
 ///
@@ -264,7 +265,6 @@ class MiniPlayerBar extends StatefulWidget {
 class _MiniPlayerBarState extends State<MiniPlayerBar> {
   Song? _song;
   bool _playing = false;
-  double _progress = 0;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   List<StreamSubscription<dynamic>> _subs = [];
@@ -284,29 +284,14 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
       }),
       pc.onPositionChanged.listen((pos) {
         if (!mounted) return;
-        setState(() {
-          _position = pos;
-          _updateProgress();
-        });
+        setState(() => _position = pos);
       }),
     ];
     // 拉取当前曲目总时长（media_kit: Player.stream.duration）
     pc.onDurationChanged.listen((d) {
       if (!mounted) return;
-      setState(() {
-        _duration = d;
-        _updateProgress();
-      });
+      setState(() => _duration = d);
     });
-  }
-
-  void _updateProgress() {
-    final total = _duration.inMilliseconds;
-    if (total <= 0) {
-      _progress = 0;
-    } else {
-      _progress = (_position.inMilliseconds / total).clamp(0.0, 1.0);
-    }
   }
 
   @override
@@ -347,58 +332,39 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
         ),
         child: Row(
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(13),
-              child: SizedBox(
-                width: 46,
-                height: 46,
-                child: hasSong && song.coverUrl.isNotEmpty
-                    ? Image.network(
-                        song.coverUrl,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => const _MiniCover(),
-                      )
-                    : const _MiniCover(),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
+            GestureDetector(
+              // 点击封面/歌名区域进入完整播放页
+              onTap: hasSong
+                  ? () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const PlayerPage()))
+                  : null,
+              behavior: HitTestBehavior.opaque,
+              child: Row(
                 children: [
-                  Text(
-                    hasSong ? song.name : '未在播放',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                        ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(13),
+                    child: SizedBox(
+                      width: 46,
+                      height: 46,
+                      child: hasSong && song.coverUrl.isNotEmpty
+                          ? Image.network(
+                              song.coverUrl,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => const _MiniCover(),
+                            )
+                          : const _MiniCover(),
+                    ),
                   ),
-                  const SizedBox(height: 3),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(2),
-                          child: LinearProgressIndicator(
-                            minHeight: 3,
-                            value: _progress,
-                            backgroundColor: AppColors.surfaceGlassStrong,
-                            valueColor: const AlwaysStoppedAnimation<Color>(
-                              AppColors.cyan,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        hasSong ? '${_fmt(_position)} / ${_fmt(_duration)}' : '00:00',
-                        style: const TextStyle(
-                            color: AppColors.textTertiary, fontSize: 10),
-                      ),
-                    ],
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: MediaQuery.of(context).size.width * 0.42,
+                    child: _MiniTitle(
+                      hasSong: hasSong,
+                      song: song,
+                      position: _position,
+                      duration: _duration,
+                      fmt: _fmt,
+                    ),
                   ),
                 ],
               ),
@@ -440,6 +406,67 @@ class _MiniCover extends StatelessWidget {
         gradient: LinearGradient(colors: AppColors.accentGradient),
       ),
       child: const Icon(Icons.music_note, color: Colors.white, size: 22),
+    );
+  }
+}
+/// 迷你播放条的标题区（歌名 + 细进度条 + 时间）。
+///
+/// 独立成一个 widget，便于整体包进 GestureDetector 打开完整播放页。
+class _MiniTitle extends StatelessWidget {
+  const _MiniTitle({
+    required this.hasSong,
+    required this.song,
+    required this.position,
+    required this.duration,
+    required this.fmt,
+  });
+
+  final bool hasSong;
+  final Song? song;
+  final Duration position;
+  final Duration duration;
+  final String Function(Duration) fmt;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = duration.inMilliseconds;
+    final progress =
+        total > 0 ? (position.inMilliseconds / total).clamp(0.0, 1.0) : 0.0;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          hasSong ? song!.name : '未在播放',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 3),
+        Row(
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  minHeight: 3,
+                  value: progress,
+                  backgroundColor: AppColors.surfaceGlassStrong,
+                  valueColor: const AlwaysStoppedAnimation<Color>(AppColors.cyan),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              hasSong ? '${fmt(position)} / ${fmt(duration)}' : '00:00',
+              style: const TextStyle(color: AppColors.textTertiary, fontSize: 10),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

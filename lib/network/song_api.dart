@@ -48,7 +48,8 @@ class SongApi {
         client.credential.strMusicid.isNotEmpty ? client.credential.strMusicid : client.credential.musicid.toString();
 
     final param = <String, dynamic>{
-      'guid': client.device.openUdid(),
+      // guid 可为任意值（服务端不校验），固定为 MOLAN 以保持请求一致、可复现。
+      'guid': 'MOLAN',
       'songmid': mids,
       'songtype': List<int>.filled(mids.length, 0),
       'filename': filenameArr,
