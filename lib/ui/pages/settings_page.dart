@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/app_logger.dart';
+import '../../core/capture_trust.dart';
 import '../../core/update_checker.dart';
 import '../../download/download_manager.dart';
 import '../../models/models.dart';
@@ -28,6 +29,8 @@ class _SettingsPageState extends State<SettingsPage> {
   Quality _qqQuality = Quality.playbackDefault;
   NeteaseQuality _neQuality = NeteaseQuality.playbackDefault;
   bool _checkingUpdate = false;
+  bool _captureEnabled = false;
+  String _captureProxy = '';
 
   @override
   void initState() {
@@ -42,7 +45,74 @@ class _SettingsPageState extends State<SettingsPage> {
       _downloadPath = dir.path;
       _qqQuality = player.currentQuality;
       _neQuality = player.currentNeteaseQuality;
+      _captureEnabled = CaptureTrust.enabled;
+      _captureProxy = CaptureTrust.proxy;
     });
+  }
+
+  // ===== 抓包调试 =====
+
+  Future<void> _toggleCapture(bool v) async {
+    await CaptureTrust.setEnabled(v);
+    setState(() => _captureEnabled = v);
+    _showSnack(v
+        ? '已开启：Dart 层放行中间人证书（抓包工具现在能解密 HTTPS）'
+        : '已关闭：恢复严格证书校验');
+  }
+
+  Future<void> _editProxy() async {
+    final controller = TextEditingController(text: _captureProxy);
+    final input = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bg2,
+        title: const Text('抓包代理', style: TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('格式 host:port，例如 127.0.0.1:8888',
+                style: TextStyle(fontSize: 11, color: AppColors.textTertiary)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              style: const TextStyle(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: '留空 = 不强制代理',
+                hintStyle: const TextStyle(
+                    fontSize: 13, color: AppColors.textTertiary),
+                filled: true,
+                fillColor: AppColors.surfaceGlass,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ''),
+            child: const Text('清空',
+                style: TextStyle(color: AppColors.textTertiary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('保存',
+                style: TextStyle(color: AppColors.cyan)),
+          ),
+        ],
+      ),
+    );
+    if (input == null) return;
+    await CaptureTrust.setProxy(input);
+    if (!mounted) return;
+    setState(() => _captureProxy = CaptureTrust.proxy);
+    _showSnack(CaptureTrust.proxyEnabled
+        ? '代理已设为 ${CaptureTrust.proxy}（重启应用后生效）'
+        : '已清除抓包代理');
   }
 
   Future<void> _pickDownloadDir() async {
@@ -72,6 +142,7 @@ class _SettingsPageState extends State<SettingsPage> {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true,
       builder: (ctx) => _QualitySheet(
         title: 'QQ 音乐播放音质',
         options: Quality.playbackOptions,
@@ -91,6 +162,7 @@ class _SettingsPageState extends State<SettingsPage> {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true,
       builder: (ctx) => _QualitySheet(
         title: '网易云音乐播放音质',
         options: NeteaseQuality.playbackOptions,
@@ -287,6 +359,62 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               const SizedBox(height: 24),
+              const SectionHeader(title: '抓包调试'),
+              GlassCard(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  children: [
+                    SwitchListTile(
+                      secondary: Icon(
+                        Icons.bug_report_rounded,
+                        color: _captureEnabled
+                            ? AppColors.warning
+                            : AppColors.textTertiary,
+                        size: 22,
+                      ),
+                      title: const Text('允许抓包调试',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: const Text(
+                        '放行中间人证书，供 Reqable / Charles 解密 HTTPS（正式版同样可开）',
+                        style:
+                            TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                      ),
+                      activeColor: AppColors.cyan,
+                      value: _captureEnabled,
+                      onChanged: _toggleCapture,
+                    ),
+                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.router_rounded,
+                          color: AppColors.violet, size: 22),
+                      title: const Text('抓包代理',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: Text(
+                        _captureProxy.isEmpty ? '未设置（走系统/环境变量代理）' : _captureProxy,
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textTertiary),
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded,
+                          color: AppColors.textTertiary),
+                      onTap: _editProxy,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  'Android 端还需在手机上装好抓包工具的 CA（设置 → 安全 → 凭据），'
+                  'App 已在 network_security_config 中放行用户证书；'
+                  'Dart 层的证书校验由上面的开关控制，两者都要开才能抓全。'
+                  '桌面端若抓不到，可在这里填 Reqable 的代理地址（本机一般 127.0.0.1:8888）。',
+                  style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                ),
+              ),
+              const SizedBox(height: 24),
               const SectionHeader(title: '关于'),
               GlassCard(
                 padding: const EdgeInsets.symmetric(vertical: 4),
@@ -326,50 +454,101 @@ class _QualitySheet<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 固定 72% 屏高 + ListView + 常驻滚动条：
+    // QQ 音乐有 17 档（末档 AAC 48），旧的 55% 高度 + SingleChildScrollView
+    // 会把末档裁在可视区之外且没有滚动提示。
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 30),
+      height: MediaQuery.of(context).size.height * 0.72,
       decoration: const BoxDecoration(
         color: AppColors.bg2,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 16),
-          ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.55,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final q in options)
-                    ListTile(
-                      dense: true,
-                      title: Text(
-                        label(q),
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: q == current ? FontWeight.w700 : FontWeight.w500,
-                          color: q == current ? AppColors.cyan : AppColors.textPrimary,
-                        ),
-                      ),
-                      trailing: q == current
-                          ? const Icon(Icons.check_rounded, color: AppColors.cyan, size: 20)
-                          : null,
-                      onTap: () => onSelect(q),
-                    ),
-                ],
+      child: SafeArea(
+        top: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 4),
+              child: Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.strokeGlass,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
               ),
             ),
-          ),
-        ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 6, 20, 12),
+              child: Text(
+                title,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+              ),
+            ),
+            const Divider(height: 1, color: AppColors.strokeGlass),
+            Expanded(
+              child: Scrollbar(
+                thumbVisibility: true,
+                child: ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 18),
+                  itemCount: options.length,
+                  itemBuilder: (ctx, i) {
+                    final q = options[i];
+                    final selected = q == current;
+                    return Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () => onSelect(q),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: selected
+                                ? AppColors.cyan.withValues(alpha: 0.12)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                selected
+                                    ? Icons.check_circle_rounded
+                                    : Icons.audiotrack_rounded,
+                                size: 18,
+                                color: selected
+                                    ? AppColors.cyan
+                                    : AppColors.textTertiary,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  label(q),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: selected
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                    color: selected
+                                        ? AppColors.cyan
+                                        : AppColors.textPrimary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -3,6 +3,9 @@
 /// QQ 侧对齐 Lyrico-Plugins `qq/source.js` 的 `getLyricsForSong`：
 /// 请求 `music.musichallSong.PlayLyricInfo` / `GetPlayLyricInfo`，取 `lyric`
 /// （QRC，可能是加密密文）、`trans`（译文）、`roma`（罗马音）。
+///
+/// 网易云侧走 `POST /api/song/lyric`，同一次响应里同时可能带 `lrc`（逐行）、
+/// `yrc`（**逐字**）、`tlyric`（译文）、`romalrc`（罗马音）。有 `yrc` 时优先用它。
 library;
 
 import 'dart:convert';
@@ -86,6 +89,11 @@ class LyricApi {
 
   // ==================== 网易云 ====================
 
+  /// 网易云歌词。
+  ///
+  /// 参数取 `lv=0 / kv=0 / tv=0 / rv=0 / yv=0`：实测传 `-1` 会拿不到内容。
+  /// 响应中 `yrc` 为逐字歌词（YRC 格式），`lrc` 为逐行；两者都存在时优先 `yrc`，
+  /// 因为它信息量更大且能被 [LyricParser] 渲染成卡拉 OK 效果。
   static Future<Lyrics> netease(Song song) async {
     final json = await AppServices.instance.netease.postApi(
       '${NeteaseClient.apiBase}/song/lyric',
@@ -93,24 +101,35 @@ class LyricApi {
         'id': '${song.songId}',
         'cp': 'false',
         'tv': '0',
-        'lv': '-1',
+        'lv': '0',
         'rv': '0',
-        'kv': '-1',
+        'kv': '0',
         'yv': '0',
         'ytv': '0',
         'yrv': '0',
       },
     );
-    final lrc = (json['lrc'] as Map<String, dynamic>?)?['lyric'] as String? ?? '';
-    final tlyric =
-        (json['tlyric'] as Map<String, dynamic>?)?['lyric'] as String? ?? '';
-    final content = lrc.isNotEmpty ? lrc : tlyric;
-    if (content.isEmpty) return Lyrics.empty;
+
+    String pick(String key) =>
+        (json[key] as Map<String, dynamic>?)?['lyric'] as String? ?? '';
+
+    final yrc = pick('yrc');
+    final lrc = pick('lrc');
+    final tlyric = pick('tlyric');
+    final romalrc = pick('romalrc');
+    final klyric = pick('klyric');
+
+    // 优先逐字；没有则退回逐行；再退回（韩语）音译。
+    final content = yrc.isNotEmpty ? yrc : (lrc.isNotEmpty ? lrc : klyric);
+    if (content.isEmpty) {
+      AppLog.i('LyricApi', '网易云歌词为空 song=${song.name}');
+      return Lyrics.empty;
+    }
 
     return LyricParser.parse(
       content,
-      translation:
-          tlyric.isEmpty || tlyric == lrc ? null : tlyric,
+      translation: tlyric.isEmpty ? null : tlyric,
+      romanization: romalrc.isEmpty ? null : romalrc,
     );
   }
 

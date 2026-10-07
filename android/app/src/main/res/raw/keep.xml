@@ -7,4 +7,4 @@
   此处显式声明以防误删。
 -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@mipmap/ic_launcher,@drawable/launch_background" />
+    tools:keep="@mipmap/ic_launcher,@drawable/launch_background,@xml/network_security_config" />

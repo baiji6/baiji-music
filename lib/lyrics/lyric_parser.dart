@@ -1,9 +1,10 @@
 /// 歌词解析引擎。
 ///
-/// 支持四种来源格式，并能自动识别与自动解密：
+/// 支持五种来源格式，并能自动识别与自动解密：
 /// - **普通 LRC**：`[mm:ss.xx]整句`
 /// - **增强 LRC**：`[mm:ss.xx]<mm:ss.xx>字<mm:ss.xx>字`（逐字）
 /// - **QRC**：`[起始ms,持续ms]字(偏移,持续)字...`（QQ 逐字，可加密）
+/// - **YRC**：`[行起始ms,行时长ms](字起始ms,字时长ms,0)字...`（网易云逐字）
 /// - **TTML**：`<p begin=".." end="..">` / 内含 `<span>` 逐音节（Apple Music）
 ///
 /// 加密内容处理（对齐 Lyrico-Plugins 的 `qq/source.js`）：
@@ -23,7 +24,7 @@ class _LrcEntry {
   const _LrcEntry(this.startMs, this.body);
 }
 
-/// QRC 字解析中间态：偏移、持续、文本。
+/// QRC / YRC 字解析中间态。两者都用 `(起始, 持续[, 保留])` 表示一个字。
 class _QrcWordRaw {
   final int start;
   final int duration;
@@ -45,9 +46,12 @@ class LyricParser {
     Lyrics? parsed;
     final trimmed = content.trimLeft();
 
-    // QRC / TTML / LRC 三选一：按它们的特征标签判断。
+    // TTML / YRC / QRC / LRC 择优：按各自的特征标签判断。
     if (_looksLikeTtml(trimmed)) {
       parsed = _parseTtml(content);
+    }
+    if ((parsed == null || parsed.isEmpty) && _looksLikeYrc(content)) {
+      parsed = _parseYrc(content);
     }
     if ((parsed == null || parsed.isEmpty) && _looksLikeQrc(content)) {
       parsed = _parseQrc(content);
@@ -125,6 +129,14 @@ class LyricParser {
 
   static bool _looksLikeQrc(String text) =>
       RegExp(r'\[\d+,\d+\]').hasMatch(text) || text.contains('<Lyric_1');
+
+  /// YRC 与 QRC 的行首都是 `[数字,数字]`，靠**行内字标记**区分：
+  /// - YRC（网易云）：`(字起始,字时长,0)` —— 3 个字段
+  /// - QRC（QQ）　　：`(偏移,持续)`　　　 —— 2 个字段
+  ///
+  /// 必须先判 YRC，否则会被 [_looksLikeQrc] 抢先命中而按 QRC 解析。
+  static bool _looksLikeYrc(String text) =>
+      RegExp(r'\[\d+,\d+\]\(\d+,\d+,\d+\)').hasMatch(text);
 
   static bool _looksLikeTtml(String text) =>
       text.contains('<tt') ||
@@ -325,24 +337,20 @@ class LyricParser {
         parsed.add(_QrcWordRaw(wordStart, dur, wordText));
       }
 
-      List<LyricWord> words;
+      final List<LyricWord> words;
       if (parsed.isEmpty) {
+        final plain = body.trim();
+        if (plain.isEmpty) continue;
         words = [
-          LyricWord(startMs: lineStart, endMs: lineEnd, text: body.trim()),
+          LyricWord(
+            startMs: lineStart,
+            endMs: lineEnd > lineStart ? lineEnd : lineStart + 2000,
+            text: plain,
+          ),
         ];
       } else {
-        words = [];
-        for (var i = 0; i < parsed.length; i++) {
-          final wStart = parsed[i].start;
-          final dur = parsed[i].duration;
-          final wEnd = dur > 0
-              ? wStart + dur
-              : (i < parsed.length - 1 ? parsed[i + 1].start : lineEnd);
-          words.add(LyricWord(
-              startMs: wStart,
-              endMs: wEnd > wStart ? wEnd : wStart + 1,
-              text: parsed[i].text));
-        }
+        // QRC 的字时间戳是相对行首的偏移，交给统一时间口径换算
+        words = _materializeWords(parsed, lineStart, lineEnd);
       }
 
       final fullText = words.map((w) => w.text).join();
@@ -350,7 +358,7 @@ class LyricParser {
 
       lines.add(LyricLine(
         startMs: lineStart,
-        endMs: lineEnd > lineStart ? lineEnd : lineStart + 2000,
+        endMs: lineEnd > lineStart ? lineEnd : _lastEnd(words, lineStart),
         text: fullText,
         words: words.length > 1 ? words : const [],
       ));
@@ -372,6 +380,142 @@ class LyricParser {
       .replaceAll('&amp;', '&')
       .replaceAllMapped(RegExp(r'&#(\d+);'),
           (m) => String.fromCharCode(int.tryParse(m.group(1)!) ?? 0));
+
+  // ==================== YRC（网易云逐字） ====================
+
+  /// YRC 行：`[行起始ms,行时长ms]` 后接正文。
+  ///
+  /// 正文的写法有两种，实测都会出现：
+  /// - 有逐字：`(字起始,字时长,0)字(字起始,字时长,0)字...`
+  /// - 无逐字：`文本`（整行一个时间片）
+  ///
+  /// 注意 `[12670,2790]` 之后**没有**独立的首字标记，第一个 `(...)` 就是首字。
+  static final _yrcLine = RegExp(r'^\[(\d+),(\d+)\](.*)$');
+
+  /// YRC 逐字标记：`(字起始,字时长,保留)`。
+  static final _yrcWordTag = RegExp(r'\((\d+),(\d+),(\d+)\)');
+
+  static Lyrics _parseYrc(String text) {
+    final lines = <LyricLine>[];
+
+    for (final rawLine in const LineSplitter().convert(text)) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+
+      final m = _yrcLine.firstMatch(line);
+      if (m == null) continue;
+
+      final lineStart = int.tryParse(m.group(1)!) ?? 0;
+      final lineDur = int.tryParse(m.group(2)!) ?? 0;
+      final lineEnd = lineStart + lineDur;
+      final body = m.group(3) ?? '';
+
+      // YRC 的字标记是「标记在前、文本在后」：`(12670,260,0)早(12930,180,0)上`
+      // （与 QRC 的「文本在前、标记在后」恰好相反）。行首的 `[12670,2790]`
+      // 之后紧跟的就是第一个字标记，其文本在其右侧。
+      final tags = _yrcWordTag.allMatches(body).toList();
+      final raw = <_QrcWordRaw>[];
+      for (var i = 0; i < tags.length; i++) {
+        final t = tags[i];
+        final textEnd = i + 1 < tags.length ? tags[i + 1].start : body.length;
+        raw.add(_QrcWordRaw(
+          int.tryParse(t.group(1)!) ?? 0,
+          int.tryParse(t.group(2)!) ?? 0,
+          body.substring(t.end, textEnd),
+        ));
+      }
+
+      // 元信息行（作词/作曲…）形如 `[0,1000](0,1000,0) 作词 : xxx`，
+      // 文本非空，属合法歌词行，保留（与 lrc 的 `[00:00] 作词 : xxx` 一致）。
+      final List<LyricWord> words;
+      if (raw.isEmpty) {
+        final plain = _decodeEntities(body).trim();
+        if (plain.isEmpty) continue;
+        words = [
+          LyricWord(
+            startMs: lineStart,
+            endMs: lineEnd > lineStart ? lineEnd : lineStart + 2000,
+            text: plain,
+          ),
+        ];
+      } else {
+        words = _materializeWords(raw, lineStart, lineEnd);
+      }
+
+      final fullText = words.map((w) => w.text).join();
+      if (fullText.trim().isEmpty) continue;
+
+      lines.add(LyricLine(
+        startMs: lineStart,
+        endMs: lineEnd > lineStart ? lineEnd : _lastEnd(words, lineStart),
+        text: _decodeEntities(fullText),
+        words: words.length > 1 ? words : const [],
+      ));
+    }
+
+    if (lines.isEmpty) return Lyrics.empty;
+    lines.sort((a, b) => a.startMs.compareTo(b.startMs));
+    return Lyrics(
+      lines: lines,
+      hasWordTiming: lines.any((l) => l.isWordLevel),
+    );
+  }
+
+  /// 把「原始字元组」补全为带起止时间的 [LyricWord]。
+  ///
+  /// 兼容两种时间口径：
+  /// - 绝对值（网易云 YRC）：`start` 是整曲毫秒，首字 ≈ 行首，末字 ≈ 行尾；
+  /// - 相对偏移（QQ QRC）：`start` 是相对行首的偏移，首字通常为 0。
+  ///
+  /// 判定看**最后一个字**而不是首字：把它按两种口径分别还原，
+  /// 取"落在 [lineStart, lineEnd] 之内"的那种，比首字更不容易被
+  /// "YRC 首字恰好等于行首"与"QRC 首字偏移为 0"的巧合影响。
+  static List<LyricWord> _materializeWords(
+      List<_QrcWordRaw> parsed, int lineStart, int lineEnd) {
+    final lastRaw = parsed.last.start;
+    final lastAbs = lastRaw; // 绝对值口径
+    final lastRel = lineStart + lastRaw; // 相对偏移口径
+
+    // 行时长未知时给一个宽松上界，避免误判
+    final upper = lineEnd > lineStart ? lineEnd : lineStart + 60000;
+    bool inRange(int v) => v >= lineStart && v <= upper;
+
+    // 优先选锚定在行内的口径；两者都成立时，取与行尾更贴近的那个
+    bool absolute;
+    if (inRange(lastAbs) && !inRange(lastRel)) {
+      absolute = true;
+    } else if (inRange(lastRel) && !inRange(lastAbs)) {
+      absolute = false;
+    } else {
+      absolute = (lastAbs - lineStart).abs() <= (lastRel - lineStart).abs();
+    }
+
+    final words = <LyricWord>[];
+    for (var i = 0; i < parsed.length; i++) {
+      final raw = parsed[i];
+      final wStart = absolute ? raw.start : lineStart + raw.start;
+
+      int wEnd;
+      if (raw.duration > 0) {
+        wEnd = wStart + raw.duration;
+      } else if (i < parsed.length - 1) {
+        final next = parsed[i + 1];
+        wEnd = absolute ? next.start : lineStart + next.start;
+      } else {
+        wEnd = lineEnd > wStart ? lineEnd : wStart + 800;
+      }
+
+      words.add(LyricWord(
+        startMs: wStart,
+        endMs: wEnd > wStart ? wEnd : wStart + 1,
+        text: raw.text,
+      ));
+    }
+    return words;
+  }
+
+  static int _lastEnd(List<LyricWord> words, int fallback) =>
+      words.isEmpty ? fallback + 2000 : words.last.endMs;
 
   // ==================== TTML ====================
 

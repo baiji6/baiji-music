@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
+import 'core/capture_trust.dart';
 import 'core/kv_store.dart';
 import 'core/update_checker.dart';
 import 'theme/app_theme.dart';
@@ -13,6 +16,9 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await KvStore.ensureInit();
+  // 抓包支持：必须在任何 HttpClient 创建之前安装（release 构建同样生效）
+  await CaptureTrust.load();
+  HttpOverrides.global = CaptureHttpOverrides();
   runApp(const BaijiMusicApp());
 }
 

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  白姬音乐 · 网络安全配置（抓包支持）
+
+  作用：让 Reqable / Charles / Fiddler 等抓包工具能解密 HTTPS 流量。
+  Android 7.0 起应用默认不信任「用户证书库」里的 CA，这里显式放行。
+
+  两点说明：
+  1. 用户明确要求「正式版也要能抓包」，所以这份配置放在 main（对所有构建生效），
+     而不是 debug-only；
+  2. 这份配置只作用于**原生栈**（系统的 HttpsURLConnection / WebView /
+     OkHttp 等）。Dart 层的 TLS 校验读的是 /system/etc/security/cacerts，
+     不受本文件影响，由 Dart 侧 CaptureHttpOverrides（设置页「允许抓包调试」
+     开关）放行。两者必须同时打开才能抓全。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>
