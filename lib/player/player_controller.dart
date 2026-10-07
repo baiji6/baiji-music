@@ -49,10 +49,15 @@ class PlayerController {
   Quality currentQuality = Quality.playbackDefault;
   NeteaseQuality currentNeteaseQuality = NeteaseQuality.playbackDefault;
 
-  /// 当前曲目实际生效的音质（可能与请求音质不同：服务端降级或本地自动降级）。
+  /// 当前曲目实际生效的 QQ 音质（可能与请求音质不同：服务端降级或本地自动降级）。
   Quality? _actualQqQuality;
 
   Quality? get actualQqQuality => _actualQqQuality;
+
+  /// 当前曲目实际生效的网易云音质。
+  NeteaseQuality? _actualNeQuality;
+
+  NeteaseQuality? get actualNeteaseQuality => _actualNeQuality;
 
   PlayMode _playMode = PlayMode.sequential;
   PlayMode get playMode => _playMode;
@@ -79,9 +84,14 @@ class PlayerController {
   final StreamController<String> _errorStream = StreamController.broadcast();
   Stream<String> get onError => _errorStream.stream;
 
-  /// 音质实际生效值变化（供播放页显示"实际音质"）。
+  /// QQ 音质实际生效值变化（供播放页显示"实际音质/已降级"）。
   final StreamController<Quality?> _qualityStream = StreamController.broadcast();
   Stream<Quality?> get onQualityChanged => _qualityStream.stream;
+
+  /// 网易云音质实际生效值变化。
+  final StreamController<NeteaseQuality?> _neQualityStream =
+      StreamController.broadcast();
+  Stream<NeteaseQuality?> get onNeteaseQualityChanged => _neQualityStream.stream;
 
   /// 播放模式变化。
   final StreamController<PlayMode> _modeStream = StreamController.broadcast();
@@ -228,77 +238,81 @@ class PlayerController {
 
   // ===== 取流：音质自动降级 =====
 
-  /// 按当前音质取流；若该音质不可用（无可用链接），自动降级到下一档。
+  /// 按当前偏好取流；若该音质不可用（无可用链接），沿降级链自动往下试。
   ///
-  /// 服务端也可能"请求成功但返回更低音质"，这种情况用
-  /// [Quality.fromUrlPrefix] 从直链文件名反查实际音质，并同步给 UI。
+  /// 服务端还可能"请求成功但返回更低音质"（未登录/无版权/未开通会员），
+  /// 这种情况由 [MusicApi.playUrlInfo] 反查真实音质并同步给 UI。
   Future<String> _resolveUrl(Song song) async {
-    // 1) 首选当前偏好音质
-    var url = await MusicApi.playUrl(song, currentQuality, currentNeteaseQuality);
-    if (url.isNotEmpty) {
-      _applyActualQuality(song, url, currentQuality);
-      return url;
+    final chain = song.isNetease
+        ? MusicApi.neteaseDowngradeChain(currentNeteaseQuality)
+            .map((q) => _FetchPlan(qq: currentQuality, ne: q))
+            .toList()
+        : MusicApi.qqDowngradeChain(currentQuality)
+            .map((q) => _FetchPlan(qq: q, ne: currentNeteaseQuality))
+            .toList();
+
+    for (var i = 0; i < chain.length; i++) {
+      final plan = chain[i];
+      final r = await _fetch(song, plan.qq, plan.ne);
+      if (r.isNotEmpty) {
+        if (i > 0) {
+          AppLog.i('PlayerController', '降级成功 -> ${r.label}');
+        }
+        _applyActual(r);
+        return r.url;
+      }
+      AppLog.w('PlayerController',
+          '${song.name} 的 ${song.isNetease ? plan.ne.label : plan.qq.label} 不可用，尝试降级');
     }
 
-    // 2) 自动降级：从当前档往下依次尝试
-    AppLog.w('PlayerController',
-        '${song.name} 的 ${song.isNetease ? currentNeteaseQuality.label : currentQuality.label} 不可用，自动降级');
-
-    if (song.isNetease) {
-      for (final q in _neteaseDowngradeChain(currentNeteaseQuality)) {
-        url = await MusicApi.playUrl(song, currentQuality, q);
-        if (url.isNotEmpty) {
-          AppLog.i('PlayerController', '降级成功 -> ${q.label}');
-          // 网易云保持当前 UI 偏好不变，仅本次生效
-          return url;
-        }
-      }
-    } else {
-      for (final q in _qqDowngradeChain(currentQuality)) {
-        url = await MusicApi.playUrl(song, q, currentNeteaseQuality);
-        if (url.isNotEmpty) {
-          AppLog.i('PlayerController', '降级成功 -> ${q.label}');
-          _applyActualQuality(song, url, q);
-          return url;
-        }
-      }
-    }
-
-    _actualQqQuality = null;
-    if (!_qualityStream.isClosed) _qualityStream.add(null);
+    _clearActual();
     return '';
   }
 
-  /// 记录实际生效音质：从直链文件名反查，比"请求值"更可靠。
-  void _applyActualQuality(Song song, String url, Quality requested) {
-    if (song.isNetease) return; // 网易云直链不含音质前缀
-    _actualQqQuality = Quality.fromUrlPrefix(url) ?? requested;
+  /// 单次取流，异常统一吞掉（降级链需要继续往下走）。
+  Future<PlayUrlResult> _fetch(Song song, Quality qq, NeteaseQuality ne) async {
+    try {
+      return await MusicApi.playUrlInfo(song, qq, ne);
+    } catch (e) {
+      AppLog.w('PlayerController', '取流异常: $e');
+      return PlayUrlResult.empty;
+    }
+  }
+
+  /// 记录实际生效音质并广播。
+  void _applyActual(PlayUrlResult r) {
+    _actualQqQuality = r.qq;
+    _actualNeQuality = r.ne;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
+    if (!_neQualityStream.isClosed) _neQualityStream.add(_actualNeQuality);
   }
 
-  /// QQ 音质降级链：从当前档之后开始（playbackOptions 已按高→低排列）。
-  List<Quality> _qqDowngradeChain(Quality from) {
-    final all = Quality.playbackOptions;
-    final i = all.indexOf(from);
-    return i < 0 ? all : all.sublist(i + 1);
+  void _clearActual() {
+    _actualQqQuality = null;
+    _actualNeQuality = null;
+    if (!_qualityStream.isClosed) _qualityStream.add(null);
+    if (!_neQualityStream.isClosed) _neQualityStream.add(null);
   }
 
-  /// 网易云音质降级链（downloadOptions 已按高→低排列）。
-  List<NeteaseQuality> _neteaseDowngradeChain(NeteaseQuality from) {
-    final all = NeteaseQuality.downloadOptions;
-    final i = all.indexOf(from);
-    return i < 0 ? all : all.sublist(i + 1);
-  }
-
-  /// 切换当前曲目到指定音质并重新取流（保留播放位置）。
+  /// 切换 QQ 音质并重新取流（保留播放位置）。
   Future<void> switchQuality(Quality q) async {
     saveDefaultQuality(q);
+    await _reResolve(q.label);
+  }
+
+  /// 切换网易云音质并重新取流（保留播放位置）。
+  Future<void> switchNeteaseQuality(NeteaseQuality q) async {
+    saveNeteaseQuality(q);
+    await _reResolve(q.label);
+  }
+
+  Future<void> _reResolve(String failLabel) async {
     final song = _currentSong;
     if (song == null) return;
     final pos = position;
     final url = await _resolveUrl(song);
     if (url.isEmpty) {
-      _errorStream.add('该歌曲没有可用的${q.label}音质');
+      _errorStream.add('该歌曲没有可用的$failLabel音质');
       return;
     }
     await _playUrlInternal(url);
@@ -401,4 +415,12 @@ class PlayerController {
     currentNeteaseQuality = quality;
     KvStore.instance.setString(_neteaseQualityKey, quality.level);
   }
+}
+
+/// 一次取流尝试的音质组合（QQ/网易云二选一生效，另一个传当前偏好占位）。
+class _FetchPlan {
+  const _FetchPlan({required this.qq, required this.ne});
+
+  final Quality qq;
+  final NeteaseQuality ne;
 }
