@@ -7,6 +7,7 @@ import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 import 'about_page.dart';
 import 'download_page.dart';
+import 'favorite_page.dart';
 import 'history_page.dart';
 import 'log_page.dart';
 import 'netease_login_page.dart';
@@ -152,8 +153,8 @@ class _LibraryHomeState extends State<LibraryHome> {
           () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DownloadPage()))),
       ('播放历史', '${recent.length} 首', Icons.history_rounded, AppColors.magenta,
           () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryPage()))),
-      ('我的收藏', '${HistoryStore.playHistory().length} 首', Icons.favorite_border_rounded, AppColors.aqua,
-          () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryPage()))),
+      ('我的收藏', '${HistoryStore.favorites().length} 首', Icons.favorite_border_rounded, AppColors.aqua,
+          () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const FavoritePage()))),
     ];
 
     return SafeArea(
