@@ -9,6 +9,7 @@ import 'package:baiji_music/network/lyric_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/ui/widgets/app_widgets.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
