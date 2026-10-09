@@ -5,6 +5,7 @@ import '../../models/models.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/cover_image.dart';
 
 /// 发现页：欢迎 Header + 快捷入口 + 最近播放（接本地历史）。
 class DiscoverHome extends StatefulWidget {
@@ -245,26 +246,7 @@ class _RecentTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final isCurrent = PlayerController.instance.currentSong?.mid == song.mid;
     return ListTile(
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: SizedBox(
-          width: 44,
-          height: 44,
-          child: song.coverUrl.isEmpty
-              ? GradientCover(
-                  size: 44,
-                  gradient: song.isNetease
-                      ? const [AppColors.magenta, AppColors.violet]
-                      : AppColors.accentGradient,
-                )
-              : Image.network(
-                  song.coverUrl,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) =>
-                      const GradientCover(size: 44),
-                ),
-        ),
-      ),
+      leading: CoverImage(song: song, size: 44, radius: 12),
       title: Text(
         song.name,
         maxLines: 1,

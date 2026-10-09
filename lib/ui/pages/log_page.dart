@@ -7,7 +7,6 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../core/app_logger.dart';
 import '../../theme/app_theme.dart';
-import '../widgets/app_widgets.dart';
 
 /// 日志与调试页：展示应用运行日志，支持六级分级过滤与导出。
 class LogPage extends StatefulWidget {

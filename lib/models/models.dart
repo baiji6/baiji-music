@@ -153,7 +153,11 @@ class NeteaseQuality {
 /// 只有 `{id, mid, name, pmid, subtitle, time_public, title}`，**不含 `picUrl`**，
 /// 因此封面必须回退到按 `T002R{size}x{size}M000{albumMid}.jpg` 规则拼，
 /// 与原生 `SongAdapter` 的 `song.cover.ifEmpty { albumMid -> photo_new }` 一致。
-String qqAlbumCoverUrl(String albumMid, {int size = 300}) =>
+///
+/// 默认取 **1500**（实测最大档）：`photo_new` 支持 150/300/500/800/1500，
+/// 请求 2000 / 3000 会返回 404。降级由 [CoverUrl.candidates] + `CoverImage`
+/// 在真实加载失败时逐级下探（800 → 500 → 300）。
+String qqAlbumCoverUrl(String albumMid, {int size = 1500}) =>
     'https://y.qq.com/music/photo_new/T002R${size}x${size}M000$albumMid.jpg';
 
 /// 歌曲信息（对应 `network/Model.kt` 的 Song）。

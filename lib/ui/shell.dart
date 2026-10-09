@@ -6,6 +6,7 @@ import '../models/models.dart';
 import '../player/player_controller.dart';
 import '../theme/app_theme.dart';
 import 'pages/player_page.dart';
+import 'widgets/cover_image.dart';
 
 /// 主界面导航外壳。
 ///
@@ -341,20 +342,9 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
               behavior: HitTestBehavior.opaque,
               child: Row(
                 children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(13),
-                    child: SizedBox(
-                      width: 46,
-                      height: 46,
-                      child: hasSong && song.coverUrl.isNotEmpty
-                          ? Image.network(
-                              song.coverUrl,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => const _MiniCover(),
-                            )
-                          : const _MiniCover(),
-                    ),
-                  ),
+                  hasSong
+                      ? CoverImage(song: song, size: 46, radius: 13)
+                      : const _MiniCover(),
                   const SizedBox(width: 12),
                   SizedBox(
                     width: MediaQuery.of(context).size.width * 0.42,

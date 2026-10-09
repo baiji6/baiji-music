@@ -106,17 +106,21 @@ class _LibraryHomeState extends State<LibraryHome> {
         ),
       ),
     );
-    if (choice == null) return;
+    if (choice == null || !mounted) return;
+    // 底部弹层关闭后 context 可能已失效，先取好 Navigator 并在 await 后复查 mounted
+    final navigator = Navigator.of(context);
     if (choice == 'qq') {
-      final result = await Navigator.of(context).push<bool>(
+      final result = await navigator.push<bool>(
         MaterialPageRoute(builder: (_) => const QQLoginPage()),
       );
-      if (result == true) _refresh();
+      if (!mounted || result != true) return;
+      _refresh();
     } else if (choice == 'netease') {
-      final result = await Navigator.of(context).push<bool>(
+      final result = await navigator.push<bool>(
         MaterialPageRoute(builder: (_) => const NeteaseLoginPage()),
       );
-      if (result == true) _refresh();
+      if (!mounted || result != true) return;
+      _refresh();
     }
   }
 

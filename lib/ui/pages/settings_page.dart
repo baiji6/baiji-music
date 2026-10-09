@@ -1,18 +1,19 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../core/app_logger.dart';
 import '../../core/capture_trust.dart';
+import '../../core/lyric_settings.dart';
 import '../../core/update_checker.dart';
+import '../../download/download_extras.dart';
 import '../../download/download_manager.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/agreement_dialog.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/lyric_style_sheet.dart';
 import 'qq_login_page.dart';
 import 'netease_login_page.dart';
 
@@ -31,6 +32,10 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _checkingUpdate = false;
   bool _captureEnabled = false;
   String _captureProxy = '';
+  LyricDownloadMode _lyricMode = LyricDownloadMode.line;
+  bool _saveCover = true;
+
+  LyricSettings get _lyricStyle => LyricSettings.instance;
 
   @override
   void initState() {
@@ -47,7 +52,28 @@ class _SettingsPageState extends State<SettingsPage> {
       _neQuality = player.currentNeteaseQuality;
       _captureEnabled = CaptureTrust.enabled;
       _captureProxy = CaptureTrust.proxy;
+      _lyricMode = DownloadExtras.lyricMode;
+      _saveCover = DownloadExtras.saveCover;
     });
+  }
+
+  // ===== 下载附加项（歌词 / 封面） =====
+
+  Future<void> _selectLyricMode() async {
+    final picked = await showModalBottomSheet<LyricDownloadMode>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => _LyricModeSheet(current: _lyricMode),
+    );
+    if (picked == null || !mounted) return;
+    await DownloadExtras.setLyricMode(picked);
+    setState(() => _lyricMode = picked);
+  }
+
+  Future<void> _toggleSaveCover(bool v) async {
+    await DownloadExtras.setSaveCover(v);
+    setState(() => _saveCover = v);
   }
 
   // ===== 抓包调试 =====
@@ -188,12 +214,16 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _checkUpdate() async {
     setState(() => _checkingUpdate = true);
     try {
-      final info = await UpdateChecker.instance.check();
+      // force: 手动检查时忽略「此版本已忽略」的记录
+      final outcome = await UpdateChecker.instance.check(force: true);
       if (!mounted) return;
-      if (info != null) {
-        _showUpdateDialog(info);
-      } else {
-        _showSnack('当前已是最新版本', isError: false);
+      switch (outcome.state) {
+        case UpdateState.available:
+          _showUpdateDialog(outcome.info!);
+        case UpdateState.upToDate:
+          _showSnack('当前已是最新版本');
+        case UpdateState.failed:
+          _showSnack(outcome.message ?? '检查更新失败', isError: true);
       }
     } catch (e) {
       if (mounted) _showSnack('检查更新失败: $e', isError: true);
@@ -209,25 +239,40 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bg2,
         title: const Text('发现新版本', style: TextStyle(fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '最新版本: ${info.tag}',
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              info.body.isNotEmpty ? info.body.substring(0, info.body.length > 200 ? 200 : info.body.length) : '',
-              style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-            ),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                info.name.isNotEmpty ? '${info.name}（${info.tag}）' : info.tag,
+                style: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              if (info.body.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  info.summary(200),
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.textTertiary),
+                ),
+              ],
+            ],
+          ),
         ),
         actions: [
           TextButton(
+            onPressed: () async {
+              await UpdateChecker.instance.ignore(info.tag);
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('忽略此版本',
+                style: TextStyle(color: AppColors.textTertiary)),
+          ),
+          TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('稍后', style: TextStyle(color: AppColors.textTertiary)),
+            child: const Text('稍后',
+                style: TextStyle(color: AppColors.textTertiary)),
           ),
           TextButton(
             onPressed: () {
@@ -309,6 +354,64 @@ class _SettingsPageState extends State<SettingsPage> {
                       trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
                       onTap: _resetDownloadDir,
                     ),
+                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.lyrics_rounded, color: AppColors.magenta, size: 22),
+                      title: const Text('下载歌词', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: Text(
+                        '${_lyricMode.label} · ${_lyricMode.description}',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      onTap: _selectLyricMode,
+                    ),
+                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
+                    SwitchListTile(
+                      secondary: const Icon(Icons.image_rounded, color: AppColors.cyan, size: 22),
+                      title: const Text('下载封面', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: const Text(
+                        '取最高分辨率原图，写入音频文件内嵌标签',
+                        style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                      ),
+                      activeThumbColor: AppColors.cyan,
+                      value: _saveCover,
+                      onChanged: _toggleSaveCover,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  '歌词与封面的保存方式：优先写入音频文件内部（MP3 → ID3v2 USLT/APIC，'
+                  'FLAC → Vorbis Comment LYRICS + PICTURE，M4A → ilst ©lyr/covr，'
+                  'OGG → Vorbis Comment LYRICS）；'
+                  '遇到不支持内嵌的格式时自动退回同名外挂 .lrc / .jpg 文件。'
+                  '写入过程不会改动音频数据本身。',
+                  style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                ),
+              ),
+              const SizedBox(height: 24),
+              const SectionHeader(title: '歌词显示'),
+              GlassCard(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.format_size_rounded, color: AppColors.cyan, size: 22),
+                      title: const Text('歌词字号与对齐', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: AnimatedBuilder(
+                        animation: _lyricStyle,
+                        builder: (ctx, _) => Text(
+                          '${_lyricStyle.fontSize.toStringAsFixed(0)} px · '
+                          '${_lyricStyle.alignLeft ? '左对齐' : '居中'}',
+                          style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                        ),
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      onTap: () => showLyricStyleSheet(context),
+                    ),
                   ],
                 ),
               ),
@@ -380,7 +483,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         style:
                             TextStyle(fontSize: 12, color: AppColors.textTertiary),
                       ),
-                      activeColor: AppColors.cyan,
+                      activeThumbColor: AppColors.cyan,
                       value: _captureEnabled,
                       onChanged: _toggleCapture,
                     ),
@@ -418,14 +521,168 @@ class _SettingsPageState extends State<SettingsPage> {
               const SectionHeader(title: '关于'),
               GlassCard(
                 padding: const EdgeInsets.symmetric(vertical: 4),
-                child: ListTile(
-                  leading: const Icon(Icons.system_update_rounded, color: AppColors.violet, size: 22),
-                  title: const Text('检查更新', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                  subtitle: const Text('手动检查最新版本', style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
-                  trailing: _checkingUpdate
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.cyan))
-                      : const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                  onTap: _checkingUpdate ? null : _checkUpdate,
+                child: Column(
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.system_update_rounded, color: AppColors.violet, size: 22),
+                      title: const Text('检查更新', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: const Text('手动检查最新版本', style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+                      trailing: _checkingUpdate
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.cyan))
+                          : const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      onTap: _checkingUpdate ? null : _checkUpdate,
+                    ),
+                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.gavel_rounded, color: AppColors.warning, size: 22),
+                      title: const Text('免责声明', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: const Text('点击查看全文', style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      onTap: () => showAgreementReader(
+                        context,
+                        initial: AgreementTab.disclaimer,
+                      ),
+                    ),
+                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.article_rounded, color: AppColors.magenta, size: 22),
+                      title: const Text('使用协议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: const Text('点击查看全文', style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      onTap: () => showAgreementReader(
+                        context,
+                        initial: AgreementTab.terms,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 下载歌词的粒度选择（不下载 / 逐行 / 逐字）。
+class _LyricModeSheet extends StatelessWidget {
+  const _LyricModeSheet({required this.current});
+
+  final LyricDownloadMode current;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.bg2,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 4),
+              child: Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.strokeGlass,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 6, 20, 12),
+              child: Text(
+                '下载歌词',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+              ),
+            ),
+            const Divider(height: 1, color: AppColors.strokeGlass),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 20),
+              child: Column(
+                children: [
+                  for (final m in LyricDownloadMode.values)
+                    _LyricModeTile(
+                      mode: m,
+                      selected: m == current,
+                      onTap: () => Navigator.pop(context, m),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LyricModeTile extends StatelessWidget {
+  const _LyricModeTile({
+    required this.mode,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final LyricDownloadMode mode;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.cyan.withValues(alpha: 0.12)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                selected
+                    ? Icons.radio_button_checked_rounded
+                    : Icons.radio_button_unchecked_rounded,
+                size: 18,
+                color: selected ? AppColors.cyan : AppColors.textTertiary,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      mode.label,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w500,
+                        color: selected
+                            ? AppColors.cyan
+                            : AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      mode.description,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppColors.textTertiary),
+                    ),
+                  ],
                 ),
               ),
             ],

@@ -1,13 +1,17 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../../core/app_logger.dart';
 import '../../data/history_store.dart';
+import '../../download/download_extras.dart';
 import '../../download/download_manager.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/cover_image.dart';
 
 /// 搜索页：霓虹搜索框 + 音源切换 + 搜索结果列表 + 搜索历史。
 class SearchHome extends StatefulWidget {
@@ -26,6 +30,19 @@ class _SearchHomeState extends State<SearchHome> {
   List<String> _history = [];
   String _source = Source.qq; // 当前搜索音源
 
+  /// 当前已加载到的页码（1 起）。
+  int _page = 1;
+
+  /// 是否正在加载下一页（底部按钮显示转圈，列表本身保持可滚动）。
+  bool _loadingMore = false;
+
+  /// 是否可能还有下一页：上一页返回数 < [pageSize] 即判定为到底。
+  bool _hasMore = false;
+
+  /// 每页条数。QQ 走 `page_num`+`num_per_page`，网易云走 `offset`+`limit`，
+  /// `MusicApi.search` 已把两者统一为 [page]/[num]，两个音源行为一致。
+  static const int pageSize = 20;
+
   static const _hotTags = [
     '周杰伦', '林俊杰', '陈奕迅', '邓紫棋', '薛之谦',
     '纯音乐', '夜曲', '晴天', '大海', '稻香',
@@ -43,34 +60,69 @@ class _SearchHomeState extends State<SearchHome> {
     super.dispose();
   }
 
-  Future<void> _search(String keyword) async {
+  /// 搜索第 [page] 页。
+  ///
+  /// [append] 为 true 时把结果追加到已有列表后面（「下一页」按钮走这条路径，
+  /// 这样已加载的歌曲不会被丢掉，「全部播放」也会包含全部已加载的曲目）；
+  /// 为 false 时覆盖列表（新搜索 / 切换音源 / 重试）。
+  Future<void> _search(String keyword, {int page = 1, bool append = false}) async {
     final k = keyword.trim();
     if (k.isEmpty) return;
+    if (append && (_loading || _loadingMore)) return;
+
     FocusScope.of(context).unfocus();
     setState(() {
       _keyword = k;
-      _loading = true;
       _error = null;
+      if (append) {
+        _loadingMore = true;
+      } else {
+        _loading = true;
+        _page = page;
+        if (page == 1) _results = [];
+      }
     });
-    HistoryStore.addSearch(k);
-    setState(() => _history = HistoryStore.searchHistory());
+
+    if (page == 1) {
+      HistoryStore.addSearch(k);
+      if (mounted) setState(() => _history = HistoryStore.searchHistory());
+    }
+
     try {
-      // 单音源搜索（根据选择的平台）
-      final results = await MusicApi.search(_source, k);
+      final results = await MusicApi.search(_source, k, page: page, num: pageSize);
       if (!mounted) return;
       setState(() {
-        _results = results;
+        if (append) {
+          // 去重：切页时服务端可能重复返回同一首（尤其热词结果）
+          final seen = <String>{for (final s in _results) '${s.source}:${s.mid}'};
+          for (final s in results) {
+            if (seen.add('${s.source}:${s.mid}')) _results.add(s);
+          }
+        } else {
+          _results = results;
+        }
+        _page = page;
         _loading = false;
+        _loadingMore = false;
+        // 返回数不足一页 → 判定没有更多
+        _hasMore = results.length >= pageSize;
       });
-      AppLog.i('SearchHome', '搜索「$k」(${_source == Source.qq ? 'QQ' : '网易云'}) 命中 ${_results.length} 首');
+      AppLog.i('SearchHome',
+          '搜索「$k」(${_source == Source.qq ? 'QQ' : '网易云'}) 第 $page 页命中 ${results.length} 首，累计 ${_results.length} 首');
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = '搜索失败: $e';
+        _loadingMore = false;
+        // 追加失败只提示，不清空已加载的列表
+        if (!append) _error = '搜索失败: $e';
       });
+      if (append) _showSnack('加载下一页失败: $e', isError: true);
     }
   }
+
+  /// 「下一页」按钮。
+  Future<void> _loadNextPage() => _search(_keyword, page: _page + 1, append: true);
 
   void _clear() {
     _controller.clear();
@@ -78,6 +130,8 @@ class _SearchHomeState extends State<SearchHome> {
       _keyword = '';
       _results = [];
       _error = null;
+      _page = 1;
+      _hasMore = false;
     });
   }
 
@@ -191,7 +245,15 @@ class _SearchHomeState extends State<SearchHome> {
         neQuality: PlayerController.instance.currentNeteaseQuality,
       );
       if (path != null) {
-        _showSnack('下载完成: $path', isError: false);
+        String extra = '';
+        try {
+          extra = await DownloadExtras.attach(filePath: path, song: song);
+        } catch (e) {
+          AppLog.w('SearchHome', '写入歌词/封面失败: $e');
+        }
+        if (!mounted) return;
+        final name = path.split(Platform.pathSeparator).last;
+        _showSnack(extra.isEmpty ? '下载完成: $name' : '$name · $extra');
       } else {
         _showSnack('下载失败（无可用直链）', isError: true);
       }
@@ -458,14 +520,18 @@ class _SearchHomeState extends State<SearchHome> {
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
           child: Row(
             children: [
-              Text(
-                '「$_keyword」· ${_results.length} 首',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textTertiary,
+              Expanded(
+                child: Text(
+                  '「$_keyword」· ${_results.length} 首 · ${_source == Source.qq ? 'QQ 音乐' : '网易云音乐'} 第 $_page 页',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textTertiary,
+                  ),
                 ),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
               GestureDetector(
                 onTap: () => _playAll(_results),
                 child: const Row(
@@ -486,15 +552,56 @@ class _SearchHomeState extends State<SearchHome> {
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 30),
-            itemCount: _results.length,
-            itemBuilder: (context, i) => _SongTile(
-              song: _results[i],
-              onTap: () => _playSong(_results[i]),
-              onLongPress: () => _showSongActions(_results[i]),
-            ),
+            itemCount: _results.length + 1,
+            itemBuilder: (context, i) {
+              if (i == _results.length) return _buildFooter();
+              return _SongTile(
+                song: _results[i],
+                onTap: () => _playSong(_results[i]),
+                onLongPress: () => _showSongActions(_results[i]),
+              );
+            },
           ),
         ),
       ],
+    );
+  }
+
+  /// 结果列表底部：下一页 / 加载中 / 已到底。
+  Widget _buildFooter() {
+    if (_loadingMore) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 22),
+        child: Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child:
+                CircularProgressIndicator(strokeWidth: 2, color: AppColors.cyan),
+          ),
+        ),
+      );
+    }
+    if (!_hasMore) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: Text(
+            '已显示全部 ${_results.length} 首结果',
+            style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
+      child: Center(
+        child: NeonButton(
+          label: '下一页 · 第 ${_page + 1} 页',
+          icon: Icons.keyboard_arrow_down_rounded,
+          onPressed: _loadNextPage,
+        ),
+      ),
     );
   }
 }
@@ -607,23 +714,7 @@ class _SongTile extends StatelessWidget {
           glowColor: isCurrent ? AppColors.cyan : null,
           child: Row(
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: SizedBox(
-                  width: 46,
-                  height: 46,
-                  child: song.coverUrl.isEmpty
-                      ? GradientCover(size: 46, gradient: song.isNetease
-                          ? const [AppColors.magenta, AppColors.violet]
-                          : AppColors.accentGradient)
-                      : Image.network(
-                          song.coverUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => GradientCover(
-                              size: 46, gradient: AppColors.accentGradient),
-                        ),
-                ),
-              ),
+              CoverImage(song: song, size: 46, radius: 12),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(

@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../data/history_store.dart';
-import '../../models/models.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/cover_image.dart';
 
 /// 我的收藏页。展示 [HistoryStore.favorites] 中用户收藏的歌曲，
 /// 点击播放，点击右侧红心可取消收藏。
@@ -52,25 +52,7 @@ class _FavoritePageState extends State<FavoritePage> {
               itemBuilder: (ctx, i) => GlassCard(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
-                  leading: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: SizedBox(
-                      width: 44,
-                      height: 44,
-                      child: favs[i].coverUrl.isEmpty
-                          ? GradientCover(
-                              size: 44,
-                              gradient: favs[i].isNetease
-                                  ? const [AppColors.magenta, AppColors.violet]
-                                  : AppColors.accentGradient,
-                            )
-                          : Image.network(
-                              favs[i].coverUrl,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => const GradientCover(size: 44),
-                            ),
-                    ),
-                  ),
+                  leading: CoverImage(song: favs[i], size: 44, radius: 10),
                   title: Text(
                     favs[i].name,
                     maxLines: 1,

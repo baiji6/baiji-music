@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:baiji_music/core/app_logger.dart';
+import 'package:baiji_music/core/cover_url.dart';
 import 'package:baiji_music/models/models.dart';
 
 import 'netease_client.dart';
@@ -211,7 +212,7 @@ class NeteaseApi {
     final picId = (album is Map<String, dynamic>)
         ? ((album['pic'] as num?)?.toInt() ?? 0)
         : 0;
-    final albumCover = NeteaseCrypto.picUrl(picId, 300);
+    final albumCover = NeteaseCrypto.picUrl(picId);
     final songs = json['songs'] as List<dynamic>?;
     if (songs == null) return const [];
     final result = <Song>[];
@@ -255,7 +256,10 @@ class NeteaseApi {
     final album = alMap?['name'] as String? ?? '';
     final picId = (alMap?['pic'] as num?)?.toInt() ?? 0;
     final picUrl = alMap?['picUrl'] as String? ?? '';
-    final cover = picUrl.isNotEmpty ? picUrl : NeteaseCrypto.picUrl(picId, 300);
+    // 封面取最大档：picUrl 不带 param 时补上 3000（CDN 会截断到原图上限）
+    final cover = picUrl.isNotEmpty
+        ? CoverUrl.maximize(picUrl)
+        : NeteaseCrypto.picUrl(picId);
 
     var duration = (o['dt'] as num?)?.toInt() ?? 0;
     if (duration <= 0) duration = (o['duration'] as num?)?.toInt() ?? 0;

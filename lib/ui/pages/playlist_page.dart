@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../data/playlist_store.dart';
-import '../../models/models.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/cover_image.dart';
 
 /// 本地歌单列表页。
 class PlaylistPage extends StatefulWidget {
@@ -163,17 +163,7 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
               itemBuilder: (ctx, i) => GlassCard(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
-                  leading: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: SizedBox(
-                      width: 44,
-                      height: 44,
-                      child: songs[i].coverUrl.isEmpty
-                          ? GradientCover(size: 44)
-                          : Image.network(songs[i].coverUrl, fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => const GradientCover(size: 44)),
-                    ),
-                  ),
+                  leading: CoverImage(song: songs[i], size: 44, radius: 10),
                   title: Text(songs[i].name, maxLines: 1, overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   subtitle: Text(songs[i].singer, maxLines: 1, overflow: TextOverflow.ellipsis,

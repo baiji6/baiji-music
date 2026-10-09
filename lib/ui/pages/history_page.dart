@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../data/history_store.dart';
-import '../../models/models.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/cover_image.dart';
 
 /// 播放历史页。
 class HistoryPage extends StatefulWidget {
@@ -51,25 +51,7 @@ class _HistoryPageState extends State<HistoryPage> {
               itemBuilder: (ctx, i) => GlassCard(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
-                  leading: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: SizedBox(
-                      width: 44,
-                      height: 44,
-                      child: recent[i].coverUrl.isEmpty
-                          ? GradientCover(
-                              size: 44,
-                              gradient: recent[i].isNetease
-                                  ? const [AppColors.magenta, AppColors.violet]
-                                  : AppColors.accentGradient,
-                            )
-                          : Image.network(
-                              recent[i].coverUrl,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => const GradientCover(size: 44),
-                            ),
-                    ),
-                  ),
+                  leading: CoverImage(song: recent[i], size: 44, radius: 10),
                   title: Text(
                     recent[i].name,
                     maxLines: 1,

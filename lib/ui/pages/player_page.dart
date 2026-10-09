@@ -2,14 +2,18 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:baiji_music/core/app_logger.dart';
+import 'package:baiji_music/core/lyric_settings.dart';
 import 'package:baiji_music/data/history_store.dart';
+import 'package:baiji_music/download/download_extras.dart';
 import 'package:baiji_music/download/download_manager.dart';
 import 'package:baiji_music/lyrics/lyric_model.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/lyric_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
-import 'package:baiji_music/ui/widgets/app_widgets.dart';
+import 'package:baiji_music/ui/widgets/cover_image.dart';
+import 'package:baiji_music/ui/widgets/lyric_style_sheet.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -253,14 +257,29 @@ class _PlayerPageState extends State<PlayerPage> {
       error = '$e';
     }
     if (!mounted) return;
-    setState(() => _downloadProgress = null);
     if (error != null) {
+      setState(() => _downloadProgress = null);
       _showSnack('下载失败: $error', isError: true);
-    } else if (path != null) {
-      _showSnack('下载完成: ${path.split(Platform.pathSeparator).last}');
-    } else {
-      _showSnack('下载失败（无可用直链）', isError: true);
+      return;
     }
+    if (path == null) {
+      setState(() => _downloadProgress = null);
+      _showSnack('下载失败（无可用直链）', isError: true);
+      return;
+    }
+
+    // 音频已落盘，再按设置补齐歌词 / 封面并写入元数据：
+    // 这一步失败只影响附加信息，不回滚音频，也不再显示进度条。
+    String extra = '';
+    try {
+      extra = await DownloadExtras.attach(filePath: path, song: song);
+    } catch (e) {
+      AppLog.w('PlayerPage', '写入歌词/封面失败: $e');
+    }
+    if (!mounted) return;
+    setState(() => _downloadProgress = null);
+    final name = path.split(Platform.pathSeparator).last;
+    _showSnack(extra.isEmpty ? '下载完成: $name' : '$name · $extra');
   }
 
   /// 弹出音质选择底部弹层，返回用户选择的音质（取消返回 null）。
@@ -347,6 +366,14 @@ class _PlayerPageState extends State<PlayerPage> {
                 style: TextStyle(fontSize: 11, color: AppColors.textTertiary)),
             const Spacer(),
             if (song != null) _SourceChip(song: song),
+            const SizedBox(width: 4),
+            // 歌词字号 / 对齐的快捷入口，不必绕到设置页
+            IconButton(
+              tooltip: '歌词样式',
+              icon: const Icon(Icons.format_size_rounded,
+                  color: AppColors.textSecondary, size: 20),
+              onPressed: () => showLyricStyleSheet(context),
+            ),
           ],
         ),
       );
@@ -701,7 +728,6 @@ class _CoverArt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final url = song.coverUrl;
     final radius = size * 0.11;
     return Container(
       width: size,
@@ -716,21 +742,7 @@ class _CoverArt extends StatelessWidget {
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius),
-        child: url.isEmpty
-            ? GradientCover(
-                size: size,
-                gradient: song.isNetease
-                    ? const [AppColors.magenta, AppColors.violet]
-                    : AppColors.accentGradient,
-              )
-            : Image.network(
-                url,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => GradientCover(size: size),
-              ),
-      ),
+      child: CoverImage(song: song, size: size, radius: radius),
     );
   }
 }
@@ -1497,6 +1509,7 @@ class _LyricViewState extends State<_LyricView>
 
   Widget _buildLine(LyricLine line,
       {required bool isActive, required bool sung}) {
+    final settings = LyricSettings.instance;
     final baseColor = isActive
         ? AppColors.cyan
         : (sung ? AppColors.textSecondary : AppColors.textTertiary);
@@ -1504,8 +1517,9 @@ class _LyricViewState extends State<_LyricView>
     if (!line.isWordLevel) {
       return Text(
         line.displayText,
+        textAlign: settings.textAlign,
         style: TextStyle(
-          fontSize: 15,
+          fontSize: settings.fontSize,
           height: 1.45,
           fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
           color: baseColor,
@@ -1516,14 +1530,14 @@ class _LyricViewState extends State<_LyricView>
     // 非当前行：无需逐帧重绘，整行按"已唱过/未唱"静态着色
     if (!isActive) {
       return RichText(
-        textAlign: TextAlign.start,
+        textAlign: settings.textAlign,
         text: TextSpan(
           children: [
             for (final w in line.words)
               TextSpan(
                 text: w.text,
                 style: TextStyle(
-                  fontSize: 15,
+                  fontSize: settings.fontSize,
                   height: 1.45,
                   fontWeight: FontWeight.w500,
                   color: baseColor,
@@ -1541,63 +1555,83 @@ class _LyricViewState extends State<_LyricView>
   @override
   Widget build(BuildContext context) {
     final lyrics = widget.lyrics;
-    return NotificationListener<ScrollNotification>(
-      onNotification: (n) {
-        if (n is UserScrollNotification) _onUserScroll();
-        return false;
-      },
-      child: ListView.builder(
-        controller: _scroll,
-        padding: EdgeInsets.symmetric(
-            vertical: MediaQuery.of(context).size.height * widget.padFactor),
-        itemCount: lyrics.length,
-        itemBuilder: (ctx, i) {
-          final line = lyrics[i];
-          final isActive = i == _active;
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => widget.onSeek(Duration(milliseconds: line.startMs)),
-            child: Container(
-              key: _keys[i],
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 9),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLine(line, isActive: isActive, sung: i < _active),
-                  if (line.translation != null && line.translation!.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 3),
-                      child: Text(
-                        line.translation!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          height: 1.35,
-                          color: isActive
-                              ? AppColors.textSecondary
-                              : AppColors.textTertiary.withValues(alpha: 0.7),
-                        ),
-                      ),
-                    ),
-                  if (line.romanization != null && line.romanization!.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        line.romanization!,
-                        style: TextStyle(
-                          fontSize: 11,
-                          height: 1.3,
-                          color: isActive
-                              ? AppColors.textSecondary
-                              : AppColors.textTertiary.withValues(alpha: 0.6),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          );
+    final settings = LyricSettings.instance;
+    // 监听字号 / 对齐设置变化，改动后歌词立即重排
+    return AnimatedBuilder(
+      animation: settings,
+      builder: (context, _) => NotificationListener<ScrollNotification>(
+        onNotification: (n) {
+          if (n is UserScrollNotification) _onUserScroll();
+          return false;
         },
+        child: ListView.builder(
+          controller: _scroll,
+          padding: EdgeInsets.symmetric(
+              vertical: MediaQuery.of(context).size.height * widget.padFactor),
+          itemCount: lyrics.length,
+          itemBuilder: (ctx, i) {
+            final line = lyrics[i];
+            final isActive = i == _active;
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => widget.onSeek(Duration(milliseconds: line.startMs)),
+              child: Container(
+                key: _keys[i],
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 26, vertical: 9),
+                child: Column(
+                  crossAxisAlignment: settings.alignLeft
+                      ? CrossAxisAlignment.start
+                      : CrossAxisAlignment.center,
+                  children: [
+                    _buildLine(line, isActive: isActive, sung: i < _active),
+                    if (line.translation != null &&
+                        line.translation!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: Text(
+                            line.translation!,
+                            textAlign: settings.textAlign,
+                            style: TextStyle(
+                              fontSize: settings.fontSize * 0.8,
+                              height: 1.35,
+                              color: isActive
+                                  ? AppColors.textSecondary
+                                  : AppColors.textTertiary
+                                      .withValues(alpha: 0.7),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (line.romanization != null &&
+                        line.romanization!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: Text(
+                            line.romanization!,
+                            textAlign: settings.textAlign,
+                            style: TextStyle(
+                              fontSize: settings.fontSize * 0.72,
+                              height: 1.3,
+                              color: isActive
+                                  ? AppColors.textSecondary
+                                  : AppColors.textTertiary
+                                      .withValues(alpha: 0.6),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -1619,18 +1653,19 @@ class _KaraokeLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final settings = LyricSettings.instance;
     return RepaintBoundary(
       child: ValueListenableBuilder<int>(
         valueListenable: head,
         builder: (ctx, posMs, _) => RichText(
-          textAlign: TextAlign.start,
+          textAlign: settings.textAlign,
           text: TextSpan(
             children: [
               for (final w in line.words)
                 TextSpan(
                   text: w.text,
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: settings.fontSize,
                     height: 1.45,
                     fontWeight: FontWeight.w700,
                     color: Color.lerp(

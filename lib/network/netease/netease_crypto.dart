@@ -44,7 +44,11 @@ class NeteaseCrypto {
   }
 
   /// 由图片 ID 生成封面直链。
-  static String picUrl(int? picId, [int size = 300]) {
+  ///
+  /// 默认取 **3000**：网易云 CDN 的 `param={n}y{n}` 上限为 3000，
+  /// 且超出原图分辨率时会自动截断（不会报错），等价于「取原图」。
+  /// 降级由 [CoverUrl.candidates] + `CoverImage` 在加载失败时下探。
+  static String picUrl(int? picId, [int size = 3000]) {
     if (picId == null || picId == 0) return '';
     final enc = encryptId(picId.toString());
     return 'https://p3.music.126.net/$enc/$picId.jpg?param=${size}y$size';
