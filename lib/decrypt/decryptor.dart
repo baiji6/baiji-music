@@ -26,6 +26,7 @@ import 'migu.dart';
 import 'ncm.dart';
 import 'qmc.dart';
 import 'qmc_ekey.dart';
+import 'audio_detect.dart';
 import 'qingting.dart';
 import 'qmc_footer.dart';
 
@@ -116,6 +117,7 @@ class DecryptResult {
     required this.bytesWritten,
     this.coverPath,
     this.metadata,
+    this.audioFormat = 'bin',
   });
 
   final String outputPath;
@@ -127,6 +129,14 @@ class DecryptResult {
 
   /// 网易云的 metadata JSON。
   final String? metadata;
+
+  /// 实际探测到的产物音频格式（`bin` = 没通过校验）。
+  ///
+  /// 对应上游 `detectAudioExtension` 的返回值。
+  final String audioFormat;
+
+  /// 产物是否通过了「像音频」的校验。
+  bool get verified => audioFormat != 'bin';
 }
 
 /// 解密异常，携带一个用户可读的 [message]。
@@ -282,21 +292,87 @@ DecryptResult _decryptRange({
   final out = File(outputPath);
   out.parent.createSync(recursive: true);
 
-  switch (sniffed.platform) {
-    case DecryptPlatform.netease:
-      return _decryptNcm(file, totalLen, out, sniffed);
-    case DecryptPlatform.kugou:
-      return _decryptKgm(file, totalLen, out, sniffed, ekeyValue);
-    case DecryptPlatform.kuwo:
-      return _decryptKwm(file, totalLen, out, sniffed, ekeyValue);
-    case DecryptPlatform.migu:
-      return _decryptMigu(file, totalLen, out, sniffed);
-    case DecryptPlatform.qingting:
-      return _decryptQingTing(file, totalLen, out, ekeyValue);
-    case DecryptPlatform.qqMusic:
-      return _decryptQmc(file, totalLen, out, sniffed, ekeyValue, tail);
+  final result = switch (sniffed.platform) {
+    DecryptPlatform.netease =>
+      _decryptNcm(file, totalLen, out, sniffed),
+    DecryptPlatform.kugou =>
+      _decryptKgm(file, totalLen, out, sniffed, ekeyValue),
+    DecryptPlatform.kuwo =>
+      _decryptKwm(file, totalLen, out, sniffed, ekeyValue),
+    DecryptPlatform.migu =>
+      _decryptMigu(file, totalLen, out, sniffed),
+    DecryptPlatform.qingting =>
+      _decryptQingTing(file, totalLen, out, ekeyValue),
+    DecryptPlatform.qqMusic =>
+      _decryptQmc(file, totalLen, out, sniffed, ekeyValue, tail),
+  };
+
+  // 校验产物确实是音频——对应上游 decrypt.ts 里的
+  // `if (!result.overrideExtension && audioExt === 'bin') throw`。
+  //
+  // 密钥填错 / 版本判断错 / 偏移猜错时，解密本身不会报错，只是产出噪声。
+  // 没有这一步，用户会拿到一个"能播放但全是电流声"的文件且不知原因。
+  final fmt = _detectOutputFormat(out, result.bytesWritten);
+  if (fmt == 'bin') {
+    // 产物不是音频：删掉，避免用户以为是成功的。
+    try {
+      if (out.existsSync()) out.deleteSync();
+    } catch (_) {/* 删不掉就算了*/}
+    throw DecryptFailure(
+      _badKeyHint(sniffed.platform),
+    );
+  }
+  return DecryptResult(
+    outputPath: result.outputPath,
+    platform: result.platform,
+    bytesWritten: result.bytesWritten,
+    coverPath: result.coverPath,
+    metadata: result.metadata,
+    audioFormat: fmt,
+  );
+}
+
+/// 探测解密产物的音频格式（读文件头 0x100 字节）。
+String _detectOutputFormat(File out, int written) {
+  if (written <= 0) return 'bin';
+  try {
+    final raf = out.openSync();
+    try {
+      final n = written < 0x100 ? written : 0x100;
+      final buf = Uint8List(n);
+      final read = raf.readIntoSync(buf, 0, n);
+      if (read <= 0) return 'bin';
+      return detectAudioFormat(Uint8List.sublistView(buf, 0, read)).extension;
+    } finally {
+      raf.closeSync();
+    }
+  } catch (_) {
+    return 'bin';
   }
 }
+
+/// 产物不像音频时，给出**针对该平台**的排查提示。
+String _badKeyHint(DecryptPlatform p) => switch (p) {
+      DecryptPlatform.qqMusic =>
+        '解密结果不是有效的音频文件。QQ 音乐请确认：QMC v2 需要匹配这首歌的 ekey；'
+            'PC v1 格式（footer 为 Legacy）则用内置密钥，不需要填写。',
+      DecryptPlatform.kugou =>
+        '解密结果不是有效的音频文件。酷狗请确认填的是 **v5 专用**的 fileKey——'
+            '酷狗客户端里其他 key（v2/v3）不通用；v2/v3 本身不需要密钥。',
+      DecryptPlatform.kuwo =>
+        '解密结果不是有效的音频文件。酷我请确认填的是 **kwm v2** 的 fileKey，'
+            'v1 无需密钥。',
+      DecryptPlatform.netease =>
+        '解密结果不是有效的音频文件。这通常说明文件已损坏，'
+            '或它并非标准的网易云缓存格式。',
+      DecryptPlatform.migu =>
+        '解密结果不是有效的音频文件。咪咕通常无需密钥（由文件头推导），'
+            '若你填了 fileKey，请确认它来自咪咕客户端配置。',
+      DecryptPlatform.qingting =>
+        '解密结果不是有效的音频文件。蜻蜓 FM 的设备密钥必须与生成它的'
+            '六段机型信息完全一致——请检查 product / device / manufacturer / '
+            'brand / board / model 是否与该歌曲播放时的设备一致。',
+    };
 
 SniffResult _sniffWithTail(
   Uint8List head,

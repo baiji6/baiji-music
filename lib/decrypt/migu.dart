@@ -16,8 +16,15 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
-/// 音频数据起始偏移（咪咕文件在头部之后才是音频）。
-const int miguDataStartOffset = 0x1000;
+/// 咪咕的密钥要从文件头反推，所以头不会被跳过——**整块文件都是密文**。
+///
+/// 上游 um_crypto / um-react 都是从第 0 字节开始解密：
+///   - `Migu3D.fromHeader(buffer.subarray(0, 0x100))` 借用头里的已知明文猜 key；
+///   - 随后的解密 offset 从 0 开始递增，没有跳过任何头部字节。
+///
+/// 之前这里写的是 0x1000（跳过 4 KiB），等于把前4 KiB 的密文原样留在
+/// 输出文件里，音频开头会被一段噪声毁掉。
+const int miguDataStartOffset = 0x00;
 
 const String _saltHex = 'AC89EC47A70B76F307CB39A0D74BCCB0';
 

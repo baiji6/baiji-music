@@ -109,6 +109,32 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
       }
     }
 
+    // 网易云的密钥在文件头里、咪咕能自己猜，填了也没用——
+    // 提前说清楚，免得用户以为自己填对了却解不出。
+    if (!platform.needsKey && mounted) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('${platform.label}通常不需要密钥'),
+          content: Text(
+            '${platform.label}的密钥已经内置在文件里或可由文件头推导。'
+            '你仍然可以保存它，但通常不会影响解密结果。\\n\\n'
+            '确定要保存吗？',
+            style: const TextStyle(fontSize: 13, height: 1.6),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('不保存')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('仍然保存')),
+          ],
+        ),
+      );
+      if (go != true) return;
+    }
+
     await _keys!.add(DecryptKeyEntry(
       value: value,
       platform: platform,
@@ -551,12 +577,25 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
   }
 
   /// 各平台密钥的形态说明——填错格式是最常见的失败原因。
+  /// 各平台的**解密条件**与密钥填法。
+  ///
+  /// 文案直接对着um-react 的TS 契约写：密钥填错版本是最常见的失败原因，
+  /// 而用户往往分不清"这首歌到底是v1 还是 v2"。
   static String _keyHint(DecryptPlatform p) => switch (p) {
-        DecryptPlatform.qqMusic => 'QQ 音乐：ekey 为 base64 串，通常在文件尾部的 QMG 块里。',
-        DecryptPlatform.kugou => '酷狗：v5 需fileKey（hex），与酷狗 App 内其他 key 不是一回事。',
-        DecryptPlatform.kuwo => '酷我：kwm 的 fileKey（hex），从酷我客户端缓存目录的数据库里拿。',
-        DecryptPlatform.netease => '网易云：密钥已内置在 .ncm 文件头里，通常不需要填写。',
-        DecryptPlatform.migu => '咪咕：多数情况下密钥可由文件头推导，通常不需要填写。',
+        DecryptPlatform.qqMusic =>
+          'QQ 音乐：只有 QMC v2（.mflac）需要 ekey，且必须匹配这首歌。'
+              'QMC v1（.qmcflac，PC 客户端 Legacy）用内置静态密钥，**不要填**。',
+        DecryptPlatform.kugou =>
+          '酷狗：仅 kgm **v5** 需要 fileKey（hex）。v2/v3 内置密钥，不要填。'
+              '注意 v5 的 key 与客户端里其他 key 不是一回事。',
+        DecryptPlatform.kuwo =>
+          '酷我：仅 kwm **v2** 需要 fileKey（hex），v1 内置密钥。'
+              '从酷我客户端缓存目录的数据库里取。',
+        DecryptPlatform.netease =>
+          '网易云：密钥已内置在 .ncm 文件头的 meta 里，**无需填写**。',
+        DecryptPlatform.migu =>
+          '咪咕：无需填写——密钥由文件头已知明文反推。'
+              '填了反而可能导致解出噪声。',
         DecryptPlatform.qingting =>
           '蜻蜓 FM：需要 16 字节设备密钥的十六进制（32 个字符），'
               '由手机机型信息派生，不在任何客户端数据库里。',

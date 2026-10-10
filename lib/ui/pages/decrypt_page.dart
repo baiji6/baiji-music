@@ -31,6 +31,9 @@ class _Task {
   bool done = false;
   String? error;
   String? outputPath;
+
+  /// 产物实际探测到的音频格式；未通过校验时不会进这里。
+  String? audioFormat;
 }
 
 class DecryptPage extends StatefulWidget {
@@ -251,6 +254,7 @@ class _DecryptPageState extends State<DecryptPage> {
                 ));
             task
               ..platform = res.platform
+              ..audioFormat = res.audioFormat
               ..outputPath = res.outputPath
               ..done = true;
           } catch (e) {
@@ -587,7 +591,10 @@ class _TaskTile extends StatelessWidget {
       statusText = task.error!;
     } else if (task.done) {
       statusColor = const Color(0xFF4ADE80);
-      statusText = '完成 · ${task.platform?.label ?? ''}';
+      // 把实际探测到的音频格式也带上，用户能立刻确认拿到的是 flac 还是 mp3。
+      final fmt = task.audioFormat;
+      statusText = '完成 · ${task.platform?.label ?? ''}'
+          '${fmt != null && fmt != 'bin' ? ' · $fmt' : ''}';
     } else {
       statusColor = AppColors.textTertiary;
       statusText = '等待中';

@@ -93,21 +93,26 @@ void main() {
       );
     });
 
-    test('错的密钥解出的是噪声（首字节不再是 ID3）', () async {
+    test('错的密钥会被产物校验拦下，报错而不是产出噪声文件', () async {
       final name = File(fixture('sample.qta.name')).readAsStringSync().trim();
       final cipher = File(fixture('sample.qta')).readAsBytesSync();
       final input = File('${tmp.path}/$name')
         ..writeAsBytesSync(cipher);
+      final outPath = '${tmp.path}/out4.qta';
 
-      await decryptFile(
-        inputPath: input.path,
-        outputPath: '${tmp.path}/out4.qta',
-        head: Uint8List.sublistView(cipher, 0, cipher.length),
-        keyResolver: () => 'ff' * 16, // 错的 key
+      // 错key 解出来的只是随机字节，必须被上游同款的产物校验拦下，
+      // 否则用户会拿到一个"能播放但全是噪声"的文件且不知原因。
+      await expectLater(
+        decryptFile(
+          inputPath: input.path,
+          outputPath: outPath,
+          head: Uint8List.sublistView(cipher, 0, cipher.length),
+          keyResolver: () => 'ff' * 16, // 错的 key
+        ),
+        throwsA(isA<DecryptFailure>()),
       );
-
-      final out = File('${tmp.path}/out4.qta').readAsBytesSync();
-      expect(String.fromCharCodes(out.sublist(0, 3)), isNot('ID3'));
+      // 失败时不该留下骗人的产物文件
+      expect(File(outPath).existsSync(), isFalse);
     });
 
     test('输出扩展名保持 .qta', () {

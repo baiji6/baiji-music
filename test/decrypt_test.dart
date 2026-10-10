@@ -370,4 +370,9 @@ void main() {
       expect(() => qmcEkeyDecrypt('abc'), throwsFormatException);
     });
   });
+  test('咪咕从第 0 字节开始解密，不跳过任何头部字节', () {
+    // 上游 Migu3D.fromHeader(subarray(0, 0x100)) 只是借头部猜 key，
+    // 随后的解密 offset 从 0 递增——跳过 0x1000 会在输出里留下噪声。
+    expect(miguDataStartOffset, 0);
+  });
 }

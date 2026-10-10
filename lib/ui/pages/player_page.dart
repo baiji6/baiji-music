@@ -16,6 +16,7 @@ import 'package:baiji_music/core/album_saver.dart';
 import 'package:baiji_music/ui/widgets/cover_image.dart';
 import 'package:baiji_music/ui/widgets/lyric_style_sheet.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/scheduler.dart';
 
 /// 播放页：封面 + 进度条 + 播放控制 + 平台化音质切换 + 下载 + 歌词（逐字/译文/点击跳转）。
@@ -1412,6 +1413,13 @@ class _LyricViewState extends State<_LyricView>
   bool _userDragging = false;
   Timer? _resumeTimer;
 
+  /// 逐帧的播放位置（毫秒），专供逐字卡拉 OK 染色使用。
+  ///
+  /// 不能直接依赖 setState：逐字染色需要**每帧**都重绘当前行，
+  /// 而行号变化一整首歌也就几十次。所以单独用 notifier 驱动，
+  /// 只有当前行内部的 [ValueListenableBuilder] 会重建。
+  final ValueNotifier<int> _head = ValueNotifier<int>(0);
+
   /// 播放器最近一次上报的真实进度 + 对应墙钟时刻，用于插值出平滑进度。
   int _anchorMs = 0;
   DateTime _anchorAt = DateTime.now();
@@ -1428,6 +1436,7 @@ class _LyricViewState extends State<_LyricView>
     // 先定好当前行，再设基准——否则 _setAnchor 会在 initState 期间触发 setState
     _active = widget.lyrics.indexAt(player.position);
     _setAnchor(player.position);
+    _head.value = player.position.inMilliseconds;
 
     _posSub = player.onPositionChanged.listen(_setAnchor);
     _playSub = player.onPlayStateChanged.listen((p) {
@@ -1459,6 +1468,7 @@ class _LyricViewState extends State<_LyricView>
     _playSub?.cancel();
     _resumeTimer?.cancel();
     _ticker?.dispose();
+    _head.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -1486,8 +1496,12 @@ class _LyricViewState extends State<_LyricView>
     _scrollToActive();
   }
 
-  /// 逐帧只做一件事：判断当前唱到哪一行了。
+  /// 逐帧做两件事：更新逐字染色的播放头、判断当前唱到哪一行。
   void _onTick(Duration elapsed) {
+    final ms = _smoothMs();
+    // 逐字染色靠这个 notifier 每帧推进；只在值真的变了时才通知，
+    // 避免无谓重建。
+    if (_head.value != ms) _head.value = ms;
     _syncActive();
   }
 
@@ -1499,7 +1513,10 @@ class _LyricViewState extends State<_LyricView>
     } else {
       final t = _ticker;
       if (t != null && t.isActive) t.stop();
-      // 暂停时行号不该变，但补一次同步能纠正拖动进度条后的小偏差
+      // 暂停时行号不该变，但补一次同步能纠正拖动进度条后的偏差；
+      // 逐字染色的播放头同样要跟上，否则拖完进度条颜色还停在原地。
+      final ms = _smoothMs();
+      if (_head.value != ms) _head.value = ms;
       _syncActive();
     }
   }
@@ -1530,9 +1547,6 @@ class _LyricViewState extends State<_LyricView>
   Widget _buildLine(LyricLine line,
       {required bool isActive, required bool sung}) {
     final settings = LyricSettings.instance;
-    final baseColor = isActive
-        ? AppColors.textPrimary
-        : (sung ? AppColors.textSecondary : AppColors.textTertiary);
 
     // 当前行放大并加粗，是整屏的视觉重心；非当前行压小一档形成层次。
     final size =
@@ -1541,6 +1555,9 @@ class _LyricViewState extends State<_LyricView>
     final height = isActive ? 1.32 : 1.45;
 
     if (!line.isWordLevel) {
+      final color = isActive
+          ? AppColors.textPrimary
+          : (sung ? AppColors.textSecondary : AppColors.textTertiary);
       return Text(
         line.displayText,
         textAlign: settings.textAlign,
@@ -1548,29 +1565,41 @@ class _LyricViewState extends State<_LyricView>
           fontSize: size,
           height: height,
           fontWeight: weight,
-          color: baseColor,
+          color: color,
         ),
       );
     }
 
-    // 逐字信息仍被完整渲染（歌词里可能有逐字标注），但不再按播放进度染色——
-    // 整行统一高亮放大，观感更接近主流播放器。
-    return RichText(
-      textAlign: settings.textAlign,
-      text: TextSpan(
-        children: [
-          for (final w in line.words)
-            TextSpan(
-              text: w.text,
-              style: TextStyle(
-                fontSize: size,
-                height: height,
-                fontWeight: weight,
-                color: baseColor,
+    // 非当前行不必逐帧重绘：整行按"已唱过 / 未唱"静态着色即可。
+    if (!isActive) {
+      final color = sung ? AppColors.textSecondary : AppColors.textTertiary;
+      return RichText(
+        textAlign: settings.textAlign,
+        text: TextSpan(
+          children: [
+            for (final w in line.words)
+              TextSpan(
+                text: w.text,
+                style: TextStyle(
+                  fontSize: size,
+                  height: height,
+                  fontWeight: weight,
+                  color: color,
+                ),
               ),
-            ),
-        ],
-      ),
+          ],
+        ),
+      );
+    }
+
+    // 当前行：逐字染色 + 整行放大。放大只影响字号，
+    // 逐字高亮是另一条独立的渲染链路，两者不能互相取代。
+    return _KaraokeLine(
+      line: line,
+      head: _head,
+      fontSize: size,
+      height: height,
+      align: settings.textAlign,
     );
   }
 
@@ -1658,6 +1687,64 @@ class _LyricViewState extends State<_LyricView>
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+/// 当前行的逐字卡拉 OK 染色。
+///
+/// 与"整行放大"是两条独立的渲染链路：放大决定字号，逐字染色决定颜色，
+/// 两者必须同时存在——只放大不染色，逐字歌词就等于没了。
+class _KaraokeLine extends StatelessWidget {
+  const _KaraokeLine({
+    required this.line,
+    required this.head,
+    required this.fontSize,
+    required this.height,
+    required this.align,
+  });
+
+  final LyricLine line;
+  final ValueListenable<int> head;
+  final double fontSize;
+  final double height;
+  final TextAlign align;
+
+  /// smoothstep：把线性进度映射为 S 曲线，起止更柔和，不再有"跳一格"的生硬感。
+  static double _ease(double p) {
+    if (p <= 0) return 0;
+    if (p >= 1) return 1;
+    return p * p * (3 - 2 * p);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: ValueListenableBuilder<int>(
+        valueListenable: head,
+        builder: (ctx, posMs, _) => RichText(
+          textAlign: align,
+          text: TextSpan(
+            children: [
+              for (final w in line.words)
+                TextSpan(
+                  text: w.text,
+                  style: TextStyle(
+                    fontSize: fontSize,
+                    height: height,
+                    fontWeight: FontWeight.w800,
+                    //未唱到 = 灰，唱过了 = 亮蓝，正在唱的部分按进度渐变填充。
+                    color: Color.lerp(
+                      AppColors.textTertiary,
+                      AppColors.cyan,
+                      _ease(w.progressAt(posMs)),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
