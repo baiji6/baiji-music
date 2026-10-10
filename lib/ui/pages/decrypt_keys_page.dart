@@ -21,16 +21,28 @@ import '../../decrypt/qingting.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 
-/// 供解密页复用的加载入口：返回「平台名 → 该平台第一条可用密钥」。
+/// 供解密页复用的加载入口：把密钥摊平成一个可跨 isolate 传递的字符串 map。
 ///
-/// 刻意返回 map 而不是扁平List——六个平台的密钥规则互不相同，
+/// 两类 key：
+/// - `qqMusic` / `kugou` ……该平台的**通用**密钥（第一条）；
+/// - `qqMusic <mid>` / `qqMusic@文件名.mp3` ……**精确**条目，解密时优先命中
+///   （同一首歌不同音质可能是不同的 ekey，不能只取第一条）。
+///
+/// 刻意不返回扁平 List——六个平台的密钥规则互不相同，
 /// 解密时必须按嗅探出的平台精确取，不能混用。
 Future<Map<String, String>> loadDecryptKeySnapshot() async {
   final keys = await DecryptKeys.load();
   final out = <String, String>{};
   for (final p in DecryptPlatform.values) {
-    final k = keys.anyEkeyOf(p);
-    if (k != null && k.isNotEmpty) out[p.name] = k;
+    for (final e in keys.entriesOf(p)) {
+      if (e.value.isEmpty) continue;
+      // 平台级通用条目：只放第一条，作为没有精确匹配时的兜底。
+      out.putIfAbsent(p.name, () => e.value);
+      final mid = e.mid;
+      if (mid != null && mid.isNotEmpty) out['$p.name $mid'] = e.value;
+      final fname = e.mediaFilename;
+      if (fname != null && fname.isNotEmpty) out['$p.name@$fname'] = e.value;
+    }
   }
   return out;
 }

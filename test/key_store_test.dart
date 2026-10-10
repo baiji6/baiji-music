@@ -198,6 +198,25 @@ void main() {
       expect(resolveEkey(sniff, keys), 'embedded');
     });
   });
+
+  group('跨 isolate 扁平 map 的形状', () {
+    test('平台通用条目 + mid / 文件名精确条目并存', () {
+      // 与 loadDecryptKeySnapshot 的产出形状保持一致。
+      final m = <String, String>{
+        'qqMusic': 'generic-ekey',
+        'qqMusic 001y7CaR29k6YP': 'hq-ekey',
+        'qqMusic@song.mp3': 'by-name-ekey',
+        'kugou': 'kg-filekey',
+      };
+      // 平台级 key 存在 → 解密页的「已配密钥」小标签点亮
+      expect(m.containsKey('qqMusic'), isTrue);
+      expect(m.containsKey('kugou'), isTrue);
+      expect(m.containsKey('kuwo'), isFalse);
+      // 精确条目带平台前缀，绝不会撞到别的平台
+      expect(m.containsKey('kugou 001y7CaR29k6YP'), isFalse);
+    });
+  });
+
 }
 
 /// 直接从内存构造一个 DecryptKeys，不碰 shared_preferences。

@@ -260,10 +260,24 @@ DecryptResult _decryptRange({
   // 先嗅探出平台，才能按平台挑密钥——**绝不能拿一把钥匙开所有锁**。
   final sniffed = _sniffWithTail(head, tail, keys, ekeyOverride, file.path);
 
-  //优先级：调用方显式给的 > 该平台的密钥 > null。
-  // `platformKeys` 是给跨 isolate 用的扁平map（Isolate 之间不能传自定义对象）。
-  final ekeyValue = ekeyOverride ??
-      (platformKeys == null ? null : platformKeys[sniffed.platform.name]);
+  // 优先级：调用方显式给的密钥 > 按平台+mid 查出来的 > 该平台的任意一把。
+  //
+  // 跨 isolate 时 [keys] 是 null（Isolate 之间不能传自定义对象），靠
+  // [platformKeys] 兜底；主 isolate 里则优先走 [keys] 的精确匹配，
+  // 因为 QQ 音乐同一首歌不同音质可能是不同的 ekey。
+  final String? ekeyValue;
+  if (ekeyOverride != null) {
+    ekeyValue = ekeyOverride;
+  } else if (keys != null) {
+    ekeyValue = resolveEkey(sniffed, keys);
+  } else {
+    ekeyValue = platformKeys == null
+        ? null
+        // 先精确（mid / 文件名），再退到该平台的通用密钥。
+        : (_matchByMidInMap(sniffed, platformKeys) ??
+            _matchByFilenameInMap(sniffed, platformKeys) ??
+            platformKeys[sniffed.platform.name]);
+  }
 
   final out = File(outputPath);
   out.parent.createSync(recursive: true);
@@ -586,3 +600,20 @@ String hexPreview(List<int> bytes, {int max = 16}) {
 
 /// 工具：UTF-8 容错解码。
 String safeUtf8(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
+
+/// 跨 isolate 时用的兜底匹配：从扁平 map 里按 mid 找精确匹配。
+///
+/// [platformKeys] 的 key 形如 `platform` 或 `platform mid`——
+/// 后者是带 mid 的精确条目，优先于该平台的第一把通用密钥。
+String? _matchByMidInMap(SniffResult sniff, Map<String, String> platformKeys) {
+  final mid = sniff.footer?.mediaMid;
+  if (mid == null || mid.isEmpty) return null;
+  return platformKeys['${sniff.platform.name} $mid'];
+}
+
+/// 同[_matchByMidInMap]，但按原始文件名匹配（QQ 的 MusicEx footer 给的是文件名）。
+String? _matchByFilenameInMap(SniffResult sniff, Map<String, String> m) {
+  final name = sniff.footer?.mediaFilename;
+  if (name == null || name.isEmpty) return null;
+  return m['${sniff.platform.name}@$name'];
+}
