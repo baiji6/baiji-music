@@ -32,6 +32,18 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# permission_handler_windows 内部引用了 <experimental/coroutine>，而 MSVC 14.5x
+# 起把这套实验性头文件判为废弃并默认按报错处理：
+#   error C2338: static assertion failed: error STL1011
+# 官方在报错文本里给出的开关就是这个宏。
+#
+# 桌面端其实用不到它的运行时权限能力（Windows / Linux / macOS 都没有这回事，
+# ensurePermission() 对非 Android 平台直接返回 true），引入它只是为了跨平台的
+# 统一 API，所以这里只需要让它编译通过即可。
+#
+# 必须放在 add_subdirectory 之前，定义才会传播到各个插件子项目。
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by
