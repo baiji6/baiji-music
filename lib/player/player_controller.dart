@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/kv_store.dart';
+import 'package:baiji_music/local/local_scanner.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/music_api.dart';
 import 'package:flutter/material.dart';
@@ -243,6 +244,17 @@ class PlayerController {
   /// 服务端还可能"请求成功但返回更低音质"（未登录/无版权/未开通会员），
   /// 这种情况由 [MusicApi.playUrlInfo] 反查真实音质并同步给 UI。
   Future<String> _resolveUrl(Song song) async {
+    // 本地文件不需要联网取流：直接把路径转成 media_kit 认得的 file:// URI。
+    if (song.isLocal) {
+      final local = LocalScanner.playUri(song);
+      if (local.isEmpty) {
+        AppLog.w('PlayerController', '本地文件不可读: ${song.localPath}');
+        _clearActual();
+        return '';
+      }
+      return local;
+    }
+
     final chain = song.isNetease
         ? MusicApi.neteaseDowngradeChain(currentNeteaseQuality)
             .map((q) => _FetchPlan(qq: currentQuality, ne: q))

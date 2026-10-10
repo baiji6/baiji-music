@@ -18,7 +18,21 @@ class Qrcode {
 }
 
 /// 二维码状态事件。
-enum QrEvent { done, scan, conf, refuse, timeout, other }
+///
+/// 语义按腾讯 ptqrlogin 接口的实测返回确定，不要凭字面猜：
+///
+/// | code | 接口原文提示         | 含义                 |
+/// |------|----------------------|----------------------|
+/// | 0    | 登录成功             | [done]               |
+/// | 65   | 二维码已失效         | [expired] 必须换码   |
+/// | 66   | **二维码未失效**     | [waiting] 等待扫码   |
+/// | 67   | 正在验证二维码       | [confirmed] 待确认   |
+/// | 68   | 已失效               | [refused]            |
+///
+/// 历史上这里把 66 当成「已扫描」、把 65 当成「等待扫码」，
+/// 导致二维码刚弹出就提示"已扫描"，而真正失效后又继续空转轮询，
+/// 表现就是"有效期特别短""扫码后卡住"。
+enum QrEvent { done, waiting, confirmed, refused, expired, other }
 
 class QrCheck {
   final QrEvent event;
@@ -41,7 +55,11 @@ class LoginApi {
   static final RegExp _qqArgsRe = RegExp(r"'((?:\\.|[^'])*)'");
   static final RegExp _qqSigxRe = RegExp(r'(?:\?|&)ptsigx=(.+?)&s_url');
   static final RegExp _qqUinRe = RegExp(r'(?:\?|&)uin=(.+?)&service');
-  static final RegExp _codeRe = RegExp(r'(?<=code=)(.+?)(?=&)');
+  /// 从 authorize 的 302 Location 里取 code。
+  ///
+  /// 旧写法 `(?<=code=)(.+?)(?=&)` 要求 code 后面必须还有一个 `&`，
+  /// 一旦 code 落在查询串末尾就匹配不到，登录直接失败。
+  static final RegExp _codeRe = RegExp(r'[?&]code=([^&#]*)');
 
   final math.Random _rng = math.Random();
 
@@ -98,8 +116,25 @@ class LoginApi {
       url: host.toString(),
       headers: {'Referer': referer, 'Cookie': 'qrsig=$qrsig'},
     );
-    final m = _qqStatusRe.firstMatch(resp.text);
-    if (m == null) return const QrCheck(QrEvent.other);
+    return parseQrCallback(resp.text);
+  }
+
+  /// 解析 ptqrlogin 返回的 `ptuiCB(...)` 文本。
+  ///
+  /// 抽成纯静态函数，便于用真实响应样本做单测（不依赖网络）。
+  ///
+  /// 返回样本（实测）：
+  /// - 等待扫码：`ptuiCB('66','0','','0','二维码未失效。', '')`
+  /// - 登录成功：`ptuiCB('0','0','https://…check_sig?…uin=…&ptsigx=…&s_url=…','0','登录成功！', '')`
+  static QrCheck parseQrCallback(String text) {
+    final m = _qqStatusRe.firstMatch(text);
+    if (m == null) {
+      // 实测：qrsig / ptqrtoken 不合法时接口会直接返回**空响应体**，
+      // 此时不该当成"继续等待"，上层需要据此决定是否换一张新码。
+      AppLog.w('BaiJiLogin',
+          'ptqrlogin 响应无法解析(长度=${text.length}): ${text.clip(80)}');
+      return const QrCheck(QrEvent.other);
+    }
     final inner = m.group(1);
     if (inner == null) return const QrCheck(QrEvent.other);
     final args = <String>[];
@@ -111,9 +146,10 @@ class LoginApi {
     final code = int.tryParse(args[0]) ?? -1;
     final event = switch (code) {
       0 => QrEvent.done,
-      66 => QrEvent.scan,
-      67 => QrEvent.conf,
-      65 => QrEvent.timeout,
+      65 => QrEvent.expired, // 二维码已失效
+      66 => QrEvent.waiting, // 二维码未失效 = 还没人扫
+      67 => QrEvent.confirmed, // 已扫描，等待确认
+      68 => QrEvent.refused,
       _ => QrEvent.other,
     };
     if (event != QrEvent.done || args.length < 3) {
@@ -164,6 +200,12 @@ class LoginApi {
     if (pSkey == null) {
       throw Exception(
           '获取 p_skey 失败(status=${checkResp.status}, cookies=${cookies.keys})');
+    }
+    // p_skey 与 skey 是两种不同的票据，用 skey 算出来的 g_tk 是错的，
+    // 只作兜底并留痕，方便定位"登录成功但后续接口报鉴权失败"这类问题。
+    if (!cookies.containsKey('p_skey')) {
+      AppLog.w('BaiJiLogin',
+          'check_sig 未返回 p_skey，已用其它票据兜底(status=${checkResp.status}, cookies=${cookies.keys})');
     }
     AppLog.d('BaiJiLogin',
         'check_sig ok, pSkey=${pSkey.clip(6)}... cookies=${cookies.keys}');

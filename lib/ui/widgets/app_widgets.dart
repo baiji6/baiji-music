@@ -54,7 +54,15 @@ class GlassCard extends StatelessWidget {
       margin: margin,
       padding: padding,
       decoration: decoration(),
-      child: child,
+      // ListTile 会把自己的水波纹画在「最近的 Material 祖先」上。这里如果
+      // 少了一层 Material，DecoratedBox 的背景色就会把点击反馈整个盖住
+      // （debug 下 Flutter 会直接断言报错）。透明 Material 不改变外观，
+      // 但能把 ink 效果还原回来——列表页统一受益。
+      child: Material(
+        color: Colors.transparent,
+        elevation: 0,
+        child: child,
+      ),
     );
 
     if (onTap == null) return body;

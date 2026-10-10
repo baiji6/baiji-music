@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/app_version.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 
@@ -41,9 +42,9 @@ class AboutPage extends StatelessWidget {
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'v2.0.0 · 跨平台重构版',
-              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            Text(
+              AppVersion.display,
+              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
             ),
             const SizedBox(height: 24),
             GlassCard(

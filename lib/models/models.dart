@@ -12,6 +12,9 @@ import 'dart:convert';
 class Source {
   static const String qq = 'qq';
   static const String netease = 'netease';
+
+  /// 本地文件（扫描本机磁盘得到，不走任何网络接口）。
+  static const String local = 'local';
 }
 
 // ==================== QQ 音质枚举 ====================
@@ -171,8 +174,22 @@ class Song {
   final int duration;
   final String cover;
 
-  /// 音源：qq / netease。
+  /// 音源：qq / netease / local。
   final String source;
+
+  // ---- 本地音乐专用字段（网络歌曲为默认值） ----
+
+  /// 本地文件的绝对路径。非空即代表这是本地歌曲，可据此直接播放。
+  final String localPath;
+
+  /// 文件字节数，与 [localMtime] 一起构成增量扫描指纹。
+  final int localSize;
+
+  /// 文件最后修改时间（毫秒），与 [localSize] 一起构成增量扫描指纹。
+  final int localMtime;
+
+  /// 容器格式：mp3 / flac / m4a / ogg / wav（仅本地歌曲有值）。
+  final String format;
 
   const Song({
     required this.mid,
@@ -184,16 +201,28 @@ class Song {
     required this.duration,
     required this.cover,
     this.source = Source.qq,
+    this.localPath = '',
+    this.localSize = 0,
+    this.localMtime = 0,
+    this.format = '',
   });
 
   bool get isNetease => source == Source.netease;
+
+  /// 是否本地文件歌曲。判定依据是 [localPath]，比看 `source` 更可靠——
+  /// 历史持久化数据可能缺 `source` 字段但仍有路径。
+  bool get isLocal => localPath.isNotEmpty;
 
   /// 实际可展示的封面 URL。
   ///
   /// `cover` 为空时（QQ 搜索接口不返回 `picUrl`；或历史/播放列表等旧持久化数据）
   /// 回退用 `albumMid` 拼 QQ 专辑图，等价于原生 `SongAdapter` 的兜底逻辑。
   /// 网易云歌曲 `cover` 一般自带，不参与此兜底。
+  ///
+  /// 本地歌曲不走 QQ 专辑图兜底：它的 `cover` 来自文件内嵌封面（缓存后的
+  /// 本地路径）或为空（此时 UI 显示占位图标）。
   String get coverUrl {
+    if (isLocal) return cover;
     if (cover.isNotEmpty) return cover;
     if (!isNetease && albumMid.isNotEmpty) return qqAlbumCoverUrl(albumMid);
     return '';
@@ -266,6 +295,10 @@ class Song {
         duration: (map['duration'] as num?)?.toInt() ?? 0,
         cover: map['cover'] as String? ?? '',
         source: map['source'] as String? ?? Source.qq,
+        localPath: map['localPath'] as String? ?? '',
+        localSize: (map['localSize'] as num?)?.toInt() ?? 0,
+        localMtime: (map['localMtime'] as num?)?.toInt() ?? 0,
+        format: map['format'] as String? ?? '',
       );
 
   Map<String, dynamic> toJson() => {
@@ -278,7 +311,43 @@ class Song {
         'duration': duration,
         'cover': cover,
         'source': source,
+        if (localPath.isNotEmpty) 'localPath': localPath,
+        if (localPath.isNotEmpty) 'localSize': localSize,
+        if (localPath.isNotEmpty) 'localMtime': localMtime,
+        if (format.isNotEmpty) 'format': format,
       };
+
+  /// 拷贝并覆盖部分字段（本地歌曲刷新元数据时用）。
+  Song copyWith({
+    String? mid,
+    int? songId,
+    String? name,
+    String? singer,
+    String? album,
+    String? albumMid,
+    int? duration,
+    String? cover,
+    String? source,
+    String? localPath,
+    int? localSize,
+    int? localMtime,
+    String? format,
+  }) =>
+      Song(
+        mid: mid ?? this.mid,
+        songId: songId ?? this.songId,
+        name: name ?? this.name,
+        singer: singer ?? this.singer,
+        album: album ?? this.album,
+        albumMid: albumMid ?? this.albumMid,
+        duration: duration ?? this.duration,
+        cover: cover ?? this.cover,
+        source: source ?? this.source,
+        localPath: localPath ?? this.localPath,
+        localSize: localSize ?? this.localSize,
+        localMtime: localMtime ?? this.localMtime,
+        format: format ?? this.format,
+      );
 
   @override
   String toString() => 'Song($source:$mid,$name)';

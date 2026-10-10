@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/app_version.dart';
 import '../../data/history_store.dart';
+import '../../data/local_music_store.dart';
 import '../../data/playlist_store.dart';
 import '../../network/music_api.dart';
 import '../../theme/app_theme.dart';
@@ -9,6 +11,7 @@ import 'about_page.dart';
 import 'download_page.dart';
 import 'favorite_page.dart';
 import 'history_page.dart';
+import 'local_music_page.dart';
 import 'log_page.dart';
 import 'netease_login_page.dart';
 import 'playlist_page.dart';
@@ -150,7 +153,11 @@ class _LibraryHomeState extends State<LibraryHome> {
   Widget build(BuildContext context) {
     final recent = HistoryStore.playHistory();
     final playlists = PlaylistStore.playlistNames();
+    final localCount = LocalMusicStore.songs().length;
     final entries = <(String, String, IconData, Color, VoidCallback)>[
+      ('本地音乐', localCount > 0 ? '$localCount 首' : '去扫描',
+          Icons.library_music_rounded, AppColors.aqua,
+          () => _openLocalMusic(context)),
       ('本地歌单', '${playlists.length} 个', Icons.queue_music_rounded, AppColors.cyan,
           () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlaylistPage()))),
       ('下载管理', '0 首', Icons.download_rounded, AppColors.violet,
@@ -328,7 +335,7 @@ class _LibraryHomeState extends State<LibraryHome> {
                     _SettingTile(
                       icon: Icons.info_outline_rounded,
                       title: '关于',
-                      subtitle: '白姬音乐 v2.0.0 · 跨平台重构版',
+                      subtitle: AppVersion.display,
                       color: AppColors.magenta,
                       onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AboutPage())),
                     ),
@@ -340,6 +347,15 @@ class _LibraryHomeState extends State<LibraryHome> {
         ),
       ),
     );
+  }
+
+  /// 打开本地音乐页；返回时刷新卡片上的数量。
+  Future<void> _openLocalMusic(BuildContext context) async {
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const LocalMusicPage()),
+    );
+    if (!mounted || result != true) return;
+    _refresh();
   }
 
   void _openSettings(BuildContext context) {

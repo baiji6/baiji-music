@@ -2,7 +2,7 @@ name: baiji_music
 description: "白姬音乐 - 跨平台音乐播放客户端（iOS / macOS / Windows / Linux / Android / HarmonyOS）"
 publish_to: 'none'
 
-version: 2.1.0
+version: 2.2.0
 
 environment:
   sdk: ^3.13.5
@@ -36,6 +36,7 @@ dependencies:
   url_launcher: ^6.3.0
   # 应用信息（版本号读取）
   package_info_plus: ^8.0.0
+  permission_handler: ^13.0.2
 
 dev_dependencies:
   flutter_test:
