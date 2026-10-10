@@ -270,7 +270,7 @@ class _QQLoginPageState extends State<QQLoginPage> {
                     ),
                     const SizedBox(height: 6),
                     const Text(
-                      '粘贴浏览器中 music.qq.com 的完整 Cookie',
+                      '粘贴浏览器中 y.qq.com 的完整 Cookie，QQ 与微信登录都支持',
                       style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
                     ),
                     const SizedBox(height: 12),
@@ -280,7 +280,9 @@ class _QQLoginPageState extends State<QQLoginPage> {
                       minLines: 2,
                       style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
                       decoration: InputDecoration(
-                        hintText: 'uin=xxx; qm_keyst=xxx; …',
+                        // 微信登录的 cookie 里没有 uin，账号 id 落在 wxuin 上，
+                        // 两个都要提示到，否则用户会以为贴错了。
+                        hintText: 'uin=xxx（微信为 wxuin=xxx）; qm_keyst=xxx; …',
                         hintStyle: const TextStyle(
                             fontSize: 12, color: AppColors.textTertiary),
                         filled: true,

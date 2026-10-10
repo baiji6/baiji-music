@@ -267,73 +267,11 @@ class LoginApi {
   }
 
   /// 使用 QQ 音乐 Cookie 登录（扫码失败后的备选方式）。
+  ///
+  /// 解析本身在 [parseCookieCredentials] 这个纯函数里完成，
+  /// 这里只负责把解析出来的凭证拿去做一次服务端校验。
   Future<Credential> loginByCookie(String cookie) async {
-    final trimmed = cookie.trim();
-    if (trimmed.isEmpty) throw Exception('Cookie 不能为空');
-
-    final pairs = <String, String>{};
-    final body = trimmed
-        .replaceFirst('Cookie', '')
-        .replaceFirst('cookie', '')
-        .replaceFirst(':', '')
-        .trimLeft();
-    for (final part in body.split(';')) {
-      final seg = part.trim();
-      if (seg.isEmpty) continue;
-      final idx = seg.indexOf('=');
-      if (idx <= 0) continue;
-      var v = seg.substring(idx + 1).trim();
-      if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
-        v = v.substring(1, v.length - 1);
-      }
-      if (v.isNotEmpty) {
-        pairs[seg.substring(0, idx).trim()] = v;
-      }
-    }
-    AppLog.d('BaiJiLogin', 'cookie 键: ${pairs.keys.join(',')}');
-
-    final uinStr = (pairs['uin'] ??
-            pairs['qqmusic_uin'] ??
-            pairs['uin_android'] ??
-            pairs['w_uin'] ??
-            pairs['u'])
-            ?.trim()
-            .replaceAll('"', '')
-            .replaceAll("'", '') ??
-        '';
-    if (uinStr.isEmpty) {
-      throw Exception('Cookie 中缺少 uin（应为 QQ 音乐登录后的 uin）');
-    }
-    final uinNumeric = uinStr.replaceAll(RegExp('[^0-9]'), '');
-    final uinLong = int.tryParse(uinNumeric);
-    if (uinLong == null) {
-      throw Exception('Cookie 中的 uin 无效: $uinStr');
-    }
-
-    final musickey = (pairs['qm_keyst'] ??
-            pairs['qqmusic_key'] ??
-            pairs['qm_key'] ??
-            pairs['musickey'] ??
-            pairs['qm_keyst_android'] ??
-            pairs['qqmusic_keyst'])
-            ?.trim()
-            .replaceAll('"', '')
-            .replaceAll("'", '') ??
-        '';
-    if (musickey.isEmpty) {
-      throw Exception('Cookie 中缺少 qm_keyst / qqmusic_key');
-    }
-
-    final cred = Credential(
-      musicid: uinLong,
-      musickey: musickey,
-      strMusicid: uinStr,
-      loginType: musickey.startsWith('W_X') ? 1 : 2,
-      musickeyCreateTime: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      keyExpiresIn: 0,
-    );
-    AppLog.d('BaiJiLogin',
-        'cookie 解析: uin=$uinStr loginType=${cred.loginType} key=${musickey.clip(8)}...');
+    final cred = parseCookieCredentials(cookie);
 
     // 放宽校验：解析成功即返回凭证，校验失败仅记录日志
     final prev = client.credential;
@@ -358,6 +296,111 @@ class LoginApi {
     } finally {
       client.credential = prev;
     }
+    return cred;
+  }
+
+  /// 从 Cookie 文本解析出凭证。纯函数，不发任何网络请求。
+  ///
+  /// 抽成静态方法是为了能直接拿**真实 cookie 样本**写单测，
+  /// 网络校验留在 [loginByCookie] 里——同一文件里的 [parseQrCallback]
+  /// 也是这么拆的。
+  ///
+  /// ## QQ 登录与微信登录的差别
+  ///
+  /// 网页端（y.qq.com）用微信账号登录后拿到的 cookie 与 QQ 登录**只差一个字段**：
+  /// 微信登录的 cookie 里根本没有 `uin` 键，账号 id 放在 `wxuin` 里
+  /// （19 位的微信 openid 型账号，不是 QQ 号），而这个值在后续所有请求中
+  /// **填的就是 `uin` 的位置**。所以这里把 `wxuin` 并入 uin 的候选键即可，
+  /// 其余票据键（`qm_keyst` / `qqmusic_key`）两种登录方式完全一致。
+  ///
+  /// 微信登录的票据以 `W_X_` 开头，据此可区分 `loginType`
+  /// （1 = 微信，2 = QQ），与扫码登录时 `tmeLoginType` 的取值一致。
+  ///
+  /// 微信 cookie 里另有 `wxunionid` / `wxopenid` / `wxrefresh_token`，
+  /// 它们与 QQ 互联的 unionid / openid 不是一回事，故**刻意不写入**
+  /// [Credential.unionid] 等字段——填错语义的标识比留空更容易在后续接口鉴权失败。
+  static Credential parseCookieCredentials(String cookie) {
+    final trimmed = cookie.trim();
+    if (trimmed.isEmpty) throw Exception('Cookie 不能为空');
+
+    final pairs = <String, String>{};
+    final body = trimmed
+        .replaceFirst('Cookie', '')
+        .replaceFirst('cookie', '')
+        .replaceFirst(':', '')
+        .trimLeft();
+    for (final part in body.split(';')) {
+      final seg = part.trim();
+      if (seg.isEmpty) continue;
+      final idx = seg.indexOf('=');
+      if (idx <= 0) continue;
+      var v = seg.substring(idx + 1).trim();
+      if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+        v = v.substring(1, v.length - 1);
+      }
+      if (v.isNotEmpty) {
+        pairs[seg.substring(0, idx).trim()] = v;
+      }
+    }
+    AppLog.d('BaiJiLogin', 'cookie 键: ${pairs.keys.join(',')}');
+
+    // `wxuin` 是微信登录专用，排在 QQ 各变体之后：
+    // 两种 cookie 不会同时出现 uin 与 wxuin，顺序只影响日志可读性。
+    final uinStr = (pairs['uin'] ??
+            pairs['qqmusic_uin'] ??
+            pairs['uin_android'] ??
+            pairs['w_uin'] ??
+            pairs['wxuin'] ??
+            pairs['u'])
+            ?.trim()
+            .replaceAll('"', '')
+            .replaceAll("'", '') ??
+        '';
+    if (uinStr.isEmpty) {
+      throw Exception('Cookie 中缺少 uin / wxuin（应为 QQ 音乐登录后的账号 id）');
+    }
+    final uinNumeric = uinStr.replaceAll(RegExp('[^0-9]'), '');
+    final uinLong = int.tryParse(uinNumeric);
+    if (uinLong == null) {
+      // 微信的 wxuin 是 19 位大整数，虽然仍在 Dart 的 64 位 int 范围内，
+      // 但保不准哪天服务端改成了超出范围的值——那时至少要保住 strMusicid，
+      // 否则整个登录会退化成「uin 无效」而看不出真实原因。
+      throw Exception('Cookie 中的 uin 无效: $uinStr');
+    }
+
+    final musickey = (pairs['qm_keyst'] ??
+            pairs['qqmusic_key'] ??
+            pairs['qm_key'] ??
+            pairs['musickey'] ??
+            pairs['qm_keyst_android'] ??
+            pairs['qqmusic_keyst'])
+            ?.trim()
+            .replaceAll('"', '')
+            .replaceAll("'", '') ??
+        '';
+    if (musickey.isEmpty) {
+      throw Exception('Cookie 中缺少 qm_keyst / qqmusic_key');
+    }
+
+    // 票据前缀才是可靠判据：实测微信 cookie 里同时存在 tmeLoginType=1 与
+    // login_type=2，两者语义相反，照抄任何一个都会让后续接口按错误账号类型鉴权。
+    final loginType = musickey.startsWith('W_X') ? 1 : 2;
+    final declared = pairs['tmeLoginType']?.trim();
+    if (declared != null && declared.isNotEmpty && int.tryParse(declared) != loginType) {
+      AppLog.w('BaiJiLogin',
+          'cookie tmeLoginType=$declared 与票据推断的 loginType=$loginType 不一致，以票据为准');
+    }
+
+    final cred = Credential(
+      musicid: uinLong,
+      musickey: musickey,
+      strMusicid: uinStr,
+      loginType: loginType,
+      musickeyCreateTime: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      keyExpiresIn: 0,
+    );
+    AppLog.d('BaiJiLogin',
+        'cookie 解析: uin=$uinStr loginType=${cred.loginType} key=${musickey.clip(8)}...');
     return cred;
   }
 
