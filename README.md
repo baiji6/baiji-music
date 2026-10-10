@@ -4,7 +4,7 @@
 UI 采用暗色玻璃拟态 + 霓虹渐变的现代化未来感设计，构建期自动执行**加壳与混淆**防逆向。
 
 > 本工程由「白姬音乐 Android 原生 v1.1.1」重构而来：C 算法库（hash33 / zzc_sign / tripledes / qrc / qimei / comm）全部移植为纯 Dart，
-> 网络层支持 QQ 音乐与网易云双音源，功能模块覆盖搜索、播放、歌单、下载与扫码登录。
+> 网络层支持 QQ 音乐与网易云双音源，功能模块覆盖搜索、播放、歌单、下载、扫码登录与本地音乐。
 
 ---
 
@@ -15,8 +15,9 @@ UI 采用暗色玻璃拟态 + 霓虹渐变的现代化未来感设计，构建�
 | UI / 业务 | Flutter 3.47.x + Dart 3.13.x |
 | 算法层 | 纯 Dart（QQ 音乐签名 / 设备指纹 / QRC 歌词解密，与原 C 实现逐字节对照） |
 | 网络层 | dio（Cookie 管理、流式下载、超时）+ QQ 音乐 / 网易云双协议 |
-| 音频 | just_audio（iOS/macOS/Windows/Linux/Android 原生解码） |
+| 音频 | media_kit（libmpv + ffmpeg 软解，一套解码器通吃 MP3 / FLAC / M4A / OGG / WAV） |
 | 存储 | shared_preferences + path_provider |
+| 权限 | permission_handler（仅 Android 需要；桌面端无运行时存储权限） |
 | 鸿蒙壳 | ArkTS stage 模型（API 12），方舟混淆自动生效 |
 
 ## 目录结构
@@ -29,10 +30,12 @@ baiji_music/
 │   ├── ui/                     # 页面：发现 / 搜索 / 我的 / 播放条 / 小组件
 │   ├── crypto/                 # QQ 音乐签名算法（纯 Dart，含向量测试）
 │   ├── network/                # QQ 音乐 + 网易云网络层
-│   ├── data/                   # 设备指纹 / 历史 / 歌单存储
+│   ├── data/                   # 设备指纹 / 历史 / 歌单 / 本地音乐库存储
 │   ├── player/                 # 播放控制
 │   ├── download/               # 音质降级下载链
-│   └── core/                   # 日志 / KV / 工具
+│   ├── local/                  # 本地音乐扫描（Isolate + 增量指纹）
+│   ├── metadata/               # 音频元数据读写（写入 / 读取）
+│   └── core/                   # 日志 / KV / 封面 URL / 版本号 / 工具
 ├── android/                    # Android（R8 全量混淆 + 资源混淆）
 ├── ios/                        # iOS（Xcode Release 自动 strip 符号）
 ├── macos/                      # macOS（构建后 strip 符号）
@@ -86,13 +89,33 @@ flutter test
 
 ## 双音源能力
 
-- **QQ 音乐**：登录（扫码 / Cookie）、搜索（综合 + 单曲）、歌曲详情、播放地址（320→192→128 降级链）、歌词解密（QRC）、下载。
+- **QQ 音乐**：登录（扫码 / Cookie，Cookie 登录同时支持 QQ 与微信账号）、搜索（综合 + 单曲）、歌曲详情、播放地址（320→192→128 降级链）、歌词解密（QRC）、下载。
 - **网易云**：搜索、播放地址（EAPI 加密）、加密 ID（encryptId）。
+
+## 本地音乐
+
+不走任何网络接口，直接用本机磁盘上的音频文件，依靠 `lib/metadata/audio_reader.dart`
+自研的纯 Dart 元数据读取器识别信息：
+
+| 容器 | 标签来源 | 时长来源 |
+| --- | --- | --- |
+| MP3 | ID3v2.3/2.4（TIT2 / TPE1 / TALB / USLT / APIC），回退 ID3v1 | Xing / Info / VBRI 精确值，否则 CBR 估算 |
+| FLAC | Vorbis Comment + PICTURE | STREAMINFO 的 totalSamples / sampleRate |
+| M4A | `moov/udta/meta/ilst` 的 ©nam / ©ART / ©alb / ©lyr / covr | `mvhd` 的 duration / timescale |
+| OGG | Vorbis Comment + base64 METADATA_BLOCK_PICTURE | 末页 granulePosition / sampleRate |
+| WAV | `LIST/INFO` 的 INAM / IART / IPRD | `fmt ` 的 byteRate |
+
+- **增量扫描**：以「文件大小 + 修改时间」为指纹，未变动的文件不重新读盘，第二次扫描几乎瞬时；扫描在后台 Isolate 执行，不卡 UI。
+- **歌词**：优先同目录同名 `.lrc`，其次文件内嵌（USLT / Vorbis Comment）。
+- **性能取舍**：扫描阶段不读封面与歌词——几千张封面会吃掉几百 MB 内存，二者改为播放时按需读取，并带 200 条上限的封面内存缓存。
+
+移动端需要授权存储权限才能扫公共目录；桌面端无需额外授权。
 
 ## 测试与质量
 
-- `flutter test`：22 项测试全绿，覆盖 hash33 / zzc_sign / tripledes / qrc 解密与 C 源码参考向量逐字节对照（含 15 字节 zzc_2 修复），模型解析与网易云加密。
+- `flutter test`：170 项测试全绿。覆盖 QQ 音乐签名算法（hash33 / zzc_sign / tripledes / qrc 解密，与 C 源码参考向量逐字节对照，含 15 字节 zzc_2 修复）、网易云加密、模型解析、二维码登录状态码语义、Cookie 登录的 QQ/微信两种账号形态（15 项）、封面 URL 降级、协议弹窗交互、版本检查，以及本地音乐的元数据解析（五种容器 38 项）、扫描与增量（30 项）、持久化与页面（13 项）。
 - `flutter analyze`：No issues found。
+- 版本号的唯一真相来源是 `pubspec.yaml`：`test/app_version_test.dart` 会校验 UI 常量与之一致，CI 的 `read-version` 复合动作也从这里读取，避免「关于页显示旧版本」「Release 标题错位」。
 
 ## 鸿蒙适配说明
 

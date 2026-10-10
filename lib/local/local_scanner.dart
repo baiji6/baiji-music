@@ -141,8 +141,9 @@ class LocalScanner {
       }
     });
 
+    Isolate? worker;
     try {
-      await Isolate.spawn(
+      worker = await Isolate.spawn(
         _scanEntry,
         _ScanRequest(
           dirs: dirs,
@@ -152,7 +153,17 @@ class LocalScanner {
           sendPort: port.sendPort,
         ),
       );
-      return await completer.future;
+
+      // 兜底：worker 若被 OOM 或平台限制直接杀掉，一条消息都不会发回来，
+      // 那时 `completer.future` 会永久挂起，UI 一直卡在「扫描中」。
+      // 给个上限，超时后连 isolate 一起回收。
+      try {
+        return await completer.future
+            .timeout(const Duration(minutes: 10));
+      } on TimeoutException {
+        worker.kill(priority: Isolate.immediate);
+        rethrow;
+      }
     } finally {
       await sub.cancel();
       port.close();
