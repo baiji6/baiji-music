@@ -22,8 +22,9 @@ runs:
           echo "::error::无法从 pubspec.yaml 读取版本号" >&2
           exit 1
         fi
-        # 顺带校验格式，避免手滑写成 2.2 这类非法值
-        if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        # 顺带校验格式，避免手滑写成 2.2 这类非法值。
+        # 允许 SemVer 预发布后缀（2.2.2-fix1 这类修订版就是这么标的）。
+        if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
           echo "::error::版本号 '$version' 不是合法的 x.y.z 形式" >&2
           exit 1
         fi
