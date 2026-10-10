@@ -43,8 +43,11 @@ class DecryptPage extends StatefulWidget {
 class _DecryptPageState extends State<DecryptPage> {
   final List<_Task> _tasks = [];
 
-  /// 已勾选的密钥条目（值为 ekey / fileKey）。
-  final List<String> _selectedKeys = [];
+  /// 按平台归拢的密钥：平台名 → 该平台的第一条可用密钥。
+  ///
+  /// 刻意**不**再维护一个扁平的 key 列表——六个平台的加密规则互不相同，
+  /// 一把钥匙开不了别的平台的锁。
+  final Map<String, String> _platformKeys = {};
 
   String? _outputDir;
   bool _busy = false;
@@ -67,12 +70,12 @@ class _DecryptPageState extends State<DecryptPage> {
   }
 
   Future<void> _loadKeys() async {
-    final keys = await loadDecryptKeys();
+    final snapshot = await loadDecryptKeySnapshot();
     if (!mounted) return;
     setState(() {
-      _selectedKeys
+      _platformKeys
         ..clear()
-        ..addAll(keys);
+        ..addAll(snapshot);
     });
   }
 
@@ -205,9 +208,10 @@ class _DecryptPageState extends State<DecryptPage> {
       }
     });
 
-    // 密钥在主 isolate 读一次，序列化成纯字符串列表传给 worker，
-    // 避免 Isolate 之间传可变对象。
-    final keys = _selectedKeys.toList(growable: false);
+    // 密钥在主 isolate 读一次，序列化成「平台名 → 密钥」的纯字符串map 传给
+    // worker——Isolate 之间不能传自定义对象，worker 也能按 sniff 出的平台
+    // 精确取到对应的那一把，不用错配。
+    final platformKeys = Map<String, String>.from(_platformKeys);
 
     // 同名输出会互相覆盖，这里给重名的加上序号。
     final used = <String>{};
@@ -243,7 +247,7 @@ class _DecryptPageState extends State<DecryptPage> {
             final res = await Isolate.run(() => _decryptOne(
                   inputPath: task.inputPath,
                   outputPath: plans[task]!,
-                  keys: keys,
+                  keys: platformKeys,
                 ));
             task
               ..platform = res.platform
@@ -358,31 +362,51 @@ class _DecryptPageState extends State<DecryptPage> {
           ),
           GlassCard(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  _selectedKeys.isEmpty
-                      ? Icons.key_off_rounded
-                      : Icons.key_rounded,
-                  size: 18,
-                  color: _selectedKeys.isEmpty
-                      ? AppColors.textTertiary
-                      : AppColors.cyan,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    _selectedKeys.isEmpty
-                        ? '未设置密钥（部分格式无法解密）'
-                        : '已加载 ${_selectedKeys.length} 条密钥',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: _selectedKeys.isEmpty
+                Row(
+                  children: [
+                    Icon(
+                      _platformKeys.isEmpty
+                          ? Icons.key_off_rounded
+                          : Icons.key_rounded,
+                      size: 18,
+                      color: _platformKeys.isEmpty
                           ? AppColors.textTertiary
-                          : AppColors.textPrimary,
+                          : AppColors.cyan,
                     ),
-                  ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _platformKeys.isEmpty
+                            ? '未设置密钥（部分格式无法解密）'
+                            : '已为 ${_platformKeys.length} 个平台加载密钥',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: _platformKeys.isEmpty
+                              ? AppColors.textTertiary
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
+                //逐平台列出来——用户得看清"哪个平台的钥匙还没填"。
+                if (_platformKeys.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final p in DecryptPlatform.values)
+                        _PlatformChip(
+                          platform: p,
+                          ready: _platformKeys.containsKey(p.name),
+                        ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -498,7 +522,7 @@ class _DecryptPageState extends State<DecryptPage> {
 Future<DecryptResult> _decryptOne({
   required String inputPath,
   required String outputPath,
-  required List<String> keys,
+  required Map<String, String> keys,
 }) async {
   final file = File(inputPath);
   final headLen = await file.length();
@@ -518,7 +542,8 @@ Future<DecryptResult> _decryptOne({
     outputPath: outputPath,
     head: head,
     tail: tail,
-    keyResolver: keys.isEmpty ? null : () => keys.first,
+    // 密钥由 decryptFile 内部按嗅探出的平台挑选，这里不预设任何一把。
+    platformKeys: keys,
   );
 }
 
@@ -646,6 +671,47 @@ class _ActionButton extends StatelessWidget {
               color: disabled ? AppColors.textTertiary : AppColors.textPrimary,
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 解密页上的平台状态小标签：绿点=已配密钥，灰点=没配。
+class _PlatformChip extends StatelessWidget {
+  const _PlatformChip({required this.platform, required this.ready});
+
+  final DecryptPlatform platform;
+  final bool ready;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = ready ? AppColors.cyan : AppColors.textTertiary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            platform.label,
+            style: TextStyle(fontSize: 11, color: color),
+          ),
+          // 蜻蜓要的device key 是 hex，形态和其他平台不一样，标一下避免填错。
+          if (platform.keyIsHex) ...[
+            const SizedBox(width: 4),
+            Icon(Icons.hexagon_outlined, size: 12, color: color),
+          ],
         ],
       ),
     );

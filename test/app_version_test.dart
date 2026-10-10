@@ -44,10 +44,13 @@ void main() {
   });
 
   test('版本号是合法的三段语义化版本', () {
+    //允许 `-fix1` 这类预发布后缀（2.2.2-fix1 形式），
+    // 但主体必须严格是 x.y.z 三段。
     expect(
-      RegExp(r'^\d+\.\d+\.\d+$').hasMatch(AppVersion.current),
+      RegExp(r'^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$')
+          .hasMatch(AppVersion.current),
       isTrue,
-      reason: '版本号应为 x.y.z 形式，实际是 ${AppVersion.current}',
+      reason: '版本号应为 x.y.z 形式（可带 -后缀），实际是 ${AppVersion.current}',
     );
   });
 

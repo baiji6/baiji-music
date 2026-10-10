@@ -14,15 +14,25 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../decrypt/decryptor.dart' show DecryptPlatform;
 import '../../decrypt/key_scanner.dart';
 import '../../decrypt/key_store.dart';
+import '../../decrypt/qingting.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 
-/// 供解密页复用的加载入口。
-Future<List<String>> loadDecryptKeys() async {
+/// 供解密页复用的加载入口：返回「平台名 → 该平台第一条可用密钥」。
+///
+/// 刻意返回 map 而不是扁平List——六个平台的密钥规则互不相同，
+/// 解密时必须按嗅探出的平台精确取，不能混用。
+Future<Map<String, String>> loadDecryptKeySnapshot() async {
   final keys = await DecryptKeys.load();
-  return keys.entries.map((e) => e.value).toList();
+  final out = <String, String>{};
+  for (final p in DecryptPlatform.values) {
+    final k = keys.anyEkeyOf(p);
+    if (k != null && k.isNotEmpty) out[p.name] = k;
+  }
+  return out;
 }
 
 class DecryptKeysPage extends StatefulWidget {
@@ -35,6 +45,9 @@ class DecryptKeysPage extends StatefulWidget {
 class _DecryptKeysPageState extends State<DecryptKeysPage> {
   DecryptKeys? _keys;
   bool _loading = true;
+
+  /// 当前选中的平台Tab。所有录入动作都只作用于这个平台。
+  DecryptPlatform _platform = DecryptPlatform.qqMusic;
 
   @override
   void initState() {
@@ -51,49 +64,73 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
     });
   }
 
+  /// 当前平台已录的条目。
+  List<DecryptKeyEntry> _entriesOf(DecryptPlatform p) =>
+      _keys?.entriesOf(p) ?? const [];
+
   // ==================== 手动填写 ====================
 
   Future<void> _manualInput() async {
+    final platform = _platform;
     final controller = TextEditingController();
     String? mid;
 
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => _ManualKeyDialog(controller: controller, onMid: (v) => mid = v),
+      builder: (ctx) => _ManualKeyDialog(
+        platform: platform,
+        controller: controller,
+        onMid: (v) => mid = v,
+      ),
     );
-    if (ok != true || controller.text.trim().isEmpty) {
-      controller.dispose();
-      return;
-    }
     final value = controller.text.trim();
     controller.dispose();
+    if (ok != true || value.isEmpty) return;
 
-    await _keys!.add(DecryptKeyEntry(value: value, mid: mid));
+    // 蜻蜓要的是 16 字节 hex，先本地校验，别把垃圾存进去。
+    if (platform.keyIsHex) {
+      try {
+        parseHexOrThrow(value, '设备密钥');
+      } on QingTingFailure catch (e) {
+        _toast(e.message);
+        return;
+      }
+    }
+
+    await _keys!.add(DecryptKeyEntry(
+      value: value,
+      platform: platform,
+      mid: mid,
+    ));
     await _reload();
-    _toast('已添加');
+    _toast('已添加到${platform.label}');
   }
 
   // ==================== 导入文本 ====================
 
   Future<void> _importText() async {
+    final platform = _platform;
     final controller = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('导入密钥文本'),
+        title: Text('导入密钥文本 → ${platform.label}'),
         content: SizedBox(
           width: 420,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                '每行一条，支持三种写法：\n'
-                '• ekey\n'
-                '• mid,ekey\n'
-                '• mid,文件名,ekey\n'
-                '# 开头的行会被忽略',
-                style: TextStyle(fontSize: 12, height: 1.6),
+              Text(
+                platform.keyIsHex
+                    ? '每行一条设备密钥（32 位十六进制）。蜻蜓 FM 用 AES-128-CTR，'
+                        '密钥长度必须正好 16 字节。'
+                    : '每行一条，支持三种写法：\n'
+                        '• ekey\n'
+                        '• mid,ekey\n'
+                        '• mid,文件名,ekey\n'
+                        '# 开头的行会被忽略',
+                style: const TextStyle(fontSize: 12, height: 1.6),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -101,9 +138,11 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                 maxLines: 8,
                 minLines: 5,
                 style: const TextStyle(fontSize: 12),
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  hintText: '001y7CaR29k6YP,UVFNdXNpYyBFbmNWMixLZXk6...',
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  hintText: platform.keyIsHex
+                      ? '000102030405060708090a0b0c0d0e0f'
+                      : '001y7CaR29k6YP,UVFNdXNpYyBFbmNWMixLZXk6...',
                 ),
               ),
             ],
@@ -123,15 +162,42 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
       controller.dispose();
       return;
     }
-    final count = _keys!.importText(controller.text);
+    final count = _keys!.importText(controller.text, platform: platform);
     controller.dispose();
     await _reload();
-    _toast('已导入 $count 条');
+    _toast('已向${platform.label}导入 $count 条');
   }
 
   // ==================== 导入数据库 ====================
 
   Future<void> _importDatabase() async {
+    final platform = _platform;
+    // 蜻蜓的密钥是设备派生出来的，不是从客户端库里扫出来的——直接引导去生成。
+    if (platform == DecryptPlatform.qingting) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('蜻蜓 FM 密钥无法扫描'),
+          content: const Text(
+            '蜻蜓 FM 的密钥是由手机机型信息（product / device / manufacturer / '
+            'brand / board / model）派生出来的，不存在于任何客户端数据库里。\n\n'
+            '请用「由设备信息生成」按钮，按你手机的真实机型信息生成。',
+            style: TextStyle(fontSize: 13, height: 1.6),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('关闭')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('去生成')),
+          ],
+        ),
+      );
+      if (go == true && mounted) _openQingTingGenerator();
+      return;
+    }
+
     try {
       final res = await FilePicker.platform.pickFiles(allowMultiple: true);
       if (res == null || res.files.isEmpty || !mounted) return;
@@ -152,7 +218,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
             notes.add('$name 超过 64MB，已跳过');
             continue;
           }
-          final r = scanKeys(bytes, hint: name);
+          final r = scanKeys(bytes, platform: platform, hint: name);
           found.addAll(r.entries);
           final n = r.entries.length;
           notes.add('$name：${r.source} 命中 $n 条'
@@ -174,6 +240,15 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
     } catch (e) {
       _toast('导入失败：$e');
     }
+  }
+
+  // ==================== 蜻蜓设备信息生成 ====================
+
+  void _openQingTingGenerator() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => const _QingTingGeneratorDialog(),
+    );
   }
 
   /// 扫描报告：让用户看清每个文件命中了什么、为什么某个文件没中。
@@ -221,17 +296,28 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
     );
   }
 
-  Future<void> _delete(String value) async {
-    await _keys!.remove(value);
+  Future<void> _delete(DecryptKeyEntry e) async {
+    await _keys!.remove(e.value, e.platform);
     await _reload();
   }
 
+  /// 只清空当前 Tab 的平台，不动其他平台的密钥。
   Future<void> _clearAll() async {
+    final platform = _platform;
+    final n = _entriesOf(platform).length;
+    if (n == 0) {
+      _toast('${platform.label} 还没有密钥');
+      return;
+    }
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('清空全部密钥？'),
-        content: const Text('清空后需要重新导入或填写，否则无法解密。'),
+        title: Text('清空${platform.label}的全部密钥？'),
+        content: Text(
+          '将删除 $n 条。其他平台的密钥不受影响。\n'
+          '清空后需要重新导入或填写，否则无法解密。',
+          style: const TextStyle(fontSize: 13, height: 1.6),
+        ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -246,8 +332,9 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
       ),
     );
     if (ok != true) return;
-    await _keys!.clear();
+    await _keys!.clearPlatform(platform);
     await _reload();
+    _toast('已清空${platform.label}');
   }
 
   void _toast(String msg) {
@@ -277,6 +364,18 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
               children: [
+                // ---- 平台 Tab：每个平台的加密规则不同，必须分开录入 ----
+                _PlatformTabs(
+                  current: _platform,
+                  counts: {
+                    for (final p in DecryptPlatform.values)
+                      p: _entriesOf(p).length,
+                  },
+                  onSelect: (p) => setState(() => _platform = p),
+                ),
+                const SizedBox(height: 16),
+                _PlatformBanner(platform: _platform),
+                const SizedBox(height: 16),
                 Row(
                   children: [
                     Expanded(
@@ -304,25 +403,35 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                     ),
                   ],
                 ),
+                if (_platform == DecryptPlatform.qingting) ...[
+                  const SizedBox(height: 10),
+                  _MiniAction(
+                    icon: Icons.auto_fix_high_rounded,
+                    label: '由设备信息生成密钥',
+                    onTap: _openQingTingGenerator,
+                  ),
+                ],
                 const SizedBox(height: 20),
-                if (keys == null || keys.isEmpty)
+                if (_entriesOf(_platform).isEmpty)
                   GlassCard(
                     child: Center(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 30),
                         child: Column(
-                          children: const [
-                            Icon(Icons.key_off_rounded,
+                          children: [
+                            const Icon(Icons.key_off_rounded,
                                 size: 34, color: AppColors.textTertiary),
-                            SizedBox(height: 10),
-                            Text('还没有密钥',
-                                style: TextStyle(
+                            const SizedBox(height: 10),
+                            Text('${_platform.label}还没有密钥',
+                                style: const TextStyle(
                                     fontSize: 13,
                                     color: AppColors.textTertiary)),
-                            SizedBox(height: 6),
+                            const SizedBox(height: 6),
                             Text(
-                              'QQ 音乐、酷狗 v5、酷我 v2 需要密钥',
-                              style: TextStyle(
+                              _platform.needsKey
+                                  ? '该平台必须填写密钥才能解密'
+                                  : '该平台通常无需密钥，文件头里已自带',
+                              style: const TextStyle(
                                   fontSize: 11,
                                   color: AppColors.textTertiary),
                             ),
@@ -336,8 +445,8 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                     padding: const EdgeInsets.symmetric(vertical: 6),
                     child: Column(
                       children: [
-                        for (final e in keys.entries)
-                          _KeyTile(entry: e, onDelete: () => _delete(e.value)),
+                        for (final e in _entriesOf(_platform))
+                          _KeyTile(entry: e, onDelete: () => _delete(e)),
                       ],
                     ),
                   ),
@@ -348,8 +457,13 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
 }
 
 class _ManualKeyDialog extends StatefulWidget {
-  const _ManualKeyDialog({required this.controller, required this.onMid});
+  const _ManualKeyDialog({
+    required this.platform,
+    required this.controller,
+    required this.onMid,
+  });
 
+  final DecryptPlatform platform;
   final TextEditingController controller;
   final ValueChanged<String?> onMid;
 
@@ -368,21 +482,35 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final p = widget.platform;
     return AlertDialog(
-      title: const Text('手动填写密钥'),
+      title: Text('手动填写密钥 → ${p.label}'),
       content: SizedBox(
         width: 420,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.cyan.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                _keyHint(p),
+                style: const TextStyle(fontSize: 11.5, height: 1.55),
+              ),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: widget.controller,
               maxLines: 3,
               minLines: 2,
               style: const TextStyle(fontSize: 12),
-              decoration: const InputDecoration(
-                labelText: 'ekey / fileKey',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: p.keyIsHex ? '设备密钥（32 位 hex）' : 'ekey / fileKey',
+                border: const OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 12),
@@ -407,6 +535,273 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
           child: const Text('添加'),
         ),
       ],
+    );
+  }
+
+  /// 各平台密钥的形态说明——填错格式是最常见的失败原因。
+  static String _keyHint(DecryptPlatform p) => switch (p) {
+        DecryptPlatform.qqMusic => 'QQ 音乐：ekey 为 base64 串，通常在文件尾部的 QMG 块里。',
+        DecryptPlatform.kugou => '酷狗：v5 需fileKey（hex），与酷狗 App 内其他 key 不是一回事。',
+        DecryptPlatform.kuwo => '酷我：kwm 的 fileKey（hex），从酷我客户端缓存目录的数据库里拿。',
+        DecryptPlatform.netease => '网易云：密钥已内置在 .ncm 文件头里，通常不需要填写。',
+        DecryptPlatform.migu => '咪咕：多数情况下密钥可由文件头推导，通常不需要填写。',
+        DecryptPlatform.qingting =>
+          '蜻蜓 FM：需要 16 字节设备密钥的十六进制（32 个字符），'
+              '由手机机型信息派生，不在任何客户端数据库里。',
+      };
+}
+
+/// 蜻蜓 FM 设备密钥生成器：填 6 段机型信息 → 派生 device key。
+class _QingTingGeneratorDialog extends StatefulWidget {
+  const _QingTingGeneratorDialog();
+
+  @override
+  State<_QingTingGeneratorDialog> createState() =>
+      _QingTingGeneratorDialogState();
+}
+
+class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
+  final _fields = <String, TextEditingController>{
+    for (final k in const [
+      'product',
+      'device',
+      'manufacturer',
+      'brand',
+      'board',
+      'model',
+    ])
+      k: TextEditingController(),
+  };
+
+  String? _result;
+
+  @override
+  void dispose() {
+    for (final c in _fields.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  void _generate() {
+    if (_fields.values.any((c) => c.text.trim().isEmpty)) {
+      setState(() => _result = null);
+      _toast('六段机型信息都要填');
+      return;
+    }
+    final hex = deviceSecretToHex(
+      makeDeviceSecret(
+        product: _fields['product']!.text.trim(),
+        device: _fields['device']!.text.trim(),
+        manufacturer: _fields['manufacturer']!.text.trim(),
+        brand: _fields['brand']!.text.trim(),
+        board: _fields['board']!.text.trim(),
+        model: _fields['model']!.text.trim(),
+      ),
+    );
+    setState(() => _result = hex);
+  }
+
+  void _toast(String m) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('由设备信息生成蜻蜓密钥'),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '填你手机「关于手机」里的原始值。构建号等字段不要改写，'
+                '差一个字符就解不出正确结果。',
+                style: TextStyle(fontSize: 12, height: 1.6),
+              ),
+              const SizedBox(height: 14),
+              for (final entry in _fields.entries) ...[
+                TextField(
+                  controller: entry.value,
+                  style: const TextStyle(fontSize: 12),
+                  decoration: InputDecoration(
+                    labelText: entry.key,
+                    isDense: true,
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+              if (_result != null) ...[
+                const SizedBox(height: 4),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.cyan.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: SelectableText(
+                    _result!,
+                    style: const TextStyle(
+                        fontSize: 12, fontFamily: 'monospace'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '点「保存到蜻蜓」直接入库；若解出来是噪声，多半是某段机型信息写错了。',
+                  style: TextStyle(
+                      fontSize: 11, height: 1.5, color: AppColors.textTertiary),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('关闭'),
+        ),
+        TextButton(onPressed: _generate, child: const Text('生成')),
+        if (_result != null)
+          FilledButton(
+            onPressed: () async {
+              final keys = await DecryptKeys.load();
+              await keys.add(DecryptKeyEntry(
+                value: _result!,
+                platform: DecryptPlatform.qingting,
+              ));
+              if (!context.mounted) return;
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('已保存到蜻蜓 FM')),
+              );
+            },
+            child: const Text('保存到蜻蜓'),
+          ),
+      ],
+    );
+  }
+}
+
+/// 平台切换 Tab。每格右上角显示该平台已录的条数。
+class _PlatformTabs extends StatelessWidget {
+  const _PlatformTabs({
+    required this.current,
+    required this.counts,
+    required this.onSelect,
+  });
+
+  final DecryptPlatform current;
+  final Map<DecryptPlatform, int> counts;
+  final ValueChanged<DecryptPlatform> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 74,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: DecryptPlatform.values.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final p = DecryptPlatform.values[i];
+          final n = counts[p] ?? 0;
+          final sel = p == current;
+          final color = sel ? AppColors.cyan : AppColors.textTertiary;
+          return InkWell(
+            onTap: () => onSelect(p),
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              width: 92,
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: sel ? 0.13 : 0.05),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: color.withValues(alpha: sel ? 0.55 : 0.18),
+                  width: sel ? 1.4 : 1,
+                ),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    p.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
+                      color: sel ? AppColors.textPrimary : AppColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    p.extensions.isEmpty ? '—' : p.extensions.first,
+                    style: TextStyle(fontSize: 10, color: color),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    n > 0 ? '$n 条' : '未设置',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: n > 0 ? AppColors.cyan : AppColors.textTertiary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// 当前平台的规则说明条。
+class _PlatformBanner extends StatelessWidget {
+  const _PlatformBanner({required this.platform});
+
+  final DecryptPlatform platform;
+
+  @override
+  Widget build(BuildContext context) {
+    final needs = platform.needsKey;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: (needs ? const Color(0xFFFFB020) : AppColors.textTertiary)
+            .withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            needs ? Icons.lock_outline_rounded : Icons.lock_open_rounded,
+            size: 16,
+            color: needs ? const Color(0xFFFFB020) : AppColors.textTertiary,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '${platform.label}｜${platform.extensions.join(' ')}'
+              '${needs ? ' · 需要密钥' : ' · 通常无需密钥'}'
+              '${platform.keyIsHex ? ' · 密钥为 hex' : ''}',
+              style: TextStyle(
+                fontSize: 11.5,
+                height: 1.5,
+                color: needs ? const Color(0xFFFFB020) : AppColors.textTertiary,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

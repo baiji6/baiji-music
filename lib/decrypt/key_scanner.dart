@@ -18,6 +18,7 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'decryptor.dart' show DecryptPlatform;
 import 'key_store.dart';
 
 /// 扫描结果。
@@ -43,31 +44,39 @@ class KeyScanResult {
 /// 统一入口：按魔数分派。
 ///
 /// [hints] 是文件名/路径的小写形式，用来在魔数缺失时兜底判断。
-KeyScanResult scanKeys(Uint8List bytes, {String hint = ''}) {
+///
+/// [platform] 由调用方指定（用户在 UI 上先选好了平台）——扫描器不猜，
+/// 因为密钥串本身看不出属于哪个平台。
+KeyScanResult scanKeys(
+  Uint8List bytes, {
+  required DecryptPlatform platform,
+  String hint = '',
+}) {
   if (bytes.isEmpty) {
     return KeyScanResult(source: '空文件', entries: const []);
   }
 
   if (isMmkv(bytes)) {
-    final r = scanMmkvKeys(bytes);
+    final r = scanMmkvKeys(bytes, platform: platform);
     if (r.isNotEmpty) return r;
     // MMKV 可能开了加密（值是密文），退回兜底再试一次。
-    return _fallbackScan(bytes, hint, note: 'MMKV（值可能已加密，已用兜底扫描）');
+    return _fallbackScan(bytes, hint,
+        platform: platform, note: 'MMKV（值可能已加密，已用兜底扫描）');
   }
 
   if (isSqlite(bytes)) {
-    final r = scanSqliteKeys(bytes);
+    final r = scanSqliteKeys(bytes, platform: platform);
     if (r.isNotEmpty) return r;
-    return _fallbackScan(bytes, hint, note: 'SQLite（未匹配到密钥列）');
+    return _fallbackScan(bytes, hint,
+        platform: platform, note: 'SQLite（未匹配到密钥列）');
   }
 
   if (hint.contains('mmkv')) {
-    return scanMmkvKeys(bytes).isEmpty
-        ? _fallbackScan(bytes, hint, note: 'MMKV')
-        : scanMmkvKeys(bytes);
+    final r = scanMmkvKeys(bytes, platform: platform);
+    return r.isNotEmpty ? r : _fallbackScan(bytes, hint, platform: platform, note: 'MMKV');
   }
 
-  return _fallbackScan(bytes, hint);
+  return _fallbackScan(bytes, hint, platform: platform);
 }
 
 // ==================== MMKV ====================
@@ -92,7 +101,8 @@ bool isMmkv(Uint8List b) =>
 /// MMKV 每个内存页的布局是 `[4B payloadSize][protobuf bytes]`，
 /// 首个 4 字节之外还有一段 meta（密钥 / 偏移表）。所以这里不硬啃页结构，
 /// 而是在整个文件里递归找「能解成 key/value 对」的那段。
-KeyScanResult scanMmkvKeys(Uint8List bytes) {
+KeyScanResult scanMmkvKeys(Uint8List bytes,
+    {required DecryptPlatform platform}) {
   final out = <DecryptKeyEntry>[];
   final seen = <String>{};
 
@@ -106,6 +116,7 @@ KeyScanResult scanMmkvKeys(Uint8List bytes) {
       if (value == null || !seen.add(value)) continue;
       out.add(DecryptKeyEntry(
         value: value,
+        platform: platform,
         mid: _midFromKey(kv.key),
         source: KeySource.importedMmkv,
       ));
@@ -263,7 +274,8 @@ bool isSqlite(Uint8List b) {
 /// 2. 遍历 page 1（sqlite_master），建表名 → 根页 的映射，同时拿列名；
 /// 3. 对每张表的 b-tree 做 DFS，解析叶页里的 record；
 /// 4. record 的 serial type 决定该列是 NULL/int/blob/text。
-KeyScanResult scanSqliteKeys(Uint8List bytes) {
+KeyScanResult scanSqliteKeys(Uint8List bytes,
+    {required DecryptPlatform platform}) {
   final out = <DecryptKeyEntry>[];
   final seen = <String>{};
 
@@ -316,6 +328,7 @@ KeyScanResult scanSqliteKeys(Uint8List bytes) {
             if (!seen.add(v)) continue;
             out.add(DecryptKeyEntry(
               value: v,
+              platform: platform,
               mid: _midFromColumns(t.columns, record),
               qualityId: _qualityFromColumns(t.columns, record),
               source: KeySource.importedDatabase,
@@ -724,7 +737,12 @@ String? _asText(Object? v) {
 
 // ==================== 兜底 ====================
 
-KeyScanResult _fallbackScan(Uint8List bytes, String hint, {String? note}) {
+KeyScanResult _fallbackScan(
+  Uint8List bytes,
+  String hint, {
+  required DecryptPlatform platform,
+  String? note,
+}) {
   final text = latin1.decode(bytes, allowInvalid: true);
   final out = <DecryptKeyEntry>[];
   final seen = <String>{};
@@ -734,6 +752,7 @@ KeyScanResult _fallbackScan(Uint8List bytes, String hint, {String? note}) {
     if (!looksLikeEkey(s)) continue;
     out.add(DecryptKeyEntry(
       value: s,
+      platform: platform,
       mid: _midFromKey(latin1.encode(_contextAround(text, m.start))),
       source: hint.contains('mmkv')
           ? KeySource.importedMmkv

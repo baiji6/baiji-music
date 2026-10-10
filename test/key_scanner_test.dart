@@ -2,11 +2,26 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:baiji_music/decrypt/key_scanner.dart';
+import 'package:baiji_music/decrypt/decryptor.dart' show DecryptPlatform;
+import 'package:baiji_music/decrypt/key_scanner.dart'
+    show KeyScanResult, isMmkv, isSqlite, looksLikeEkey;
+import 'package:baiji_music/decrypt/key_scanner.dart' as scanner;
 import 'package:flutter_test/flutter_test.dart';
 
 Uint8List _fixture(String name) =>
     File('test/fixtures/keys/$name').readAsBytesSync();
+
+// 密钥现在按平台隔离，扫描时也必须指明平台。这几个壳函数把默认平台固定成
+// QQ 音乐，免得每个用例都写一遍样板；需要测别的平台时显式调scanner.*。
+KeyScanResult scanKeys(Uint8List bytes, {String hint = ''}) =>
+    scanner.scanKeys(bytes,
+        platform: DecryptPlatform.qqMusic, hint: hint);
+
+KeyScanResult scanMmkvKeys(Uint8List bytes) =>
+    scanner.scanMmkvKeys(bytes, platform: DecryptPlatform.qqMusic);
+
+KeyScanResult scanSqliteKeys(Uint8List bytes) =>
+    scanner.scanSqliteKeys(bytes, platform: DecryptPlatform.qqMusic);
 
 void main() {
   group('looksLikeEkey', () {

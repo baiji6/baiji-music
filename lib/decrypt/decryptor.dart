@@ -26,6 +26,7 @@ import 'migu.dart';
 import 'ncm.dart';
 import 'qmc.dart';
 import 'qmc_ekey.dart';
+import 'qingting.dart';
 import 'qmc_footer.dart';
 
 import 'key_store.dart';
@@ -44,13 +45,30 @@ enum DecryptPlatform {
   /// 网易云（.ncm）
   netease('网易云音乐', ['.ncm']),
 
-  /// 咪咕（.3D / .m4a 等）
-  migu('咪咕音乐', ['.3d', '.3da', '.m4a', '.mp3', '.mp4', '.aac', '.flac']);
+  /// 咪咕（.3D / .3DA / .m4a 等）
+  migu('咪咕音乐', ['.3d', '.3da', '.m4a', '.mp3', '.mp4', '.aac', '.flac']),
+
+  /// 蜻蜓 FM（.qta），文件名形如 `.p!<base64>.qta`
+  qingting('蜻蜓 FM', ['.qta']);
 
   const DecryptPlatform(this.label, this.extensions);
 
   final String label;
   final List<String> extensions;
+
+  /// 这个平台的密钥填法是不是「hex device key」而不是 ekey。
+  ///
+  /// 蜻蜓 FM 要的是 16 字节 device key 的**十六进制**（32 个字符），
+  /// 不是 base64 的 ekey。
+  bool get keyIsHex => this == DecryptPlatform.qingting;
+
+  /// 这个平台是否必须由用户提供密钥。
+  ///
+  /// 网易云的密钥在文件头里、咪咕能自己猜，所以不需要。
+  bool get needsKey =>
+      this == DecryptPlatform.kugou ||
+      this == DecryptPlatform.kuwo ||
+      this == DecryptPlatform.qingting;
 }
 
 /// 嗅探出的文件信息。
@@ -172,24 +190,29 @@ SniffResult sniffQmc(Uint8List head, Uint8List tail) {
 
 /// 从密钥库里按 sniff 结果查找所需密钥。
 ///
-/// 优先级：文件自带 ekey → footer 里的 mid → 无脑兜底。
+/// **所有查找都限定在 [SniffResult.platform] 对应的平台内**——
+/// 五个平台的密钥规则互不相通，跨平台取密钥只会解出噪声。
+///
+/// 优先级：文件自带 ekey → footer 里的 mid → footer 文件名 → 同平台兜底。
 String? resolveEkey(SniffResult sniff, DecryptKeys keys) {
   final embedded = sniff.footer?.ekey;
   if (embedded != null && embedded.isNotEmpty) return embedded;
 
+  final p = sniff.platform;
+
   final mid = sniff.footer?.mediaMid;
   if (mid != null && mid.isNotEmpty) {
-    final byMid = keys.lookupByMid(mid);
+    final byMid = keys.lookupByMid(mid, p);
     if (byMid != null) return byMid;
   }
 
   final fileName = sniff.footer?.mediaFilename;
   if (fileName != null && fileName.isNotEmpty) {
-    final byFile = keys.lookupByMediaFilename(fileName);
+    final byFile = keys.lookupByMediaFilename(fileName, p);
     if (byFile != null) return byFile;
   }
 
-  return keys.anyEkey;
+  return keys.anyEkeyOf(p);
 }
 
 /// 单个文件的解密入口。**必须在 Isolate 里跑**（CPU 密集）。
@@ -206,6 +229,7 @@ Future<DecryptResult> decryptFile({
   Uint8List? tail,
   DecryptKeys? keys,
   String? Function()? keyResolver,
+  Map<String, String>? platformKeys,
 }) async {
   final file = File(inputPath);
   final totalLen = await file.length();
@@ -218,6 +242,7 @@ Future<DecryptResult> decryptFile({
     tail: tail,
     keys: keys,
     ekeyOverride: keyResolver?.call(),
+    platformKeys: platformKeys,
   );
   return result;
 }
@@ -230,9 +255,15 @@ DecryptResult _decryptRange({
   Uint8List? tail,
   required DecryptKeys? keys,
   required String? ekeyOverride,
+  Map<String, String>? platformKeys,
 }) {
-  final ekeyValue = ekeyOverride;
-  final sniffed = _sniffWithTail(head, tail, keys, ekeyValue);
+  // 先嗅探出平台，才能按平台挑密钥——**绝不能拿一把钥匙开所有锁**。
+  final sniffed = _sniffWithTail(head, tail, keys, ekeyOverride, file.path);
+
+  //优先级：调用方显式给的 > 该平台的密钥 > null。
+  // `platformKeys` 是给跨 isolate 用的扁平map（Isolate 之间不能传自定义对象）。
+  final ekeyValue = ekeyOverride ??
+      (platformKeys == null ? null : platformKeys[sniffed.platform.name]);
 
   final out = File(outputPath);
   out.parent.createSync(recursive: true);
@@ -246,13 +277,29 @@ DecryptResult _decryptRange({
       return _decryptKwm(file, totalLen, out, sniffed, ekeyValue);
     case DecryptPlatform.migu:
       return _decryptMigu(file, totalLen, out, sniffed);
+    case DecryptPlatform.qingting:
+      return _decryptQingTing(file, totalLen, out, ekeyValue);
     case DecryptPlatform.qqMusic:
       return _decryptQmc(file, totalLen, out, sniffed, ekeyValue, tail);
   }
 }
 
 SniffResult _sniffWithTail(
-  Uint8List head, Uint8List? tail, DecryptKeys? keys, String? ekey) {
+  Uint8List head,
+  Uint8List? tail,
+  DecryptKeys? keys,
+  String? ekey,
+  String inputPath,
+) {
+  // 蜻蜓 FM 没有文件头——**只能靠文件名**（`.p!<base64>.qta`）识别，
+  // 必须放在最前面，否则会被下面几层的魔数嗅探误判成别的格式。
+  if (isQingTingFileName(inputPath)) {
+    return SniffResult(
+      platform: DecryptPlatform.qingting,
+      audioDataOffset: 0, // 整个文件都是密文
+    );
+  }
+
   if (isNcmFile(head)) {
     final h = parseNcmHeader(head);
     return SniffResult(
@@ -336,6 +383,8 @@ String _outExtension(String inputPath) {
   if (p.endsWith('.kwm')) return '.flac';
   if (p.endsWith('.ncm')) return '.mp3';
   if (p.endsWith('.3d') || p.endsWith('.3da')) return '.mp4';
+  // 蜻蜓的原始名是 `.p!<base64>.qta`，解出来的就是音频，直接还原成 .qta
+  if (p.endsWith('.qta')) return '.qta';
   final dot = p.lastIndexOf('.');
   return dot >= 0 ? p.substring(dot) : '';
 }
@@ -448,6 +497,37 @@ DecryptResult _decryptMigu(File file, int totalLen, File out, SniffResult s) {
   );
 }
 
+
+DecryptResult _decryptQingTing(
+    File file, int totalLen, File out, String? deviceKeyHex) {
+  final hex = deviceKeyHex?.trim();
+  if (hex == null || hex.isEmpty) {
+    throw const DecryptFailure(
+        '蜻蜓 FM 需要设备密钥，请在「密钥管理」里填写或由设备信息生成');
+  }
+
+  final QingTingDecipher d;
+  try {
+    d = QingTingDecipher.fromHexKey(hex, file.path);
+  } on QingTingFailure catch (e) {
+    throw DecryptFailure(e.message);
+  }
+
+  // 蜻蜓的文件**没有头**，从第0 字节起整块都是密文。
+  final written = _streamDecrypt(
+    input: file,
+    output: out,
+    from: 0,
+    to: totalLen,
+    onChunk: (chunk, offset) => d.decrypt(chunk, offset),
+  );
+
+  return DecryptResult(
+    outputPath: out.path,
+    platform: DecryptPlatform.qingting,
+    bytesWritten: written,
+  );
+}
 DecryptResult _decryptNcm(File file, int totalLen, File out, SniffResult s) {
   final header = s.ncmHeader;
   if (header == null) {
