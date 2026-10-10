@@ -1,11 +1,10 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/app_logger.dart';
+import '../../core/cache_manager.dart';
 import '../../theme/app_theme.dart';
 
 /// 日志与调试页：展示应用运行日志，支持六级分级过滤与导出。
@@ -30,15 +29,18 @@ class _LogPageState extends State<LogPage> {
         return;
       }
       final text = logs.join('\n');
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/baiji_music_logs.txt');
+      // 放进可管理的缓存目录，这样「设置 → 清理缓存」能把导出残留一并清掉
+      final file = await CacheManager.cacheFile('baiji_music_logs.txt');
       await file.writeAsString(text, encoding: utf8);
+      if (!mounted) return;
       await Share.shareXFiles(
         [XFile(file.path)],
         text: '白姬音乐运行日志',
         subject: 'baiji_music_logs.txt',
       );
     } catch (e) {
+      // 这里 await 过了，context 可能已经失效——和 finally 一样要先判mounted
+      if (!mounted) return;
       _showSnack('导出失败: $e', isError: true);
     } finally {
       if (mounted) setState(() => _exporting = false);

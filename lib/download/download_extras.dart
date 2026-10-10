@@ -10,7 +10,6 @@ import '../lyrics/lyric_serializer.dart';
 import '../metadata/audio_tagger.dart';
 import '../models/models.dart';
 import '../network/lyric_api.dart';
-import 'download_manager.dart';
 
 /// 下载歌曲时「歌词」的处理方式。
 enum LyricDownloadMode {
@@ -146,16 +145,26 @@ class DownloadExtras {
       album: song.album,
     );
 
+    // 外挂文件与内嵌标签**同时**产出，不是二选一。
+    // 只写元数据的话，很多播放器与文件管理器根本不显示内嵌封面/歌词，
+    // 用户在下载目录里看不到任何东西，也没法把封面单独拿去用。
+    final sidecars = await _writeSidecars(filePath, song, lrc, cover);
+
     if (result.error != null) {
-      // 内嵌失败：退回外挂文件，保证歌词/封面不丢
-      final sidecars = await _writeSidecars(filePath, song, lrc, cover);
+      // 内嵌失败时全靠外挂，至少不丢歌词和封面
       final suffix = sidecars.isEmpty ? '' : '（已存为外挂文件）';
       return '已下载$suffix · ${result.error}';
     }
-    return '已下载（歌词/封面已写入元数据）';
+    return sidecars.isEmpty
+        ? '已下载（歌词/封面已写入元数据）'
+        : '已下载（歌词/封面已内嵌 + 同名外挂文件）';
   }
 
-  /// 外挂文件兜底：写入同名 `.lrc` 与 `.jpg`。
+  /// 写入同名 `.lrc` 与 `.jpg`。
+  ///
+  /// 基名直接取音频文件的实际名字（去扩展名），而不是「歌手 - 歌名」：
+  /// 同名歌曲重复下载时下载管理器会给音频加 ` (1)` 之类的后缀，
+  /// 用歌名拼出来的外挂文件就对不上音频了。
   static Future<List<String>> _writeSidecars(
     String filePath,
     Song song,
@@ -164,8 +173,6 @@ class DownloadExtras {
   ) async {
     final out = <String>[];
     final base = filePath.substring(0, filePath.length - _extLen(filePath));
-    final stem = '${DownloadManager.sanitize(song.singer)} - '
-        '${DownloadManager.sanitize(song.name)}';
     try {
       if (lrc != null && lrc.isNotEmpty) {
         final f = File('$base.lrc');
@@ -177,9 +184,14 @@ class DownloadExtras {
     }
     try {
       if (cover != null) {
-        final ext = cover.mime == 'image/png' ? '.png' : '.jpg';
-        final f = File('${File(filePath).parent.path}'
-            '${Platform.pathSeparator}$stem$ext');
+        // 按真实格式给扩展名：GIF / WebP 存成 .jpg 的话播放器渲不出来
+        const extOf = {
+          'image/png': '.png',
+          'image/gif': '.gif',
+          'image/webp': '.webp',
+        };
+        final ext = extOf[cover.mime] ?? '.jpg';
+        final f = File('$base$ext');
         await f.writeAsBytes(cover.data, flush: true);
         out.add(f.path);
       }

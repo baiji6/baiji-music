@@ -12,6 +12,7 @@ import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/lyric_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
+import 'package:baiji_music/core/album_saver.dart';
 import 'package:baiji_music/ui/widgets/cover_image.dart';
 import 'package:baiji_music/ui/widgets/lyric_style_sheet.dart';
 import 'package:flutter/foundation.dart';
@@ -726,23 +727,52 @@ class _CoverArt extends StatelessWidget {
   final Song song;
   final double size;
 
+  /// 长按封面保存到相册。桌面端与 gal 不支持的平台会给出明确提示。
+  Future<void> _saveCover(BuildContext context) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final ok = messenger?.showSnackBar;
+    void say(String text, {bool error = false}) {
+      ok?.call(SnackBar(
+        content: Text(text),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+        backgroundColor: error ? AppColors.bg2 : null,
+      ));
+    }
+
+    say('正在保存封面…');
+    final r = await AlbumSaver.saveCover(song);
+    switch (r.state) {
+      case CoverSaveState.ok:
+        say('封面已保存到相册 · ${AlbumSaver.albumName}');
+      case CoverSaveState.noCover:
+        say(r.message.isEmpty ? '这首歌没有封面' : r.message);
+      case CoverSaveState.denied:
+      case CoverSaveState.failed:
+        say(r.message.isEmpty ? '保存封面失败' : r.message, error: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final radius = size * 0.11;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(radius),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.violet.withValues(alpha: 0.35),
-            blurRadius: 34,
-            offset: const Offset(0, 14),
-          ),
-        ],
+    return GestureDetector(
+      onLongPress: () => _saveCover(context),
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.violet.withValues(alpha: 0.35),
+              blurRadius: 34,
+              offset: const Offset(0, 14),
+            ),
+          ],
+        ),
+        child: CoverImage(song: song, size: size, radius: radius),
       ),
-      child: CoverImage(song: song, size: size, radius: radius),
     );
   }
 }

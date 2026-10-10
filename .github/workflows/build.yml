@@ -361,8 +361,37 @@ jobs:
       - name: List release files
         run: ls -laR dist/
 
+      # 从 CHANGELOG.md 抽出当前版本那一节作为 Release 正文。
+      # 自 v2.2.1 起 Release 必须带更新日志，所以这里抽不出来就直接失败，
+      # 避免又发出去一个只有「自动生成说明」的空 Release。
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          set -euo pipefail
+          if [ ! -f CHANGELOG.md ]; then
+            echo "::error::仓库缺少 CHANGELOG.md，无法生成更新日志"
+            exit 1
+          fi
+          python3 - "$APP_VERSION" <<'PY' >> "$GITHUB_OUTPUT"
+          import re, sys
+          version = sys.argv[1]
+          text = open('CHANGELOG.md', encoding='utf-8').read()
+          # 抓 "## 2.2.1" 到下一个 "## " 之间的内容（标题行去掉 # 与空格）
+          m = re.search(r'^##\s+' + re.escape(version) + r'\s*$(.*?)(?=^##\s|\Z)',
+                        text, re.M | re.S)
+          if not m:
+              sys.exit('CHANGELOG.md 里没有找到版本 ' + version + ' 的条目')
+          body = m.group(0).strip()
+          print('has_changelog=true')
+          print('changelog<<CHANGELOG_EOF')
+          print(body)
+          print('CHANGELOG_EOF')
+          PY
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
+        env:
+          CHANGELOG_BODY: ${{ steps.changelog.outputs.changelog }}
         with:
           files: |
             dist/baiji-music-${{ env.APP_VERSION }}-android.apk
@@ -373,7 +402,6 @@ jobs:
             dist/baiji-music-${{ env.APP_VERSION }}-windows-x64.zip
             dist/baiji-music_${{ env.APP_VERSION }}_amd64.deb
           fail_on_unmatched_files: false
-          generate_release_notes: true
           name: 白姬音乐 v${{ env.APP_VERSION }}
           body: |
             ## 白姬音乐 v${{ env.APP_VERSION }}
@@ -385,5 +413,13 @@ jobs:
             - **macOS**：`.dmg` — Intel x64 / Apple Silicon arm64 双架构 + Dart 混淆 + 符号剥离
             - **Windows**：`.exe` 自解压安装包 + `.zip` 绿色版 — UPX 加壳 + Dart 混淆
             - **Linux**：`.deb` — UPX 加壳 + Dart 混淆
+
+            ---
+
+            ## 更新日志
+
+            ${{ env.CHANGELOG_BODY }}
+
+            ---
 
             更多信息见仓库 README。

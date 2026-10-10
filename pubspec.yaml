@@ -2,7 +2,7 @@ name: baiji_music
 description: "白姬音乐 - 跨平台音乐播放客户端（iOS / macOS / Windows / Linux / Android / HarmonyOS）"
 publish_to: 'none'
 
-version: 2.2.0
+version: 2.2.1
 
 environment:
   sdk: ^3.13.5
@@ -47,6 +47,8 @@ dependencies:
   # 12.0.3 对应 permission_handler_android 13.x（compileSdk 35），与 36 相容。
   # 升级本依赖前请务必先确认 android_impl 的 compileSdk 要求。
   permission_handler: ^12.0.3
+  flutter_markdown_plus: ^1.0.12
+  gal: ^2.3.3
 
 dev_dependencies:
   flutter_test:

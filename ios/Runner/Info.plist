@@ -66,5 +66,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- 播放页长按封面保存到相册时需要。缺这一行 iOS 会直接拒绝写入，
+	     Gal.hasAccess 恒为 false，用户看不到任何提示。 -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于把歌曲封面保存到你的相册。App 不会读取相册内容。</string>
 </dict>
 </plist>

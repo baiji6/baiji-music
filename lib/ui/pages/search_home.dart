@@ -30,14 +30,29 @@ class _SearchHomeState extends State<SearchHome> {
   List<String> _history = [];
   String _source = Source.qq; // 当前搜索音源
 
-  /// 当前已加载到的页码（1 起）。
+  /// 当前显示到第几页（1 起）。
   int _page = 1;
 
-  /// 是否正在加载下一页（底部按钮显示转圈，列表本身保持可滚动）。
+  /// 是否正在加载某一页（按钮显示转圈，列表本身保持可滚动）。
   bool _loadingMore = false;
 
-  /// 是否可能还有下一页：上一页返回数 < [pageSize] 即判定为到底。
-  bool _hasMore = false;
+  /// 页码 → 该页结果。来回翻页直接命中缓存，不重复请求。
+  final Map<int, List<Song>> _pageCache = {};
+
+  /// 已经请求过的最大页码。
+  int _maxPage = 1;
+
+  /// [maxPage] 那一页是否装满了——不满即判定到底。
+  bool _lastPageFull = false;
+
+  /// 请求代次：每次发起全新搜索就 +1，用来作废还在飞的旧分页请求。
+  int _requestGen = 0;
+
+  /// 能否继续往后翻：前面还有已缓存的页，或当前页之后仍可能有内容。
+  bool get _hasMore => _page < _maxPage || _lastPageFull;
+
+  /// 能否往回翻。历史上只能一路向后翻，想看前面的结果只能重新搜一遍。
+  bool get _hasPrev => _page > 1;
 
   /// 每页条数。QQ 走 `page_num`+`num_per_page`，网易云走 `offset`+`limit`，
   /// `MusicApi.search` 已把两者统一为 [page]/[num]，两个音源行为一致。
@@ -60,69 +75,119 @@ class _SearchHomeState extends State<SearchHome> {
     super.dispose();
   }
 
-  /// 搜索第 [page] 页。
-  ///
-  /// [append] 为 true 时把结果追加到已有列表后面（「下一页」按钮走这条路径，
-  /// 这样已加载的歌曲不会被丢掉，「全部播放」也会包含全部已加载的曲目）；
-  /// 为 false 时覆盖列表（新搜索 / 切换音源 / 重试）。
-  Future<void> _search(String keyword, {int page = 1, bool append = false}) async {
+  /// 全新搜索（换关键词、换音源、重试都走这里）：丢弃页缓存，只取第 1 页。
+  Future<void> _search(String keyword) async {
     final k = keyword.trim();
     if (k.isEmpty) return;
-    if (append && (_loading || _loadingMore)) return;
 
     FocusScope.of(context).unfocus();
+    // 代次 +1：让还在飞的旧请求立刻失效。没有这个的话，
+    // 「第 1 页点下一页 → 请求未返回时换关键词」会把旧关键词的分页结果
+    // 混进新关键词的列表里。
+    final gen = ++_requestGen;
     setState(() {
       _keyword = k;
       _error = null;
-      if (append) {
-        _loadingMore = true;
-      } else {
-        _loading = true;
-        _page = page;
-        if (page == 1) _results = [];
-      }
+      _loading = true;
+      _loadingMore = false;
+      _pageCache.clear();
+      _maxPage = 1;
+      _page = 1;
     });
 
-    if (page == 1) {
-      HistoryStore.addSearch(k);
-      if (mounted) setState(() => _history = HistoryStore.searchHistory());
-    }
+    HistoryStore.addSearch(k);
+    if (mounted) setState(() => _history = HistoryStore.searchHistory());
 
     try {
-      final results = await MusicApi.search(_source, k, page: page, num: pageSize);
-      if (!mounted) return;
+      final results = await MusicApi.search(_source, k, page: 1, num: pageSize);
+      if (!mounted || gen != _requestGen) return;
       setState(() {
-        if (append) {
-          // 去重：切页时服务端可能重复返回同一首（尤其热词结果）
-          final seen = <String>{for (final s in _results) '${s.source}:${s.mid}'};
-          for (final s in results) {
-            if (seen.add('${s.source}:${s.mid}')) _results.add(s);
-          }
-        } else {
-          _results = results;
-        }
-        _page = page;
+        _pageCache[1] = results;
+        _lastPageFull = results.length >= pageSize;
+        _rebuildList();
         _loading = false;
-        _loadingMore = false;
-        // 返回数不足一页 → 判定没有更多
-        _hasMore = results.length >= pageSize;
       });
       AppLog.i('SearchHome',
-          '搜索「$k」(${_source == Source.qq ? 'QQ' : '网易云'}) 第 $page 页命中 ${results.length} 首，累计 ${_results.length} 首');
+          '搜索「$k」(${_source == Source.qq ? 'QQ' : '网易云'}) 第 1 页命中 ${results.length} 首');
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || gen != _requestGen) return;
       setState(() {
         _loading = false;
-        _loadingMore = false;
-        // 追加失败只提示，不清空已加载的列表
-        if (!append) _error = '搜索失败: $e';
+        _error = '搜索失败: $e';
       });
-      if (append) _showSnack('加载下一页失败: $e', isError: true);
     }
   }
 
+  /// 翻到第 [page] 页。已缓存则直接重建列表，不发请求。
+  Future<void> _goToPage(int page) async {
+    if (page < 1 || _loading || _loadingMore) return;
+
+    final cached = _pageCache[page];
+    if (cached != null) {
+      setState(() {
+        _page = page;
+        _rebuildList();
+      });
+      AppLog.d('SearchHome', '翻页命中缓存 page=$page 累计 ${_results.length} 首');
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    final gen = _requestGen;
+    final k = _keyword;
+    final src = _source;
+    setState(() {
+      _loadingMore = true;
+      _error = null;
+    });
+    try {
+      final results =
+          await MusicApi.search(src, k, page: page, num: pageSize);
+      // 期间可能已经换了关键词 / 音源发起新搜索，这次结果直接丢弃
+      if (!mounted || gen != _requestGen || k != _keyword) return;
+      setState(() {
+        _pageCache[page] = results;
+        // 「到底」只看最远那页：往回翻时不能被更早那页的结果覆盖掉这个结论，
+        // 否则在第 1 页会把「第 3 页不满」误当成还有更多。
+        if (page > _maxPage) {
+          _maxPage = page;
+          _lastPageFull = results.length >= pageSize;
+        }
+        _page = page;
+        _rebuildList();
+        _loadingMore = false;
+      });
+      AppLog.i('SearchHome',
+          '搜索「$_keyword」第 $page 页命中 ${results.length} 首，累计 ${_results.length} 首');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingMore = false);
+      if (gen != _requestGen || k != _keyword) return;
+      _showSnack('加载第 $page 页失败: $e', isError: true);
+    }
+  }
+
+  /// 按页缓存重建 1..[_page] 的累计列表。
+  ///
+  /// 保持「累计」而不是「只显示当前页」：一路往下翻时列表越来越长，
+  /// 「全部播放」也能一次播完已加载的全部曲目；往回翻则把超出该页的部分收掉。
+  void _rebuildList() {
+    final seen = <String>{};
+    final merged = <Song>[];
+    for (var p = 1; p <= _page; p++) {
+      for (final s in (_pageCache[p] ?? const <Song>[])) {
+        // 去重：翻页时服务端可能重复返回同一首（尤其热词结果）
+        if (seen.add('${s.source}:${s.mid}')) merged.add(s);
+      }
+    }
+    _results = merged;
+  }
+
   /// 「下一页」按钮。
-  Future<void> _loadNextPage() => _search(_keyword, page: _page + 1, append: true);
+  Future<void> _loadNextPage() => _goToPage(_page + 1);
+
+  /// 「上一页」按钮。
+  Future<void> _loadPrevPage() => _goToPage(_page - 1);
 
   void _clear() {
     _controller.clear();
@@ -131,7 +196,9 @@ class _SearchHomeState extends State<SearchHome> {
       _results = [];
       _error = null;
       _page = 1;
-      _hasMore = false;
+      _pageCache.clear();
+      _maxPage = 1;
+      _lastPageFull = false;
     });
   }
 
@@ -567,7 +634,9 @@ class _SearchHomeState extends State<SearchHome> {
     );
   }
 
-  /// 结果列表底部：下一页 / 加载中 / 已到底。
+  /// 结果列表底部的翻页条：上一页 / 页码 / 下一页。
+  ///
+  /// 三个状态互斥：加载中转圈；一页都没翻过且已到底 → 提示；否则显示翻页按钮。
   Widget _buildFooter() {
     if (_loadingMore) {
       return const Padding(
@@ -582,7 +651,10 @@ class _SearchHomeState extends State<SearchHome> {
         ),
       );
     }
-    if (!_hasMore) {
+
+    final atFirstPage = !_hasPrev;
+    final atLastPage = !_hasMore;
+    if (atFirstPage && atLastPage) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 18),
         child: Center(
@@ -593,14 +665,60 @@ class _SearchHomeState extends State<SearchHome> {
         ),
       );
     }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
-      child: Center(
-        child: NeonButton(
-          label: '下一页 · 第 ${_page + 1} 页',
-          icon: Icons.keyboard_arrow_down_rounded,
-          onPressed: _loadNextPage,
-        ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _PageButton(
+            label: '上一页',
+            icon: Icons.keyboard_arrow_up_rounded,
+            enabled: _hasPrev,
+            onPressed: _loadPrevPage,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Text(
+              '第 $_page 页',
+              style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+            ),
+          ),
+          _PageButton(
+            label: atLastPage ? '已到底' : '下一页',
+            icon: Icons.keyboard_arrow_down_rounded,
+            enabled: _hasMore,
+            onPressed: _loadNextPage,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 翻页按钮。不可用时置灰而不是隐藏——否则「已到底」和「上一页」会互相挤掉，
+/// 整条底栏在不同页之间反复改变高度。
+class _PageButton extends StatelessWidget {
+  const _PageButton({
+    required this.label,
+    required this.icon,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.35,
+      child: NeonButton(
+        label: label,
+        icon: icon,
+        onPressed: enabled ? onPressed : null,
       ),
     );
   }

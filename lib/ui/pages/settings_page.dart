@@ -1,7 +1,10 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_logger.dart';
+import '../../core/cache_manager.dart';
 import '../../core/capture_trust.dart';
 import '../../core/lyric_settings.dart';
 import '../../core/update_checker.dart';
@@ -13,6 +16,7 @@ import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/agreement_dialog.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/cover_image.dart';
 import '../widgets/lyric_style_sheet.dart';
 import 'qq_login_page.dart';
 import 'netease_login_page.dart';
@@ -27,6 +31,9 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   String _downloadPath = '';
+  String _cachePath = '';
+  int _cacheMemoryMb = 100;
+  String _cacheSize = '计算中…';
   Quality _qqQuality = Quality.playbackDefault;
   NeteaseQuality _neQuality = NeteaseQuality.playbackDefault;
   bool _checkingUpdate = false;
@@ -46,8 +53,12 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _loadSettings() async {
     final dir = await DownloadManager.instance.getDownloadDir();
     final player = PlayerController.instance;
+    final cacheRoot = await CacheManager.cacheRoot();
+    if (!mounted) return;
     setState(() {
       _downloadPath = dir.path;
+      _cachePath = cacheRoot.path;
+      _cacheMemoryMb = CacheManager.memoryLimitMb;
       _qqQuality = player.currentQuality;
       _neQuality = player.currentNeteaseQuality;
       _captureEnabled = CaptureTrust.enabled;
@@ -55,6 +66,14 @@ class _SettingsPageState extends State<SettingsPage> {
       _lyricMode = DownloadExtras.lyricMode;
       _saveCover = DownloadExtras.saveCover;
     });
+    _refreshCacheSize();
+  }
+
+  /// 缓存占用统计要递归扫盘，放后台算，别卡住设置页首帧。
+  Future<void> _refreshCacheSize() async {
+    final total = await CacheManager.totalBytes();
+    if (!mounted) return;
+    setState(() => _cacheSize = CacheManager.formatBytes(total));
   }
 
   // ===== 下载附加项（歌词 / 封面） =====
@@ -68,11 +87,13 @@ class _SettingsPageState extends State<SettingsPage> {
     );
     if (picked == null || !mounted) return;
     await DownloadExtras.setLyricMode(picked);
+    if (!mounted) return;
     setState(() => _lyricMode = picked);
   }
 
   Future<void> _toggleSaveCover(bool v) async {
     await DownloadExtras.setSaveCover(v);
+    if (!mounted) return;
     setState(() => _saveCover = v);
   }
 
@@ -80,6 +101,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _toggleCapture(bool v) async {
     await CaptureTrust.setEnabled(v);
+    if (!mounted) return;
     setState(() => _captureEnabled = v);
     _showSnack(v
         ? '已开启：Dart 层放行中间人证书（抓包工具现在能解密 HTTPS）'
@@ -135,6 +157,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (input == null) return;
     await CaptureTrust.setProxy(input);
     if (!mounted) return;
+    if (!mounted) return;
     setState(() => _captureProxy = CaptureTrust.proxy);
     _showSnack(CaptureTrust.proxyEnabled
         ? '代理已设为 ${CaptureTrust.proxy}（重启应用后生效）'
@@ -146,12 +169,132 @@ class _SettingsPageState extends State<SettingsPage> {
       final result = await FilePicker.platform.getDirectoryPath();
       if (result == null || result.isEmpty) return;
       await DownloadManager.instance.setDownloadDir(result);
+      if (!mounted) return;
       setState(() => _downloadPath = result);
       _showSnack('下载目录已更新');
     } catch (e) {
       AppLog.w('SettingsPage', '选择目录失败: $e');
+      if (!mounted) return;
       _showSnack('选择目录失败: $e', isError: true);
     }
+  }
+
+  Future<void> _pickCacheDir() async {
+    try {
+      final result = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择缓存目录',
+      );
+      if (result == null || result.isEmpty) return;
+      // setCustomRoot 会校验：目录里已有别的文件就拒绝，避免日后清理时误删
+      await CacheManager.setCustomRoot(result);
+      final root = await CacheManager.cacheRoot();
+      if (!mounted) return;
+      setState(() => _cachePath = root.path);
+      _showSnack('缓存目录已更新');
+      _refreshCacheSize();
+    } on StateError catch (e) {
+      AppLog.w('SettingsPage', '缓存目录被拒绝: ${e.message}');
+      if (!mounted) return;
+      _showSnack(e.message, isError: true);
+    } catch (e) {
+      AppLog.w('SettingsPage', '选择缓存目录失败: $e');
+      if (!mounted) return;
+      _showSnack('选择目录失败: $e', isError: true);
+    }
+  }
+
+  Future<void> _resetCacheDir() async {
+    await CacheManager.setCustomRoot(null);
+    final root = await CacheManager.cacheRoot();
+    if (!mounted) return;
+    setState(() => _cachePath = root.path);
+    _showSnack('已恢复默认缓存目录');
+    _refreshCacheSize();
+  }
+
+  Future<void> _selectCacheMemoryLimit() async {
+    const presets = [32, 64, 100, 200, 400, 800];
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => _QualitySheet(
+        title: '内存图片缓存上限',
+        options: presets,
+        current: _cacheMemoryMb,
+        label: (v) => '$v MB',
+        onSelect: (v) async {
+          // Navigator / SnackBar 都得用 sheet 的 ctx，先在 await 之前取好
+          final nav = Navigator.of(ctx);
+          await CacheManager.setMemoryLimitMb(v);
+          CacheManager.applyMemoryLimit();
+          if (!mounted) return;
+          setState(() => _cacheMemoryMb = v);
+          nav.pop();
+          _showSnack('内存图片缓存上限设为 $v MB');
+        },
+      ),
+    );
+  }
+
+  Future<void> _clearCache() async {
+    final entries = await CacheManager.breakdown();
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bg2,
+        title: const Text('清理缓存', style: TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final e in entries) ...[
+              Text(
+                '${e.label} · ${e.readable}',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+              if (e.detail.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2, bottom: 6),
+                  child: Text(
+                    e.detail,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                  ),
+                ),
+            ],
+            const SizedBox(height: 4),
+            const Text(
+              '只会删除内存中的封面缓存与缓存目录里的临时文件（含日志导出）。'
+              '下载的歌曲、播放历史、歌单与本地音乐库都不受影响。',
+              style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: AppColors.textTertiary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('清理', style: TextStyle(color: AppColors.cyan)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final freed = await CacheManager.clear();
+    // 本地歌曲封面另有一份独立内存缓存，在 ui 层，这里一并清掉
+    LocalCoverCache.clear();
+    if (!mounted) return;
+    _showSnack(
+      freed <= 0 ? '缓存已清理' : '缓存已清理，释放 ${CacheManager.formatBytes(freed)}',
+    );
+    _refreshCacheSize();
   }
 
   void _showSnack(String msg, {bool isError = false}) {
@@ -207,6 +350,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _resetDownloadDir() async {
     final defaultDir = await DownloadManager.instance.getDefaultDownloadDir();
     await DownloadManager.instance.setDownloadDir(defaultDir.path);
+    if (!mounted) return;
     setState(() => _downloadPath = defaultDir.path);
     _showSnack('已恢复默认下载目录');
   }
@@ -232,59 +376,178 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  /// 更新弹窗：完整渲染 Release 的更新日志（Markdown），可上下滚动。
+  ///
+  /// 以前这里直接 `Text(info.summary(200))` —— 既只有前 200 字，
+  /// 又把 `##` `**` `-` 这类标记原样显示出来。
   void _showUpdateDialog(UpdateInfo info) {
+    final media = MediaQuery.of(context);
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => Dialog(
         backgroundColor: AppColors.bg2,
-        title: const Text('发现新版本', style: TextStyle(fontSize: 16)),
-        content: SingleChildScrollView(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 560,
+            // 留出上下按钮的高度，日志区自己滚
+            maxHeight: media.size.height * 0.72,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                info.name.isNotEmpty ? '${info.name}（${info.tag}）' : info.tag,
-                style: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w600),
-              ),
-              if (info.body.trim().isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  info.summary(200),
-                  style: const TextStyle(
-                      fontSize: 12, color: AppColors.textTertiary),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.system_update_rounded,
+                        color: AppColors.cyan, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        info.name.isNotEmpty
+                            ? '${info.name}（${info.tag}）'
+                            : info.tag,
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w700),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
+              const Divider(height: 1, color: AppColors.strokeGlass),
+              Flexible(
+                child: Container(
+                  width: double.infinity,
+                  alignment: Alignment.topLeft,
+                  padding: const EdgeInsets.fromLTRB(20, 14, 14, 8),
+                  child: SingleChildScrollView(
+                    child: info.body.trim().isEmpty
+                        ? const Text('该版本没有提供更新说明。',
+                            style: TextStyle(
+                                fontSize: 12, color: AppColors.textTertiary))
+                        : MarkdownBody(
+                            data: info.body,
+                            selectable: true,
+                            styleSheet: _changelogSheet,
+                            // 更新日志里的图片多是 badge，加载不出来时别把布局撑破。
+                            // 宽度不能写死：Dialog 在窄屏上可用宽度只有 280 出头，
+                            // 写死 320 会直接 RenderFlex 溢出。
+                            imageBuilder: (uri, title, alt) => ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 260),
+                              child: Image.network(
+                                uri.toString(),
+                                fit: BoxFit.contain,
+                                errorBuilder: (context, error, stack) => Text(
+                                  alt?.isNotEmpty == true ? alt! : '[图片]',
+                                  style: const TextStyle(
+                                      fontSize: 11, color: AppColors.textTertiary),
+                                ),
+                              ),
+                            ),
+                            onTapLink: (text, href, title) {
+                              final uri = Uri.tryParse(href ?? '');
+                              if (uri != null && uri.hasScheme) {
+                                launchUrl(uri,
+                                    mode: LaunchMode.externalApplication);
+                              }
+                            },
+                          ),
+                  ),
+                ),
+              ),
+              const Divider(height: 1, color: AppColors.strokeGlass),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () async {
+                        await UpdateChecker.instance.ignore(info.tag);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      },
+                      child: const Text('忽略此版本',
+                          style: TextStyle(color: AppColors.textTertiary)),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('稍后',
+                          style: TextStyle(color: AppColors.textTertiary)),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        UpdateChecker.instance.openRelease(info.url);
+                      },
+                      child: const Text('前往更新',
+                          style: TextStyle(color: AppColors.cyan)),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await UpdateChecker.instance.ignore(info.tag);
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('忽略此版本',
-                style: TextStyle(color: AppColors.textTertiary)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('稍后',
-                style: TextStyle(color: AppColors.textTertiary)),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              UpdateChecker.instance.openRelease(info.url);
-            },
-            child: const Text('前往更新', style: TextStyle(color: AppColors.cyan)),
-          ),
-        ],
       ),
     );
   }
+
+  /// 更新日志的排版：字号压到 12~13，整体偏灰，和 App 暗色玻璃主题一致。
+  MarkdownStyleSheet get _changelogSheet => MarkdownStyleSheet(
+        p: const TextStyle(
+            fontSize: 12.5, height: 1.5, color: AppColors.textSecondary),
+        listBullet: const TextStyle(color: AppColors.textTertiary),
+        h1: const TextStyle(
+            fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+        h2: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: AppColors.textPrimary),
+        h3: const TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary),
+        h4: const TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary),
+        h5: const TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary),
+        h6: const TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary),
+        code: const TextStyle(
+            fontSize: 12,
+            color: AppColors.cyan,
+            backgroundColor: AppColors.surfaceGlass),
+        codeblockDecoration: BoxDecoration(
+          color: AppColors.surfaceGlass,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.strokeGlass),
+        ),
+        codeblockPadding: const EdgeInsets.all(12),
+        blockquoteDecoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(color: AppColors.cyan.withValues(alpha: 0.7), width: 3),
+          ),
+        ),
+        blockquotePadding: const EdgeInsets.only(left: 12),
+        horizontalRuleDecoration: BoxDecoration(
+          border: Border(top: BorderSide(color: AppColors.strokeGlass)),
+        ),
+        a: const TextStyle(
+            color: AppColors.cyan, decoration: TextDecoration.underline),
+        tableBorder: TableBorder.all(color: AppColors.strokeGlass),
+        tableHead: const TextStyle(fontWeight: FontWeight.w600),
+        tableBody: const TextStyle(fontSize: 12),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -389,6 +652,66 @@ class _SettingsPageState extends State<SettingsPage> {
                   'OGG → Vorbis Comment LYRICS）；'
                   '遇到不支持内嵌的格式时自动退回同名外挂 .lrc / .jpg 文件。'
                   '写入过程不会改动音频数据本身。',
+                  style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                ),
+              ),
+              const SizedBox(height: 24),
+              const SectionHeader(title: '缓存管理'),
+              GlassCard(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.cleaning_services_rounded, color: AppColors.cyan, size: 22),
+                      title: const Text('清理缓存', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: Text(
+                        '当前占用 $_cacheSize',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      onTap: _clearCache,
+                    ),
+                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.sd_storage_rounded, color: AppColors.violet, size: 22),
+                      title: const Text('缓存目录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: Text(
+                        _cachePath,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      onTap: _pickCacheDir,
+                    ),
+                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.restore_rounded, color: AppColors.textTertiary, size: 22),
+                      title: const Text('恢复默认缓存目录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      onTap: _resetCacheDir,
+                    ),
+                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.memory_rounded, color: AppColors.magenta, size: 22),
+                      title: const Text('内存图片缓存上限', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      subtitle: Text(
+                        '$_cacheMemoryMb MB',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      onTap: _selectCacheMemoryLimit,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  '封面在 App 内是通过内存缓存加载的（不落盘），所以「清理缓存」清的是'
+                  '内存里的封面、日志导出文件与临时文件。'
+                  '缓存目录被手动删除后会自动回落到系统默认目录，不会导致缓存读写失败。',
                   style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
                 ),
               ),

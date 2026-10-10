@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'core/agreement_store.dart';
+import 'core/cache_manager.dart';
 import 'core/capture_trust.dart';
 import 'core/kv_store.dart';
 import 'core/lyric_settings.dart';
@@ -24,6 +25,8 @@ Future<void> main() async {
   HttpOverrides.global = CaptureHttpOverrides();
   // 歌词显示偏好走 ChangeNotifier，这里先恢复一次，播放页首帧就是正确字号
   await LyricSettings.instance.load();
+  // 内存图片缓存上限走KvStore，每次启动都要重新应用一次（进程级设置）
+  CacheManager.applyMemoryLimit();
   runApp(const BaijiMusicApp());
 }
 

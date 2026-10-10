@@ -60,4 +60,49 @@ void main() {
     expect(AppVersion.tagged, 'v${AppVersion.current}');
     expect(AppVersion.tagged, startsWith('v'));
   });
+
+  group('CHANGELOG.md 同步（自 v2.2.1 起 Release 正文取自这里）', () {
+    /// 找到 CHANGELOG.md，测试可能从别的工作目录启动。
+    File changelogFile() {
+      for (final p in ['CHANGELOG.md', '../CHANGELOG.md']) {
+        final f = File(p);
+        if (f.existsSync()) return f;
+      }
+      throw StateError('找不到 CHANGELOG.md');
+    }
+
+    test('存在当前版本的条目，CI 才能生成 Release 更新日志', () {
+      final text = changelogFile().readAsStringSync();
+      final v = AppVersion.current;
+      final pattern = RegExp('^##\\s+${RegExp.escape(v)}\\s*\$', multiLine: true);
+      expect(
+        pattern.hasMatch(text),
+        isTrue,
+        reason: 'CHANGELOG.md 里没有 `## $v` 这一节；'
+            'CI 的 Extract changelog 步骤会失败，Release 发布不出去',
+      );
+    });
+
+    test('当前版本的条目不是空的', () {
+      final text = changelogFile().readAsStringSync();
+      final re = RegExp(
+        r'^##\s+' + RegExp.escape(AppVersion.current) + r'\s*$(.+?)(?=^##\s|\z)',
+        multiLine: true,
+        dotAll: true,
+      );
+      final m = re.firstMatch(text);
+      expect(m, isNotNull);
+      // 去掉标题行后至少要有实际内容（列表或小节）
+      expect(
+        m!.group(1)!.trim().length,
+        greaterThan(20),
+        reason: 'CHANGELOG.md 的 ${AppVersion.current} 条目几乎是空的',
+      );
+    });
+
+    test('当前版本号在 CHANGELOG 里出现（防止改了 tag 却忘了写日志）', () {
+      final text = changelogFile().readAsStringSync();
+      expect(text, contains(AppVersion.current));
+    });
+  });
 }
