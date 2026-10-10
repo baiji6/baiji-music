@@ -27,10 +27,12 @@ class DecryptKeyEntry {
     this.mid,
     this.mediaFilename,
     this.qualityId,
+    this.audioHash,
+    this.resourceId,
     this.source = KeySource.manual,
   });
 
-  /// ekey（QMC / KGM v5 / KWM v2）或 fileKey（咪咕）。
+  /// ekey（QMC / KGM v5 / KWM v2）或设备密钥（蜻蜓）/ fileKey（咪咕）。
   final String value;
 
   /// 这条密钥属于哪个平台。**必填**——跨平台混用密钥只会解出噪声。
@@ -39,19 +41,70 @@ class DecryptKeyEntry {
   /// `file.media_mid`，QMC STag / MusicEx 用它检索。
   final String? mid;
 
-  /// `file.media_mid` + 扩展名，MusicEx 用。
+  /// QQ 音乐 MusicEx footer 里的**原始文件名**（`mediaName`）。
+  ///
+  /// 这是 QQ 音乐 QMC v2 唯一的匹配依据——上游
+  /// `selectQMCv2KeyByFileName` 就是拿它当key 去查表。
   final String? mediaFilename;
 
-  /// 音质 id，酷我用（`Header::get_quality_id`）。
+  /// 酷狗 v5 的 `audioHash`（文件头里的音频指纹）。
+  ///
+  /// 上游 `selectKugouKey` 用它做 key 查表，**不命中就没有密钥**，
+  /// 不会退化成"随便取一把"。
+  final String? audioHash;
+
+  /// 酷我的资源 id（文件头 0x18）。
+  final int? resourceId;
+
+  /// 音质 id，酷我用（取 `format_name` 开头连续数字）。
   final int? qualityId;
 
   final KeySource source;
+
+  /// 这个平台用来查表的**匹配键**；为空表示该平台不需要匹配键。
+  ///
+  /// 对齐 um-react `features/settings/settingsSelector.ts`：
+  /// - QQ 音乐 → 原始文件名（可选模糊匹配，见 [DecryptKeys.lookupByFileName]）
+  /// - 酷狗 → `audioHash`
+  /// - 酷我 → `rid-quality`（rid 与quality **必须同时**对上）
+  /// - 蜻蜓 FM → 无（单把设备密钥通吃）
+  /// - 网易云 / 咪咕 → 无（密钥在文件头里）
+  String? get matchKey {
+    switch (platform) {
+      case DecryptPlatform.qqMusic:
+        return mediaFilename;
+      case DecryptPlatform.kugou:
+        return audioHash;
+      case DecryptPlatform.kuwo:
+        // 上游：`${rid}-${quality.replace(/\D/g, '')}`
+        if (resourceId == null || qualityId == null) return null;
+        return '$resourceId-$qualityId';
+      case DecryptPlatform.qingting:
+      case DecryptPlatform.netease:
+      case DecryptPlatform.migu:
+        return null;
+    }
+  }
+
+  /// 匹配键是否够用了。填不全的话这条密钥永远查不到，只能靠兜底。
+  ///
+  /// QQ 音乐放宽成「文件名**或** mid」——因为 MusicEx footer 里两个字段
+  /// 可能只有一个存在，而 [resolveEkey] 的 QQ 分支确实是两条都查。
+  /// 酷狗/ 酷我则必须严格：上游 `hasOwn` / `rid-quality` 不命中就**没有密钥**。
+  bool get hasMatchKey => switch (platform) {
+        DecryptPlatform.qqMusic =>
+          (mediaFilename != null && mediaFilename!.isNotEmpty) ||
+              (mid != null && mid!.isNotEmpty),
+        _ => matchKey != null,
+      };
 
   Map<String, dynamic> toJson() => {
         'v': value,
         'p': platform.name,
         if (mid != null) 'mid': mid,
         if (mediaFilename != null) 'file': mediaFilename,
+        if (audioHash != null) 'ah': audioHash,
+        if (resourceId != null) 'rid': resourceId,
         if (qualityId != null) 'q': qualityId,
         's': source.name,
       };
@@ -71,7 +124,9 @@ class DecryptKeyEntry {
       platform: platform,
       mid: j['mid'] as String?,
       mediaFilename: j['file'] as String?,
-      qualityId: j['q'] as int?,
+      audioHash: j['ah'] as String?,
+      resourceId: (j['rid'] as num?)?.toInt(),
+      qualityId: (j['q'] as num?)?.toInt(),
       source: KeySource.values.firstWhere(
         (s) => s.name == j['s'],
         orElse: () => KeySource.manual,
@@ -183,13 +238,90 @@ class DecryptKeys {
 
   /// 兜底：返回该平台下第一条可用密钥。
   ///
-  /// 仅在「同平台、只下了这一首歌」这类场景有效，所以调用方应优先用
-  /// mid / filename 精确查。**注意绝不会跨平台返回**。
+  /// **只在"该平台下的第一条"确实带有匹配键时才返回**；对需要匹配键的
+  /// 平台（QQ / 酷狗 / 酷我），拿不到匹配键的密钥是没法用的，
+  /// 返回它只会解出噪声，所以宁可返回 null。
+  ///
+  /// 上游的行为：酷狗 `hasOwn(keys, audioHash)` 不命中就**没有密钥**，
+  /// 绝不会退化成"任意一把"。这里保持一致。
   String? anyEkeyOf(DecryptPlatform platform) {
+    final needsKey = platform.needsMatchKey;
     for (final e in _list) {
-      if (e.platform == platform) return e.value;
+      if (e.platform != platform) continue;
+      if (needsKey && !e.hasMatchKey) continue;
+      return e.value;
     }
     return null;
+  }
+
+  /// 按匹配键精确查找（限平台）。
+  ///
+  /// 这是 QQ / 酷狗 / 酷我的**正确用法**：从文件头/ footer 取出匹配键
+  /// （文件名 / audioHash / rid-quality）直接查表，命中即用、不命中即无。
+  String? lookupByMatchKey(String matchKey, DecryptPlatform platform) {
+    if (matchKey.isEmpty) return null;
+    for (final e in _list) {
+      if (e.platform == platform && e.matchKey == matchKey) return e.value;
+    }
+    return null;
+  }
+
+  /// QQ 音乐专用：文件名精确匹配 → 可选模糊匹配。
+  ///
+  /// 对齐上游 `selectQMCv2KeyByFileName`：
+  /// ```ts
+  /// if (hasOwn(keys, normalizedName)) ekey = keys[normalizedName];
+  /// else if (allowFuzzyNameSearch) {
+  ///   const closestName = closestByLevenshtein(normalizedName, qmc2KeyStoreNames);
+  ///   ekey = keys[closestName];
+  /// }
+  /// ```
+  /// 模糊匹配只在**同一平台内**进行，绝不会跨到别的平台。
+  String? lookupByFileName(String name, DecryptPlatform platform,
+      {bool allowFuzzy = true}) {
+    if (name.isEmpty) return null;
+    final exact = lookupByMatchKey(name, platform);
+    if (exact != null) return exact;
+    if (!allowFuzzy) return null;
+
+    String? best;
+    var bestDist = 1 << 30;
+    for (final e in _list) {
+      if (e.platform != platform) continue;
+      final k = e.matchKey;
+      if (k == null || k.isEmpty) continue;
+      final d = _levenshtein(name, k);
+      if (d < bestDist) {
+        bestDist = d;
+        best = e.value;
+      }
+    }
+    // 名字差太远就不猜了——猜错会解出噪声还让人以为密钥不对。
+    return bestDist <= 3 ? best : null;
+  }
+
+  static int _levenshtein(String a, String b) {
+    if (a == b) return 0;
+    if (a.isEmpty) return b.length;
+    if (b.isEmpty) return a.length;
+    final la = a.length, lb = b.length;
+    var prev = List<int>.generate(lb + 1, (i) => i);
+    var cur = List<int>.filled(lb + 1, 0);
+    for (var i = 1; i <= la; i++) {
+      cur[0] = i;
+      final ca = a.codeUnitAt(i - 1);
+      for (var j = 1; j <= lb; j++) {
+        final cost = ca == b.codeUnitAt(j - 1) ? 0 : 1;
+        final d = prev[j] + 1;
+        final ins = cur[j - 1] + 1;
+        final del = prev[j - 1] + cost;
+        cur[j] = d < ins ? (d < del ? d : del) : (ins < del ? ins : del);
+      }
+      final t = prev;
+      prev = cur;
+      cur = t;
+    }
+    return prev[lb];
   }
 
   /// 添加一条，**同平台**下value 相同则覆盖。
@@ -226,6 +358,18 @@ class DecryptKeys {
   ///
   /// [platform] 由调用方指定——同一段文本对不同平台的含义完全不同，
   /// 不做自动猜测（密钥串本身看不出属于哪个平台）。
+  /// 从纯文本里导入密钥，每行一条。
+  ///
+  /// **分隔符与字段含义随平台而变**——因为各平台的匹配键根本不同：
+  /// - QQ 音乐：`原始文件名,ekey`（或只有 `ekey`）
+  /// - 酷狗：`audioHash,ekey`（或只有 `ekey`）
+  /// - 酷我：`资源ID-音质,ekey`（或只有 `ekey`）
+  /// - 蜻蜓：只有 `设备密钥hex`，没有匹配键
+  ///
+  /// 空行与以 `#` 开头的注释会被跳过。
+  ///
+  /// [platform] 由调用方指定——同一段文本对不同平台的含义完全不同，
+  /// 不做自动猜测（密钥串本身看不出属于哪个平台）。
   int importText(
     String text, {
     required DecryptPlatform platform,
@@ -237,29 +381,47 @@ class DecryptKeys {
       if (line.isEmpty || line.startsWith('#')) continue;
 
       final parts = line.split(',').map((s) => s.trim()).toList();
-      if (parts.length >= 3) {
-        _list.add(DecryptKeyEntry(
-          value: parts.sublist(2).join(','),
-          platform: platform,
-          mid: parts[0],
-          mediaFilename: parts[1],
-          source: source,
-        ));
-      } else if (parts.length == 2) {
-        _list.add(DecryptKeyEntry(
-          value: parts[1],
-          platform: platform,
-          mid: parts[0],
-          source: source,
-        ));
-      } else {
-        _list.add(DecryptKeyEntry(
-            value: parts[0], platform: platform, source: source));
-      }
+      final entry = switch (parts.length) {
+        >= 2 => _entryFromMatchKey(parts[0], parts.sublist(1).join(','),
+            platform, source),
+        _ => DecryptKeyEntry(value: parts[0], platform: platform, source: source),
+      };
+      _list.add(entry);
       count++;
     }
     _dedup();
     return count;
+  }
+
+  /// 把「匹配键,ekey」这一行解析成对应平台的条目。
+  ///
+  /// 不同平台的匹配键写法不一样，不能一律当成 mid：
+  /// - 酷我的是 `rid-quality`，要拆成两个数字字段；
+  /// - QQ 的是原始文件名，酷狗的是 audioHash，都是整体字符串。
+  static DecryptKeyEntry _entryFromMatchKey(
+      String matchKey, String ekey, DecryptPlatform platform, KeySource src) {
+    if (platform == DecryptPlatform.kuwo) {
+      // `12345-128`：拆成资源 id 与音质。拆不开就整体当文件名存，
+      // 至少不会丢数据，用户还能在界面上看到。
+      final m = RegExp(r'^(\d+)-(\d+)$').firstMatch(matchKey);
+      if (m != null) {
+        return DecryptKeyEntry(
+          value: ekey,
+          platform: platform,
+          resourceId: int.parse(m.group(1)!),
+          qualityId: int.parse(m.group(2)!),
+          source: src,
+        );
+      }
+    }
+    return switch (platform) {
+      DecryptPlatform.qqMusic => DecryptKeyEntry(
+          value: ekey, platform: platform, mediaFilename: matchKey, source: src),
+      DecryptPlatform.kugou => DecryptKeyEntry(
+          value: ekey, platform: platform, audioHash: matchKey, source: src),
+      _ => DecryptKeyEntry(
+          value: ekey, platform: platform, mediaFilename: matchKey, source: src),
+    };
   }
 
   /// 从客户端数据库的字节流里扫密钥。

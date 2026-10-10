@@ -23,10 +23,12 @@ import '../widgets/app_widgets.dart';
 
 /// 供解密页复用的加载入口：把密钥摊平成一个可跨 isolate 传递的字符串 map。
 ///
-/// 两类 key：
+/// 三类 key：
 /// - `qqMusic` / `kugou` ……该平台的**通用**密钥（第一条）；
-/// - `qqMusic <mid>` / `qqMusic@文件名.mp3` ……**精确**条目，解密时优先命中
-///   （同一首歌不同音质可能是不同的 ekey，不能只取第一条）。
+/// - `qqMusic@原始文件名` / `kugou@audioHash` / `kuwo@rid-quality` ……**精确**条目，
+///   解密时按各平台真实的匹配键优先命中（严格对齐 um-react 的
+///   `selectQMCv2KeyByFileName` / `selectKugouKey` / `selectKWMv2Key`）；
+/// - `qqMusic mid` ……QQ footer 带mid 时的兼容条目。
 ///
 /// 刻意不返回扁平 List——六个平台的密钥规则互不相同，
 /// 解密时必须按嗅探出的平台精确取，不能混用。
@@ -38,10 +40,12 @@ Future<Map<String, String>> loadDecryptKeySnapshot() async {
       if (e.value.isEmpty) continue;
       // 平台级通用条目：只放第一条，作为没有精确匹配时的兜底。
       out.putIfAbsent(p.name, () => e.value);
+      // 匹配键条目：`平台@匹配键`，各平台匹配键定义见
+      // [DecryptKeyEntry.matchKey]（QQ 文件名 / 酷狗 audioHash / 酷我 rid-quality）。
+      final mk = e.matchKey;
+      if (mk != null && mk.isNotEmpty) out['$p.name@$mk'] = e.value;
       final mid = e.mid;
       if (mid != null && mid.isNotEmpty) out['$p.name $mid'] = e.value;
-      final fname = e.mediaFilename;
-      if (fname != null && fname.isNotEmpty) out['$p.name@$fname'] = e.value;
     }
   }
   return out;
@@ -84,30 +88,12 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
 
   Future<void> _manualInput() async {
     final platform = _platform;
-    final controller = TextEditingController();
-    String? mid;
 
-    final ok = await showDialog<bool>(
+    final entry = await showDialog<DecryptKeyEntry>(
       context: context,
-      builder: (ctx) => _ManualKeyDialog(
-        platform: platform,
-        controller: controller,
-        onMid: (v) => mid = v,
-      ),
+      builder: (ctx) => _ManualKeyDialog(platform: platform),
     );
-    final value = controller.text.trim();
-    controller.dispose();
-    if (ok != true || value.isEmpty) return;
-
-    // 蜻蜓要的是 16 字节 hex，先本地校验，别把垃圾存进去。
-    if (platform.keyIsHex) {
-      try {
-        parseHexOrThrow(value, '设备密钥');
-      } on QingTingFailure catch (e) {
-        _toast(e.message);
-        return;
-      }
-    }
+    if (entry == null) return;
 
     // 网易云的密钥在文件头里、咪咕能自己猜，填了也没用——
     // 提前说清楚，免得用户以为自己填对了却解不出。
@@ -118,7 +104,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
           title: Text('${platform.label}通常不需要密钥'),
           content: Text(
             '${platform.label}的密钥已经内置在文件里或可由文件头推导。'
-            '你仍然可以保存它，但通常不会影响解密结果。\\n\\n'
+            '你仍然可以保存它，但通常不会影响解密结果。\n\n'
             '确定要保存吗？',
             style: const TextStyle(fontSize: 13, height: 1.6),
           ),
@@ -135,11 +121,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
       if (go != true) return;
     }
 
-    await _keys!.add(DecryptKeyEntry(
-      value: value,
-      platform: platform,
-      mid: mid,
-    ));
+    await _keys!.add(entry);
     await _reload();
     _toast('已添加到${platform.label}');
   }
@@ -160,14 +142,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                platform.keyIsHex
-                    ? '每行一条设备密钥（32 位十六进制）。蜻蜓 FM 用 AES-128-CTR，'
-                        '密钥长度必须正好 16 字节。'
-                    : '每行一条，支持三种写法：\n'
-                        '• ekey\n'
-                        '• mid,ekey\n'
-                        '• mid,文件名,ekey\n'
-                        '# 开头的行会被忽略',
+                _importHint(platform),
                 style: const TextStyle(fontSize: 12, height: 1.6),
               ),
               const SizedBox(height: 12),
@@ -178,9 +153,13 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                 style: const TextStyle(fontSize: 12),
                 decoration: InputDecoration(
                   border: const OutlineInputBorder(),
-                  hintText: platform.keyIsHex
-                      ? '000102030405060708090a0b0c0d0e0f'
-                      : '001y7CaR29k6YP,UVFNdXNpYyBFbmNWMixLZXk6...',
+                  hintText: switch (platform) {
+                    DecryptPlatform.qingting => '000102030405060708090a0b0c0d0e0f',
+                    DecryptPlatform.kuwo => '12345678-128,UVFNdXNpYyBFbmNWMixLZXk6...',
+                    DecryptPlatform.kugou =>
+                      '8fd2a1c0e3b95d7f4a6b8c2d1e0f3a5b,UVFNdXNpYyBFbmNWMixLZXk6...',
+                    _ => '歌曲名.mp3,UVFNdXNpYyBFbmNWMixLZXk6...',
+                  },
                 ),
               ),
             ],
@@ -205,6 +184,29 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
     await _reload();
     _toast('已向${platform.label}导入 $count 条');
   }
+
+  /// 导入文本的格式说明。**每种平台的分隔符含义都不同**——
+  /// 逗号左边是那个平台的匹配键，不是通用的 mid。
+  static String _importHint(DecryptPlatform p) => switch (p) {
+        DecryptPlatform.qqMusic =>
+          '每行一条，格式为 `原始文件名,ekey`（文件名也可只写 ekey）。\n'
+              '文件名要与 MusicEx footer 里的 mediaName 一致，否则匹配不上。\n'
+              '# 开头的行会被忽略',
+        DecryptPlatform.kugou =>
+          '每行一条，格式为 `audioHash,ekey`（也可只写 ekey）。\n'
+              'audioHash 是 KGM 文件头里的音频指纹。\n'
+              '# 开头的行会被忽略',
+        DecryptPlatform.kuwo =>
+          '每行一条，格式为 `资源ID-音质,ekey`（也可只写 ekey）。\n'
+              '例：12345678-128,UVFNdXNpYyBFbmNWMixLZXk6...\n'
+              '# 开头的行会被忽略',
+        DecryptPlatform.qingting =>
+          '每行一条 16 字节设备密钥（32 位十六进制）。蜻蜓 FM 用 AES-128-CTR，'
+              '长度必须正好 32 个字符，且所有 .qta 共用同一把。',
+        DecryptPlatform.netease || DecryptPlatform.migu =>
+          '这两个平台的密钥在文件头里，通常不需要导入。\n'
+              '每行一条 ekey，仅作备用记录。',
+      };
 
   // ==================== 导入数据库 ====================
 
@@ -494,29 +496,121 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   }
 }
 
+/// 手动填写密钥对话框。
+///
+/// **字段按平台动态变化**——各平台的解密条件根本不同，揉在一个表单里
+/// 只会让人填错：
+/// - QQ 音乐 → 原始文件名 + ekey（上游 `selectQMCv2KeyByFileName` 的查表键）
+/// - 酷狗→ audioHash + ekey（上游 `selectKugouKey` 的查表键）
+/// - 酷我→ 资源 ID + 音质 + ekey（上游 `selectKWMv2Key` 拼成 `rid-quality`）
+/// - 蜻蜓 FM → 只要设备密钥，**没有匹配键**（一把通吃）
+/// - 网易云 / 咪咕 → 密钥在文件头里，不需要匹配键
+///
+/// 确认后直接返回构造好的 [DecryptKeyEntry]（未入库）。
 class _ManualKeyDialog extends StatefulWidget {
-  const _ManualKeyDialog({
-    required this.platform,
-    required this.controller,
-    required this.onMid,
-  });
+  const _ManualKeyDialog({required this.platform});
 
   final DecryptPlatform platform;
-  final TextEditingController controller;
-  final ValueChanged<String?> onMid;
 
   @override
   State<_ManualKeyDialog> createState() => _ManualKeyDialogState();
 }
 
 class _ManualKeyDialogState extends State<_ManualKeyDialog> {
-  final TextEditingController _mid = TextEditingController();
+  final _value = TextEditingController();
+
+  /// QQ 的原始文件名 / 酷狗的 audioHash（两个平台都是单个字符串字段）。
+  final _match = TextEditingController();
+
+  /// 酷我：资源 id 与音质要分成两个数字框，因为它们是两个独立字段。
+  final _rid = TextEditingController();
+  final _quality = TextEditingController();
+
+  String? _error;
 
   @override
   void dispose() {
-    _mid.dispose();
+    _value.dispose();
+    _match.dispose();
+    _rid.dispose();
+    _quality.dispose();
     super.dispose();
   }
+
+  /// 平台需要的匹配键字段名（用于标题与错误提示）。
+  String get _matchLabel => switch (widget.platform) {
+        DecryptPlatform.qqMusic => '原始文件名',
+        DecryptPlatform.kugou => 'audioHash（音频指纹）',
+        DecryptPlatform.kuwo => '资源 ID',
+        _ => '',
+      };
+
+  void _submit() {
+    final p = widget.platform;
+    final value = _value.text.trim();
+    if (value.isEmpty) {
+      setState(() => _error = '密钥不能为空');
+      return;
+    }
+
+    // 蜻蜓要的是 16 字节 hex，先本地校验，别把垃圾存进去。
+    if (p.keyIsHex) {
+      try {
+        parseHexOrThrow(value, '设备密钥');
+      } on QingTingFailure catch (e) {
+        setState(() => _error = e.message);
+        return;
+      }
+    }
+
+    // 需要匹配键的平台：匹配键没填就一定查不到，直接拦在提交这一步。
+    if (p.needsMatchKey) {
+      if (p == DecryptPlatform.kuwo) {
+        final rid = int.tryParse(_rid.text.trim());
+        final q = int.tryParse(_quality.text.trim());
+        if (rid == null || q == null) {
+          setState(() => _error = '资源 ID 与音质都要填，且必须是数字');
+          return;
+        }
+        Navigator.pop(
+          context,
+          DecryptKeyEntry(
+            value: value,
+            platform: p,
+            resourceId: rid,
+            qualityId: q,
+          ),
+        );
+        return;
+      }
+      final mk = _match.text.trim();
+      if (mk.isEmpty) {
+        setState(() => _error = '$_matchLabel不能为空——'
+            '没有它这条密钥永远匹配不上文件');
+        return;
+      }
+      Navigator.pop(
+        context,
+        _entryWithMatchKey(value, mk, p),
+      );
+      return;
+    }
+
+    // 蜻蜓 / 网易云 / 咪咕：没有匹配键概念。
+    Navigator.pop(context, DecryptKeyEntry(value: value, platform: p));
+  }
+
+  /// 把「匹配键 + ekey」组装成对应平台的条目。
+  static DecryptKeyEntry _entryWithMatchKey(
+      String value, String matchKey, DecryptPlatform p) =>
+      switch (p) {
+        DecryptPlatform.qqMusic => DecryptKeyEntry(
+            value: value, platform: p, mediaFilename: matchKey),
+        DecryptPlatform.kugou => DecryptKeyEntry(
+            value: value, platform: p, audioHash: matchKey),
+        _ => DecryptKeyEntry(
+            value: value, platform: p, mediaFilename: matchKey),
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -524,81 +618,150 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
     return AlertDialog(
       title: Text('手动填写密钥 → ${p.label}'),
       content: SizedBox(
-        width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppColors.cyan.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(10),
+        width: 440,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.cyan.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  _keyHint(p),
+                  style: const TextStyle(fontSize: 11.5, height: 1.55),
+                ),
               ),
-              child: Text(
-                _keyHint(p),
-                style: const TextStyle(fontSize: 11.5, height: 1.55),
+              const SizedBox(height: 12),
+              // ---- 匹配键字段：各平台不同，按平台显示 ----
+              if (p == DecryptPlatform.kuwo) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _rid,
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(fontSize: 12),
+                        decoration: const InputDecoration(
+                          labelText: '资源 ID（rid）',
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    SizedBox(
+                      width: 130,
+                      child: TextField(
+                        controller: _quality,
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(fontSize: 12),
+                        decoration: const InputDecoration(
+                          labelText: '音质（quality）',
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '两者会拼成 ${_rid.text.trim().isEmpty ? 'rid-quality' : '${_rid.text.trim()}-${_quality.text.trim()}'} '
+                  '作为查表键',
+                  style: const TextStyle(
+                      fontSize: 10.5, color: AppColors.textTertiary),
+                ),
+                const SizedBox(height: 12),
+              ] else if (p.needsMatchKey) ...[
+                TextField(
+                  controller: _match,
+                  style: const TextStyle(fontSize: 12),
+                  decoration: InputDecoration(
+                    labelText: '$_matchLabel（必填）',
+                    hintText: switch (p) {
+                      DecryptPlatform.qqMusic => '例如 歌曲名.mp3',
+                      DecryptPlatform.kugou =>
+                        '32 位十六进制，例如 8fd2a1c0e3b95d7f4a6b8c2d1e0f3a5b',
+                      _ => '',
+                    },
+                    isDense: true,
+                    border: const OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+              ],
+              // ---- 密钥本体 ----
+              TextField(
+                controller: _value,
+                maxLines: p.keyIsHex ? 1 : 3,
+                minLines: p.keyIsHex ? 1 : 2,
+                style: const TextStyle(fontSize: 12),
+                decoration: InputDecoration(
+                  labelText: p.keyIsHex
+                      ? '设备密钥（32 位 hex，16 字节）'
+                      : _valueLabel(p),
+                  isDense: p.keyIsHex,
+                  border: const OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: widget.controller,
-              maxLines: 3,
-              minLines: 2,
-              style: const TextStyle(fontSize: 12),
-              decoration: InputDecoration(
-                labelText: p.keyIsHex ? '设备密钥（32 位 hex）' : 'ekey / fileKey',
-                border: const OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _mid,
-              style: const TextStyle(fontSize: 12),
-              decoration: const InputDecoration(
-                labelText: 'mid（可选，用于精确匹配）',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (v) => widget.onMid(v.trim().isEmpty ? null : v.trim()),
-            ),
-          ],
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(_error!,
+                    style: const TextStyle(
+                        fontSize: 11.5, color: Color(0xFFFF6B6B))),
+              ],
+            ],
+          ),
         ),
       ),
       actions: [
         TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(context),
             child: const Text('取消')),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('添加'),
-        ),
+        FilledButton(onPressed: _submit, child: const Text('添加')),
       ],
     );
   }
 
-  /// 各平台密钥的形态说明——填错格式是最常见的失败原因。
+  static String _valueLabel(DecryptPlatform p) => switch (p) {
+        DecryptPlatform.qqMusic => 'ekey（QMC v2）',
+        DecryptPlatform.kugou => 'fileKey（KGM v5）',
+        DecryptPlatform.kuwo => 'fileKey（KWM v2）',
+        _ => 'ekey / fileKey',
+      };
+
   /// 各平台的**解密条件**与密钥填法。
   ///
-  /// 文案直接对着um-react 的TS 契约写：密钥填错版本是最常见的失败原因，
-  /// 而用户往往分不清"这首歌到底是v1 还是 v2"。
+  /// 文案直接对着 um-react 的 TS 契约写：密钥填错版本是最常见的失败原因，
+  /// 而用户往往分不清"这首歌到底是 v1 还是 v2"。
   static String _keyHint(DecryptPlatform p) => switch (p) {
         DecryptPlatform.qqMusic =>
-          'QQ 音乐：只有 QMC v2（.mflac）需要 ekey，且必须匹配这首歌。'
-              'QMC v1（.qmcflac，PC 客户端 Legacy）用内置静态密钥，**不要填**。',
+          'QQ 音乐 QMC v2（.mflac）：按**原始文件名**查 ekey，'
+              '文件名对不上就解不出（找不到时会按相近文件名兜底）。\n'
+              'QMC v1（.qmcflac）用内置静态密钥，不需要填。',
         DecryptPlatform.kugou =>
-          '酷狗：仅 kgm **v5** 需要 fileKey（hex）。v2/v3 内置密钥，不要填。'
-              '注意 v5 的 key 与客户端里其他 key 不是一回事。',
+          '酷狗 KGM：只有 **v5** 需要 fileKey，按文件头里的 **audioHash** 查表。'
+              'v2/v3 是内置密钥，不要填。\n'
+              'audioHash 可用工具箱的「读取文件信息」看到。',
         DecryptPlatform.kuwo =>
-          '酷我：仅 kwm **v2** 需要 fileKey（hex），v1 内置密钥。'
-              '从酷我客户端缓存目录的数据库里取。',
+          '酷我 KWM：只有 **v2** 需要 fileKey，查表键是 `资源ID-音质`'
+              '（rid 在文件头 0x18，音质取文件头format_name 的开头数字）。\n'
+              '同一首歌不同音质是不同的 key，v1 用内置密钥。',
         DecryptPlatform.netease =>
           '网易云：密钥已内置在 .ncm 文件头的 meta 里，**无需填写**。',
         DecryptPlatform.migu =>
           '咪咕：无需填写——密钥由文件头已知明文反推。'
               '填了反而可能导致解出噪声。',
         DecryptPlatform.qingting =>
-          '蜻蜓 FM：需要 16 字节设备密钥的十六进制（32 个字符），'
-              '由手机机型信息派生，不在任何客户端数据库里。',
+          '蜻蜓 FM：只要一把 16 字节设备密钥（32 位十六进制），'
+              '不做任何匹配——所有 .qta 文件共用它。\n'
+              '它由手机机型信息派生，不在任何客户端数据库里。',
       };
 }
 
@@ -843,7 +1006,8 @@ class _PlatformBanner extends StatelessWidget {
             child: Text(
               '${platform.label}｜${platform.extensions.join(' ')}'
               '${needs ? ' · 需要密钥' : ' · 通常无需密钥'}'
-              '${platform.keyIsHex ? ' · 密钥为 hex' : ''}',
+              '${platform.keyIsHex ? ' · 密钥为 hex' : ''}'
+              '\n查表键：${platform.needsMatchKey ? platform.matchKeyLabel : '无（一把通吃 / 密钥在文件头）'}',
               style: TextStyle(
                 fontSize: 11.5,
                 height: 1.5,
@@ -892,12 +1056,22 @@ class _KeyTile extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   [
+                    if (entry.hasMatchKey)
+                      '${entry.platform.matchKeyLabel}: ${entry.matchKey}',
                     if (entry.mid != null) 'mid: ${entry.mid}',
-                    if (entry.qualityId != null) '音质: ${entry.qualityId}',
+                    if (!entry.hasMatchKey && entry.platform.needsMatchKey)
+                      '⚠缺${entry.platform.matchKeyLabel}，无法匹配',
                     '来源: ${_sourceLabel(entry.source)}',
                   ].join(' · '),
-                  style: const TextStyle(
-                      fontSize: 10.5, color: AppColors.textTertiary),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    color: (!entry.hasMatchKey &&
+                            entry.platform.needsMatchKey)
+                        ? const Color(0xFFFFB020)
+                        : AppColors.textTertiary,
+                  ),
                 ),
               ],
             ),

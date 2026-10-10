@@ -70,6 +70,27 @@ enum DecryptPlatform {
       this == DecryptPlatform.kugou ||
       this == DecryptPlatform.kuwo ||
       this == DecryptPlatform.qingting;
+
+  /// 这个平台的密钥是否需要**匹配键**才能定位到具体某一首。
+  ///
+  /// 对齐 um-react `features/settings/settingsSelector.ts`：
+  /// - QQ 音乐 → 原始文件名（`selectQMCv2KeyByFileName`）
+  /// - 酷狗 → `audioHash`（`selectKugouKey`，不命中就**没有密钥**）
+  /// - 酷我 → `rid-quality`（`selectKWMv2Key`，两者必须同时对上）
+  /// - 蜻蜓 FM → 不需要，单把设备密钥通吃
+  /// - 网易云 / 咪咕 → 不需要，密钥在文件头里
+  bool get needsMatchKey =>
+      this == DecryptPlatform.qqMusic ||
+      this == DecryptPlatform.kugou ||
+      this == DecryptPlatform.kuwo;
+
+  /// 匹配键的字段名，用于 UI 提示与录入表单。
+  String get matchKeyLabel => switch (this) {
+        DecryptPlatform.qqMusic => '原始文件名',
+        DecryptPlatform.kugou => 'audioHash（音频指纹）',
+        DecryptPlatform.kuwo => '资源 ID - 音质',
+        _ => '不需要',
+      };
 }
 
 /// 嗅探出的文件信息。
@@ -205,24 +226,60 @@ SniffResult sniffQmc(Uint8List head, Uint8List tail) {
 ///
 /// 优先级：文件自带 ekey → footer 里的 mid → footer 文件名 → 同平台兜底。
 String? resolveEkey(SniffResult sniff, DecryptKeys keys) {
+  // 文件内嵌的 ekey 优先级最高（QMC v1 / MusicEx footer 自带）。
   final embedded = sniff.footer?.ekey;
   if (embedded != null && embedded.isNotEmpty) return embedded;
 
   final p = sniff.platform;
 
-  final mid = sniff.footer?.mediaMid;
-  if (mid != null && mid.isNotEmpty) {
-    final byMid = keys.lookupByMid(mid, p);
-    if (byMid != null) return byMid;
-  }
+  // 下面按各平台**真实的匹配键**查表，严格对齐 um-react
+  // `features/settings/settingsSelector.ts`。
+  switch (p) {
+    case DecryptPlatform.kugou:
+      // selectKugouKey：lookupKey = hdr.audioHash，hasOwn 不命中就没有密钥。
+      //
+      // 读到了 audioHash 就**只能**用它查——查不到就是"没有密钥"，
+      // 不能退到别的条目去拿一把：KGM v5 的 fileKey 是逐文件派生的，
+      // 拿错一把必然解出噪声（上游同样直接是 undefined）。
+      final hash = sniff.kgmHeader?.audioHash ?? '';
+      if (hash.isNotEmpty) return keys.lookupByMatchKey(hash, p);
+      // 连 audioHash 都读不出来（文件头异常），已无依据，退到同平台兜底。
+      return keys.anyEkeyOf(p);
 
-  final fileName = sniff.footer?.mediaFilename;
-  if (fileName != null && fileName.isNotEmpty) {
-    final byFile = keys.lookupByMediaFilename(fileName, p);
-    if (byFile != null) return byFile;
-  }
+    case DecryptPlatform.kuwo:
+      // selectKWMv2Key：lookupKey = `${rid}-${quality}`，两者必须同时对上。
+      final h = sniff.kwmHeader;
+      if (h != null && h.version == 2) {
+        final mk = '${h.resourceId}-${h.qualityId}';
+        return keys.lookupByMatchKey(mk, p);
+      }
+      return keys.anyEkeyOf(p);
 
-  return keys.anyEkeyOf(p);
+    case DecryptPlatform.qqMusic:
+      // selectQMCv2KeyByFileName：拿 mediaName 查表，精确优先、
+      // 未命中可退到编辑距离最接近的一条（同平台内）。
+      final mid = sniff.footer?.mediaMid;
+      if (mid != null && mid.isNotEmpty) {
+        final byMid = keys.lookupByMid(mid, p);
+        if (byMid != null) return byMid;
+      }
+      final fileName = sniff.footer?.mediaFilename;
+      if (fileName != null && fileName.isNotEmpty) {
+        final byFile =
+            keys.lookupByFileName(fileName, DecryptPlatform.qqMusic);
+        if (byFile != null) return byFile;
+      }
+      return keys.anyEkeyOf(p);
+
+    case DecryptPlatform.netease:
+    case DecryptPlatform.migu:
+      // 密钥在文件头里，不需要用户提供。
+      return null;
+
+    case DecryptPlatform.qingting:
+      // 蜻蜓只有一把设备密钥，不做匹配。
+      return keys.anyEkeyOf(p);
+  }
 }
 
 /// 单个文件的解密入口。**必须在 Isolate 里跑**（CPU 密集）。
@@ -283,9 +340,9 @@ DecryptResult _decryptRange({
   } else {
     ekeyValue = platformKeys == null
         ? null
-        // 先精确（mid / 文件名），再退到该平台的通用密钥。
-        : (_matchByMidInMap(sniffed, platformKeys) ??
-            _matchByFilenameInMap(sniffed, platformKeys) ??
+        // 先按各平台真实的匹配键精确查表，再退到该平台的通用密钥。
+        : (_matchByMatchKeyInMap(sniffed, platformKeys) ??
+            _matchByMidInMap(sniffed, platformKeys) ??
             platformKeys[sniffed.platform.name]);
   }
 
@@ -504,7 +561,12 @@ DecryptResult _decryptQmc(File file, int totalLen, File out, SniffResult s,
   }
 
   if (e == null || e.isEmpty) {
-    throw const DecryptFailure('缺少 ekey，请在「密钥管理」中导入或手动填写后再试');
+    final name = s.footer?.mediaFilename;
+    throw DecryptFailure(
+      'QQ 音乐 QMC v2 需要 ekey，但没找到匹配的密钥。\n'
+      '${name != null && name.isNotEmpty ? '本文件的原始文件名是 $name，' : ''}'
+      '请在「密钥管理 → QQ 音乐」里按这个文件名录入对应的 ekey。',
+    );
   }
   final cipher = QmcV2Cipher(qmcEkeyDecrypt(e));
   final end = footer != null ? totalLen - footer.size : totalLen;
@@ -528,8 +590,16 @@ DecryptResult _decryptKgm(File file, int totalLen, File out, SniffResult s,
   if (header == null) {
     throw const DecryptFailure('KGM 头部解析失败');
   }
-  final e = ekey ?? header.let((_) => null);
-  final d = createKgmDecipher(header, ekey: e);
+  // 只有 v5 需要外部fileKey；v2/v3 内置密钥。
+  if (header.cryptoVersion == 5 &&
+      (ekey == null || ekey.isEmpty)) {
+    throw DecryptFailure(
+      '酷狗 v5 需要 fileKey，但没找到匹配的密钥。\n'
+      '本文件的 audioHash 是 ${header.audioHash}，'
+      '请在「密钥管理 → 酷狗音乐」里按这个 audioHash 录入对应的 ekey。',
+    );
+  }
+  final d = createKgmDecipher(header, ekey: ekey);
   final written = _streamDecrypt(
     input: file,
     output: out,
@@ -549,6 +619,14 @@ DecryptResult _decryptKwm(File file, int totalLen, File out, SniffResult s,
   final header = s.kwmHeader;
   if (header == null) {
     throw const DecryptFailure('KWM 头部解析失败');
+  }
+  // 只有 v2 需要外部 fileKey；v1 用资源 id 内置推导。
+  if (header.version == 2 && (ekey == null || ekey.isEmpty)) {
+    throw DecryptFailure(
+      '酷我 v2 需要 fileKey，但没找到匹配的密钥。\n'
+      '本文件的匹配键是 ${header.resourceId}-${header.qualityId}（资源 ID- 音质），'
+      '请在「密钥管理 → 酷我音乐」里按这个组合录入对应的 ekey。',
+    );
   }
   final d = createKwmDecipher(header, ekey: ekey);
   final written = _streamDecrypt(
@@ -655,10 +733,6 @@ DecryptResult _decryptNcm(File file, int totalLen, File out, SniffResult s) {
   );
 }
 
-extension _Let<T> on T {
-  R let<R>(R Function(T) f) => f(this);
-}
-
 /// 计算输出文件名（含扩展名推导）。
 String buildOutputName(String inputPath) {
   final slash = [inputPath.lastIndexOf('/'), inputPath.lastIndexOf(r'\')]
@@ -677,6 +751,36 @@ String hexPreview(List<int> bytes, {int max = 16}) {
 /// 工具：UTF-8 容错解码。
 String safeUtf8(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
 
+/// 跨 isolate 时用的精确匹配：从扁平 map 里按**各平台真实的匹配键**查表。
+///
+/// [platformKeys] 的 key 形如 `platform`（该平台通用）或 `platform@匹配键`
+/// （精确条目，优先于通用密钥）。匹配键的取法与主isolate 的
+/// [resolveEkey] 完全一致，只是换成字符串查表。
+String? _matchByMatchKeyInMap(SniffResult sniff, Map<String, String> keys) {
+  final p = sniff.platform.name;
+  switch (sniff.platform) {
+    case DecryptPlatform.kugou:
+      // selectKugouKey：audioHash。读到了就只认它，查不到就是没有密钥。
+      final hash = sniff.kgmHeader?.audioHash;
+      if (hash == null || hash.isEmpty) return null;
+      return keys['$p@$hash'];
+    case DecryptPlatform.kuwo:
+      // selectKWMv2Key：`rid-quality`
+      final h = sniff.kwmHeader;
+      if (h == null || h.version != 2) return null;
+      return keys['$p@${h.resourceId}-${h.qualityId}'];
+    case DecryptPlatform.qqMusic:
+      // selectQMCv2KeyByFileName：mediaName
+      final name = sniff.footer?.mediaFilename;
+      if (name == null || name.isEmpty) return null;
+      return keys['$p@$name'];
+    case DecryptPlatform.qingting:
+    case DecryptPlatform.netease:
+    case DecryptPlatform.migu:
+      return null;
+  }
+}
+
 /// 跨 isolate 时用的兜底匹配：从扁平 map 里按 mid 找精确匹配。
 ///
 /// [platformKeys] 的 key 形如 `platform` 或 `platform mid`——
@@ -685,11 +789,4 @@ String? _matchByMidInMap(SniffResult sniff, Map<String, String> platformKeys) {
   final mid = sniff.footer?.mediaMid;
   if (mid == null || mid.isEmpty) return null;
   return platformKeys['${sniff.platform.name} $mid'];
-}
-
-/// 同[_matchByMidInMap]，但按原始文件名匹配（QQ 的 MusicEx footer 给的是文件名）。
-String? _matchByFilenameInMap(SniffResult sniff, Map<String, String> m) {
-  final name = sniff.footer?.mediaFilename;
-  if (name == null || name.isEmpty) return null;
-  return m['${sniff.platform.name}@$name'];
 }

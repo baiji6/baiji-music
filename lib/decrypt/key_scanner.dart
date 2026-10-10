@@ -331,6 +331,8 @@ KeyScanResult scanSqliteKeys(Uint8List bytes,
               platform: platform,
               mid: _midFromColumns(t.columns, record),
               qualityId: _qualityFromColumns(t.columns, record),
+              audioHash: _hashFromColumns(t.columns, record),
+              resourceId: _ridFromColumns(t.columns, record),
               source: KeySource.importedDatabase,
             ));
             matchedColumns.add('${t.name}.${col.name}');
@@ -474,6 +476,40 @@ int? _qualityFromColumns(List<_SqlColumn> cols, _Record rec) {
   for (final c in cols) {
     final n = c.name.toLowerCase();
     if (n != 'qualityid' && n != 'quality_id' && n != 'quality') continue;
+    if (c.index >= rec.values.length) continue;
+    final v = rec.values[c.index];
+    if (v is int) return v;
+    final t = _asText(v);
+    if (t != null) return int.tryParse(t);
+  }
+  return null;
+}
+
+/// 酷狗的匹配键：文件头里那个 audioHash（32 位十六进制）。
+///
+/// 列名各版本不一，常见 `audiohash` / `audio_hash` / `hash` / `filehash`。
+String? _hashFromColumns(List<_SqlColumn> cols, _Record rec) {
+  for (final c in cols) {
+    final n = c.name.toLowerCase();
+    if (n != 'audiohash' && n != 'audio_hash' && n != 'filehash' &&
+        n != 'hash' && n != 'audioidentifier') {
+      continue;
+    }
+    if (c.index >= rec.values.length) continue;
+    final t = _asText(rec.values[c.index]);
+    if (t != null && t.isNotEmpty) return t;
+  }
+  return null;
+}
+
+/// 酷我的匹配键：`rid-quality`，rid 也要从库里取（否则凑不出查表键）。
+int? _ridFromColumns(List<_SqlColumn> cols, _Record rec) {
+  for (final c in cols) {
+    final n = c.name.toLowerCase();
+    if (n != 'resourceid' && n != 'resource_id' && n != 'rid' &&
+        n != 'songid' && n != 'content_id') {
+      continue;
+    }
     if (c.index >= rec.values.length) continue;
     final v = rec.values[c.index];
     if (v is int) return v;
