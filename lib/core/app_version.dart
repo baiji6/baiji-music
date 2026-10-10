@@ -10,7 +10,7 @@ class AppVersion {
   AppVersion._();
 
   /// 语义化版本，不含 `v` 前缀。
-  static const String current = '2.2.1';
+  static const String current = '2.2.2';
 
   /// 版本后缀说明。
   static const String channel = '跨平台重构版';

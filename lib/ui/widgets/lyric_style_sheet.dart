@@ -28,12 +28,14 @@ class _LyricStyleSheet extends StatefulWidget {
 class _LyricStyleSheetState extends State<_LyricStyleSheet> {
   late double _fontSize;
   late bool _alignLeft;
+  late double _activeScale;
 
   @override
   void initState() {
     super.initState();
     _fontSize = LyricSettings.instance.fontSize;
     _alignLeft = LyricSettings.instance.alignLeft;
+    _activeScale = LyricSettings.instance.activeScale;
   }
 
   @override
@@ -147,21 +149,87 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
               ),
             ),
             Padding(
+              padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+              child: Row(
+                children: [
+                  const Icon(Icons.format_size_rounded,
+                      size: 18, color: AppColors.magenta),
+                  const SizedBox(width: 10),
+                  const Text('当前行放大',
+                      style: TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  const Spacer(),
+                  Text(
+                    '${_activeScale.toStringAsFixed(2)}×',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.textTertiary),
+                  ),
+                ],
+              ),
+            ),
+            Slider(
+              value: _activeScale,
+              min: LyricSettings.minActiveScale,
+              max: LyricSettings.maxActiveScale,
+              divisions: 20,
+              activeColor: AppColors.magenta,
+              onChanged: (v) {
+                setState(() => _activeScale = v);
+                s.setActiveScale(v);
+              },
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text(
+                '正在唱的这一行会按这个倍率放大显示。1.00× 表示不放大，'
+                '调大后整屏能看到的歌词行会变少。',
+                style: const TextStyle(
+                    fontSize: 11, color: AppColors.textTertiary),
+              ),
+            ),
+            Padding(
               padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),
               child: GlassCard(
                 padding: const EdgeInsets.all(14),
                 radius: 16,
                 child: SizedBox(
                   width: double.infinity,
-                  child: Text(
-                    '白姬音乐 · 歌词预览效果',
-                    textAlign: s.textAlign,
-                    style: TextStyle(
-                      fontSize: _fontSize,
-                      height: 1.45,
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w700,
-                    ),
+                  // 三行模拟真实播放：中间是当前行（放大加粗），上下是普通行
+                  child: Column(
+                    children: [
+                      Text(
+                        '♪ 这是一句唱过的歌词',
+                        textAlign: s.textAlign,
+                        style: TextStyle(
+                          fontSize: _fontSize,
+                          height: 1.45,
+                          color: AppColors.textSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        '这是正在唱的当前行',
+                        textAlign: s.textAlign,
+                        style: TextStyle(
+                          fontSize: _fontSize * _activeScale,
+                          height: 1.32,
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        '这是还没唱到的歌词',
+                        textAlign: s.textAlign,
+                        style: TextStyle(
+                          fontSize: _fontSize,
+                          height: 1.45,
+                          color: AppColors.textTertiary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

@@ -17,6 +17,7 @@ import 'netease_login_page.dart';
 import 'playlist_page.dart';
 import 'qq_login_page.dart';
 import 'settings_page.dart';
+import 'toolbox_page.dart';
 
 /// 我的页：账号卡片（QQ 登录 + 网易云 Cookie 登录）+ 本地歌单 / 下载 / 历史 / 收藏 / 设置 / 日志 / 关于。
 class LibraryHome extends StatefulWidget {
@@ -324,6 +325,14 @@ class _LibraryHomeState extends State<LibraryHome> {
                       subtitle: '音质偏好 · 下载目录 · 缓存管理',
                       color: AppColors.cyan,
                       onTap: () => _openSettings(context),
+                    ),
+                    _SettingTile(
+                      icon: Icons.build_outlined,
+                      title: '工具箱',
+                      subtitle: '本地音乐解密 · 更多实用工具',
+                      color: AppColors.warning,
+                      onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const ToolboxPage())),
                     ),
                     _SettingTile(
                       icon: Icons.bug_report_outlined,

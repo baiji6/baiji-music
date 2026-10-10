@@ -15,7 +15,6 @@ import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/core/album_saver.dart';
 import 'package:baiji_music/ui/widgets/cover_image.dart';
 import 'package:baiji_music/ui/widgets/lyric_style_sheet.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -1405,9 +1404,6 @@ class _LyricViewState extends State<_LyricView>
   final ScrollController _scroll = ScrollController();
   final List<GlobalKey> _keys = [];
 
-  /// 逐帧推进的播放头（毫秒）。仅当前行监听，避免整列表重建。
-  final ValueNotifier<int> _head = ValueNotifier<int>(0);
-
   Ticker? _ticker;
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<bool>? _playSub;
@@ -1464,14 +1460,12 @@ class _LyricViewState extends State<_LyricView>
     _resumeTimer?.cancel();
     _ticker?.dispose();
     _scroll.dispose();
-    _head.dispose();
     super.dispose();
   }
 
   void _setAnchor(Duration d) {
     _anchorMs = d.inMilliseconds;
     _anchorAt = DateTime.now();
-    _pushHead();
     _syncActive();
   }
 
@@ -1484,11 +1478,6 @@ class _LyricViewState extends State<_LyricView>
     return est < 0 ? 0 : est;
   }
 
-  void _pushHead() {
-    final v = _smoothMs();
-    if (v != _head.value) _head.value = v;
-  }
-
   void _syncActive() {
     final idx = widget.lyrics.indexAt(Duration(milliseconds: _smoothMs()));
     if (idx == _active) return;
@@ -1497,8 +1486,8 @@ class _LyricViewState extends State<_LyricView>
     _scrollToActive();
   }
 
+  /// 逐帧只做一件事：判断当前唱到哪一行了。
   void _onTick(Duration elapsed) {
-    _pushHead();
     _syncActive();
   }
 
@@ -1510,7 +1499,8 @@ class _LyricViewState extends State<_LyricView>
     } else {
       final t = _ticker;
       if (t != null && t.isActive) t.stop();
-      _pushHead();
+      // 暂停时行号不该变，但补一次同步能纠正拖动进度条后的小偏差
+      _syncActive();
     }
   }
 
@@ -1541,45 +1531,47 @@ class _LyricViewState extends State<_LyricView>
       {required bool isActive, required bool sung}) {
     final settings = LyricSettings.instance;
     final baseColor = isActive
-        ? AppColors.cyan
+        ? AppColors.textPrimary
         : (sung ? AppColors.textSecondary : AppColors.textTertiary);
+
+    // 当前行放大并加粗，是整屏的视觉重心；非当前行压小一档形成层次。
+    final size =
+        isActive ? settings.fontSize * settings.activeScale : settings.fontSize;
+    final weight = isActive ? FontWeight.w800 : FontWeight.w500;
+    final height = isActive ? 1.32 : 1.45;
 
     if (!line.isWordLevel) {
       return Text(
         line.displayText,
         textAlign: settings.textAlign,
         style: TextStyle(
-          fontSize: settings.fontSize,
-          height: 1.45,
-          fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+          fontSize: size,
+          height: height,
+          fontWeight: weight,
           color: baseColor,
         ),
       );
     }
 
-    // 非当前行：无需逐帧重绘，整行按"已唱过/未唱"静态着色
-    if (!isActive) {
-      return RichText(
-        textAlign: settings.textAlign,
-        text: TextSpan(
-          children: [
-            for (final w in line.words)
-              TextSpan(
-                text: w.text,
-                style: TextStyle(
-                  fontSize: settings.fontSize,
-                  height: 1.45,
-                  fontWeight: FontWeight.w500,
-                  color: baseColor,
-                ),
+    // 逐字信息仍被完整渲染（歌词里可能有逐字标注），但不再按播放进度染色——
+    // 整行统一高亮放大，观感更接近主流播放器。
+    return RichText(
+      textAlign: settings.textAlign,
+      text: TextSpan(
+        children: [
+          for (final w in line.words)
+            TextSpan(
+              text: w.text,
+              style: TextStyle(
+                fontSize: size,
+                height: height,
+                fontWeight: weight,
+                color: baseColor,
               ),
-          ],
-        ),
-      );
-    }
-
-    // 当前行：逐帧平滑染色
-    return _KaraokeLine(line: line, head: _head);
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1608,8 +1600,9 @@ class _LyricViewState extends State<_LyricView>
               child: Container(
                 key: _keys[i],
                 width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 26, vertical: 9),
+                // 当前行字号变大了，行距也相应放宽，避免上下行贴上来
+                padding: EdgeInsets.symmetric(
+                    horizontal: 26, vertical: isActive ? 16 : 9),
                 child: Column(
                   crossAxisAlignment: settings.alignLeft
                       ? CrossAxisAlignment.start
@@ -1626,7 +1619,9 @@ class _LyricViewState extends State<_LyricView>
                             line.translation!,
                             textAlign: settings.textAlign,
                             style: TextStyle(
-                              fontSize: settings.fontSize * 0.8,
+                              fontSize: isActive
+                                  ? settings.fontSize * 0.8 * settings.activeScale
+                                  : settings.fontSize * 0.8,
                               height: 1.35,
                               color: isActive
                                   ? AppColors.textSecondary
@@ -1646,7 +1641,9 @@ class _LyricViewState extends State<_LyricView>
                             line.romanization!,
                             textAlign: settings.textAlign,
                             style: TextStyle(
-                              fontSize: settings.fontSize * 0.72,
+                              fontSize: isActive
+                                  ? settings.fontSize * 0.72 * settings.activeScale
+                                  : settings.fontSize * 0.72,
                               height: 1.3,
                               color: isActive
                                   ? AppColors.textSecondary
@@ -1661,52 +1658,6 @@ class _LyricViewState extends State<_LyricView>
               ),
             );
           },
-        ),
-      ),
-    );
-  }
-}
-
-/// 当前行的逐字染色：唯一订阅播放头的组件，用 [RepaintBoundary] 隔离重绘。
-class _KaraokeLine extends StatelessWidget {
-  const _KaraokeLine({required this.line, required this.head});
-
-  final LyricLine line;
-  final ValueListenable<int> head;
-
-  /// smoothstep：把线性进度映射为 S 曲线，起止更柔和，不再有"跳一格"的生硬感。
-  static double _ease(double p) {
-    if (p <= 0) return 0;
-    if (p >= 1) return 1;
-    return p * p * (3 - 2 * p);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final settings = LyricSettings.instance;
-    return RepaintBoundary(
-      child: ValueListenableBuilder<int>(
-        valueListenable: head,
-        builder: (ctx, posMs, _) => RichText(
-          textAlign: settings.textAlign,
-          text: TextSpan(
-            children: [
-              for (final w in line.words)
-                TextSpan(
-                  text: w.text,
-                  style: TextStyle(
-                    fontSize: settings.fontSize,
-                    height: 1.45,
-                    fontWeight: FontWeight.w700,
-                    color: Color.lerp(
-                      AppColors.textTertiary,
-                      AppColors.cyan,
-                      _ease(w.progressAt(posMs)),
-                    ),
-                  ),
-                ),
-            ],
-          ),
         ),
       ),
     );
