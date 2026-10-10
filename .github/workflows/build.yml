@@ -74,7 +74,15 @@ jobs:
           keytool -list -keystore android/app/keystore/baiji9527.jks \
             -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" 2>&1 | head -6
 
-      # 提升所有插件的 compileSdk 以兼容主项目 compileSdk=36，避免 file_picker 等旧版插件的 AAR 元数据不匹配
+      # 把 pub-cache 里那些还停留在旧 API 的插件抬到 36，以贴合主项目的 compileSdk=36
+      # （宿主 compileSdk 必须 ≥ 依赖 AAR metadata 里的 minCompileSdk，否则
+      #   checkReleaseAarMetadata 会直接判定构建失败）。
+      #
+      # 这里刻意只升不降：曾经 permission_handler_android 14.x 把自身 compileSdk
+      # 定到 37，当时宿主是 36，靠改写 pub-cache 是压不住的——它要求的是
+      # 「宿主 ≥ 37」，降写插件反而会让本地与 CI 行为割裂。真正的修法是在
+      # pubspec 里把 permission_handler 钉回 12.x（对应 android 13.x，
+      # compileSdk 35），详见 pubspec.yaml 里的注释。
       - name: Bump plugin compileSdk to 36
         run: |
           find ~/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true

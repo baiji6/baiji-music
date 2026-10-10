@@ -36,7 +36,17 @@ dependencies:
   url_launcher: ^6.3.0
   # 应用信息（版本号读取）
   package_info_plus: ^8.0.0
-  permission_handler: ^13.0.2
+  # 运行时权限（本地音乐扫描需要 READ_MEDIA_AUDIO / READ_EXTERNAL_STORAGE）
+  #
+  # 版本上限刻意卡在 12.x：13.x 的 pubspec 硬性依赖
+  # `permission_handler_android: ^14.1.0`，而后者把自身 compileSdk 抬到了 37，
+  # 其 AAR metadata 会要求宿主工程的 compileSdk ≥ 37。
+  # 本项目 android/app/build.gradle.kts 用的是 compileSdk = 36
+  # （AGP 9.1.0 官方支持的最高 API 就是 36，且 API 37 的平台包已改名
+  #  platforms;android-37.x），因此会卡在 checkReleaseAarMetadata 直接构建失败。
+  # 12.0.3 对应 permission_handler_android 13.x（compileSdk 35），与 36 相容。
+  # 升级本依赖前请务必先确认 android_impl 的 compileSdk 要求。
+  permission_handler: ^12.0.3
 
 dev_dependencies:
   flutter_test:

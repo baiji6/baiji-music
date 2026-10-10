@@ -6,6 +6,12 @@ plugins {
 
 android {
     namespace = "com.baiji.baiji_music"
+    // compileSdk 必须与所用插件的 AAR metadata 相容：
+    // permission_handler_android 14.x 声明了 minCompileSdk=37，宿主低于 37 时
+    // `checkReleaseAarMetadata` 会判定构建失败。但本机 AGP 9.1.0 官方只支持到
+    // API 36（更高平台包也已改名 android-37.x），所以这里维持 36，
+    // 转而在 pubspec 里把 permission_handler 钉在 12.x（对应 android 13.x，
+    // compileSdk 35）来对齐。
     compileSdk = 36
 
     ndkVersion = flutter.ndkVersion
