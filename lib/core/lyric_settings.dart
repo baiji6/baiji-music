@@ -18,7 +18,14 @@ class LyricSettings extends ChangeNotifier {
   /// 当前行放大倍率的可调范围。1.0 表示不放大。
   static const double minActiveScale = 1.0;
   static const double maxActiveScale = 2.0;
-  static const double defaultActiveScale = 1.45;
+
+  /// 默认只做**轻微**放大。
+  ///
+  /// 之前是 1.45（当前行明显大一号），但用户给的参考视频里所有行字号一致，
+  /// 视觉层次几乎全靠颜色（当前行亮青、其余暗灰）建立。1.45 让当前行比相邻行
+  /// 大出一大截，行距被撑开、整屏可见行数骤减，观感与参考不符。
+  /// 1.12 保留一点点层次感，又不会喧宾夺主。
+  static const double defaultActiveScale = 1.12;
 
   static const String _prefs = 'lyric_view';
   static const String _kFont = 'font_size';

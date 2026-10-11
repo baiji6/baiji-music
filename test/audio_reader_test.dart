@@ -114,6 +114,76 @@ void main() {
     });
   });
 
+  group('MP3 内嵌歌词识别（问题 5）', () {
+    test('SYLT 逐字歌词能转成可解析的增强 LRC', () async {
+      final p = await write(
+        'sylt.mp3',
+        buildMp3(
+          title: '逐字测试',
+          sylt: const [
+        ('我', 0),
+            ('曾', 200),
+            ('跨过', 400),
+            ('山和海', 700),
+          ],
+        ),
+      );
+
+      final m = await AudioReader.read(p);
+      expect(m.format, 'mp3');
+      // SYLT 必须被识别成歌词文本，且带时间标签
+      expect(m.lyric, isNotEmpty);
+      expect(m.lyric, contains('我'));
+      expect(m.lyric, contains('曾'));
+      expect(RegExp(r'\[\d+:\d+').hasMatch(m.lyric), isTrue,
+          reason: 'SYLT 应被转成带时间标签的 LRC，实际: ${m.lyric}');
+    });
+
+    test('SYLT 与 USLT 同时存在时优先逐字', () async {
+      final p = await write(
+        'both.mp3',
+        buildMp3(
+          title: '两者都有',
+          lyric: '[00:05.00]整行歌词',
+          sylt: const [('逐', 0), ('字', 300)],
+        ),
+      );
+
+      final m = await AudioReader.read(p);
+      expect(m.lyric, contains('逐'));
+    });
+
+    test('ID3v2.2 的 3 字节帧 ID 也能读出标题/歌词', () async {
+      final p = await write(
+        'v22.mp3',
+        buildMp3(
+          title: 'v2.2 标题',
+          artist: 'v2.2 歌手',
+          album: 'v2.2 专辑',
+          lyric: '[00:03.00]老标签逐行歌词',
+          id3Major: 2,
+        ),
+      );
+
+      final m = await AudioReader.read(p);
+      expect(m.format, 'mp3');
+      expect(m.title, 'v2.2 标题');
+      expect(m.artist, 'v2.2 歌手');
+      expect(m.album, 'v2.2 专辑');
+      expect(m.lyric, contains('老标签逐行歌词'));
+    });
+
+    test('只有 SYLT 没有 USLT 时也能拿到歌词', () async {
+      final p = await write(
+        'onlySylt.mp3',
+        buildMp3(sylt: const [('啊', 0), ('呀', 500)]),
+      );
+
+      final m = await AudioReader.read(p);
+      expect(m.lyric, contains('啊'));
+    });
+  });
+
   group('MP3 时长', () {
     test('Xing 头给出精确时长', () async {
       // 1000 帧 * 1152 样本 / 44100 = 26122 ms
@@ -291,8 +361,11 @@ void main() {
           album: '七里香',
           lyric: '[00:20.00]窗外的麻雀',
           cover: kJpeg,
-          timescale: 44100,
-          duration: 44100 * 10, // 10 秒
+          // mvhd.timescale 是影片时长时间基，真实文件里就是 1000，
+          // 和音频采样率无关。
+          timescale: 1000,
+          duration: 1000 * 10, // 10 秒
+          sampleRate: 44100,
         ),
       );
 
@@ -313,9 +386,10 @@ void main() {
         'v1.m4a',
         buildMp4(
           title: '长音频',
-          timescale: 48000,
-          duration: 48000 * 7,
+          timescale: 1000,
+          duration: 1000 * 7,
           mvhdVersion: 1,
+          sampleRate: 48000,
         ),
       );
 
@@ -325,14 +399,46 @@ void main() {
       expect(m.sampleRate, 48000);
     });
 
+    test('mvhd timescale 不再被误当采样率（无 stsd 时应为 0）', () async {
+      final p = await write(
+        'noStsd.m4a',
+        buildMp4(title: '无采样表', timescale: 44100, duration: 44100 * 3),
+      );
+
+      final m = await AudioReader.read(p);
+      // 时长仍能算出来（mvhd 是对的）
+      expect(m.durationMs, 3000);
+      // 但采样率必须为 0，而不是把 44100 的时间基当成采样率
+      expect(m.sampleRate, 0);
+    });
+
+    test('stsd 里的声道数与编码能读出', () async {
+      final p = await write(
+        'stereo.m4a',
+        buildMp4(
+          title: '立体声',
+          timescale: 1000,
+          duration: 1000 * 5,
+          sampleRate: 48000,
+          channels: 2,
+        ),
+      );
+
+      final m = await AudioReader.read(p);
+      expect(m.sampleRate, 48000);
+      expect(m.channels, 2);
+      expect(m.codec, 'aac');
+    });
+
     test('moov 在文件尾部也能读到', () async {
       final p = await write(
         'tail.m4a',
         buildMp4(
           title: '尾部 moov',
           artist: '测试',
-          timescale: 44100,
-          duration: 44100 * 4,
+          timescale: 1000,
+          duration: 1000 * 4,
+          sampleRate: 44100,
           moovAtTail: true,
         ),
       );

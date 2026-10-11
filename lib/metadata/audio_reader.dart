@@ -34,6 +34,8 @@ class AudioMetadata {
     this.durationMs = 0,
     this.bitrate = 0,
     this.sampleRate = 0,
+    this.channels = 0,
+    this.codec = '',
     this.coverBytes,
   });
 
@@ -55,6 +57,12 @@ class AudioMetadata {
 
   final int sampleRate;
 
+  /// 声道数：1 = 单声道，2 = 立体声，6 = 5.1……0 表示读不到。
+  final int channels;
+
+  /// 编码名：aac / flac / alac / vorbis / opus / pcm / mp3……空表示读不到。
+  final String codec;
+
   /// 内嵌封面原始字节；无封面为 null。
   final Uint8List? coverBytes;
 
@@ -73,6 +81,8 @@ class AudioMetadata {
     int? durationMs,
     int? bitrate,
     int? sampleRate,
+    int? channels,
+    String? codec,
     Uint8List? coverBytes,
   }) {
     return AudioMetadata(
@@ -85,6 +95,8 @@ class AudioMetadata {
       durationMs: durationMs ?? this.durationMs,
       bitrate: bitrate ?? this.bitrate,
       sampleRate: sampleRate ?? this.sampleRate,
+      channels: channels ?? this.channels,
+      codec: codec ?? this.codec,
       coverBytes: coverBytes ?? this.coverBytes,
     );
   }
@@ -160,6 +172,8 @@ class AudioReader {
         durationMs: meta.durationMs,
         bitrate: meta.bitrate,
         sampleRate: meta.sampleRate,
+        channels: meta.channels,
+        codec: meta.codec,
         coverBytes: withCover ? meta.coverBytes : null,
       );
     } catch (e) {
@@ -228,6 +242,12 @@ class AudioReader {
         final unsynced = major <= 3 && (head[5] & 0x80) != 0;
         for (final f in _parseId3Frames(body, major, unsynced)) {
           switch (f.id) {
+            case 'TT2 ':
+              title = _decodeId3Text(f.data);
+            case 'TP1 ':
+              artist = _decodeId3Text(f.data);
+            case 'TAL ':
+              album = _decodeId3Text(f.data);
             case 'TIT2':
               title = _decodeId3Text(f.data);
             case 'TPE1':
@@ -235,7 +255,18 @@ class AudioReader {
             case 'TALB':
               album = _decodeId3Text(f.data);
             case 'USLT':
+            // ID3v2.2 只有三字符帧 ID，_parseId3Frames 已补齐成四字符：
+            // `TT2`=标题 `TP1`=歌手 `TAL`=专辑 `ULT `=USLT `SLT `=SYLT `PIC`=APIC
+            case 'ULT ':
               lyric = _decodeUslt(f.data);
+            // SYLT 是**同步逐字**歌词：每条是 `text + 0x00 + timestamp(4)`，
+            // 整帧拼起来就是一个 enhanced LRC 片段（行内带 <mm:ss.xx>），
+            // 正好能被现有的增强 LRC 解析器渲染成卡拉OK。
+            case 'SYLT':
+            case 'SLT ':
+              final s = _decodeSylt(f.data);
+              // USLT 与 SYLT 可能同时存在，两个都留着（下面合并）
+              if (s.isNotEmpty) lyric = lyric.isEmpty ? s : '$lyric\n$s';
             case 'APIC':
               if (cover == null) {
                 final pic = _decodeApic(f.data);
@@ -408,11 +439,35 @@ class AudioReader {
   }
 
   /// 解析 ID3v2 帧（保留原始负载）。
+  ///
+  /// v2.2 的帧 ID 只有 3 个字符、帧头6 字节，且没有 flags —— 之前这里
+  /// 直接 `if (major < 3) return` 把整张老标签丢掉了，表现为
+  /// 「老MP3 的内嵌歌词/标题读不出来」。现在按 v2.3/v2.4/v2.2 三套
+  /// 头格式分别解析，返回的 ID 统一补齐成 4 字符，调用方只需一套 switch。
   static List<_Id3Frame> _parseId3Frames(
       Uint8List body, int major, bool unsynced) {
     final out = <_Id3Frame>[];
-    if (major < 3) return out; // v2.2 帧头格式不同，不冒险解析
+    if (major < 2 || major > 4) return out;
 
+    // ---- ID3v2.2：三字节 ID + 三字节长度，载荷即全部内容 ----
+    if (major == 2) {
+      var p2 = 0;
+      while (p2 + 6 <= body.length) {
+        final id = String.fromCharCodes(body.sublist(p2, p2 + 3));
+        if (!RegExp(r'^[A-Z0-9]{3}$').hasMatch(id)) break;
+        // v2.2 的长度不是 syncsafe，直接 3 字节大端
+        final size = (body[p2 + 3] << 16) | (body[p2 + 4] << 8) | body[p2 + 5];
+        if (size <= 0 || p2 + 6 + size > body.length) break;
+        var data = Uint8List.sublistView(body, p2 + 6, p2 + 6 + size);
+        if (unsynced) data = _resync(data);
+        // 补齐成四字符 ID，好让调用方的 switch 统一处理
+        out.add(_Id3Frame('$id ', data));
+        p2 += 6 + size;
+      }
+      return out;
+    }
+
+    // ---- ID3v2.3 / v2.4 ----
     final syncsafe = major >= 4;
     var pos = 0;
     while (pos + 10 <= body.length) {
@@ -484,6 +539,112 @@ class AudioReader {
     }
     if (pos >= data.length) return '';
     return _decodeWithEncoding(enc, data.sublist(pos));
+  }
+
+  /// SYLT（同步逐字歌词）解码，输出**增强 LRC** 片段。
+  ///
+  /// 帧布局：
+  /// ```
+  /// encoding(1) language(3) timeFormat(1) contentType(1)
+  /// descriptor + 终止符
+  /// { text + 终止符 + timestamp(4) } × N
+  /// ```
+  /// `timeFormat` 为 1 时时间戳是 MPEG 帧号（每帧 1152 个样本），
+  /// 需要文件采样率才能换算成毫秒；读不到采样率时按 44100 兜底。
+  ///
+  /// 转换策略：每条同步文本视为一个「字」，用 `[行起始]<mm:ss.xx>字<mm:ss.xx>字…`
+  /// 组织成一行，行起始取该行第一个字的时间。这样拼出来的文本能被现有的
+  /// 增强 LRC 解析器直接渲染成卡拉 OK，不需要新增解析分支。
+  static String _decodeSylt(Uint8List data) {
+    if (data.length < 6) return '';
+    final enc = data[0];
+    final timeFormat = data[4];
+    final termLen = (enc == 0x01 || enc == 0x02) ? 2 : 1;
+
+    bool isTerm(int p) => termLen == 2
+        ? (data[p] == 0x00 && data[p + 1] == 0x00)
+        : data[p] == 0x00;
+
+    // 跳过 descriptor 找到它的终止符
+    var pos = 6;
+    while (pos + termLen <= data.length) {
+      if (isTerm(pos)) {
+        pos += termLen;
+        break;
+      }
+      pos += termLen;
+    }
+
+    // 逐条读出 (文本, 毫秒)
+    final words = <(String, int)>[];
+    while (pos < data.length) {
+      // 文本本体
+      final textStart = pos;
+      var end = -1;
+      while (pos + termLen <= data.length) {
+        if (isTerm(pos)) {
+          end = pos;
+          break;
+        }
+        pos += termLen;
+      }
+      if (end < 0) break; // 缺终止符，视为帧损坏
+      final text = _decodeWithEncoding(
+        enc,
+        Uint8List.sublistView(data, textStart, end),
+      ).trim();
+      pos = end + termLen;
+
+      // 时间戳 4 字节大端
+      if (pos + 4 > data.length) break;
+      final raw = _be32(data, pos);
+      pos += 4;
+
+      if (text.isEmpty) continue;
+      words.add((text, _syltTsToMs(raw, timeFormat)));
+    }
+
+    if (words.isEmpty) return '';
+
+    // 每条同步文本都当作独立的一行（SYLT 本身不带"行"的概念），
+    // 但这样会得到每字一行。所以按时间聚类：时间相同的字合并到一行。
+    final sb = StringBuffer();
+    var lineStart = words.first.$2;
+    var buf = StringBuffer();
+    var prevMs = words.first.$2;
+    for (final (text, ms) in words) {
+      // 与前一个字间隔超过 1 秒视为换行（真实 SYLT 里换行处会明显停顿）
+      if (buf.isNotEmpty && ms - prevMs > 1000) {
+        sb.writeln('${_fmtMs(lineStart)}<$buf>');
+        buf = StringBuffer();
+        lineStart = ms;
+      }
+      buf.write(text);
+      buf.write('<${_fmtMs(ms)}>');
+      prevMs = ms;
+    }
+    if (buf.isNotEmpty) sb.writeln('${_fmtMs(lineStart)}<$buf>');
+    return sb.toString().trim();
+  }
+
+  /// SYLT 时间戳 → 毫秒。`timeFormat` 1 = MPEG 帧号，2 = 毫秒。
+  static int _syltTsToMs(int raw, int timeFormat) {
+    if (timeFormat == 1) return raw * 1152000 ~/ 44100; // 帧 * 1152 / 44100 * 1000
+    return raw;
+  }
+
+  /// 毫秒 → `[mm:ss.xx]`（增强 LRC 的行标签）。
+  static String _fmtMs(int ms) {
+    if (ms < 0) ms = 0;
+    final totalCs = ms ~/ 10; // 厘秒
+    final cs = totalCs % 100;
+    final totalSec = totalCs ~/ 100;
+    final sec = totalSec % 60;
+    final min = totalSec ~/ 60;
+    final mm = min.toString().padLeft(2, '0');
+    final ss = sec.toString().padLeft(2, '0');
+    final c = cs.toString().padLeft(2, '0');
+    return '[$mm:$ss.$c]';
   }
 
   /// APIC：`encoding(1) + mime(以 0x00 结尾) + picType(1) + 描述(终止符) + 图片数据`。
@@ -578,6 +739,7 @@ class AudioReader {
     String coverMime = '';
     var durationMs = 0;
     var sampleRate = 0;
+    var channels = 0;
 
     var pos = 4;
     var guard = 0;
@@ -588,14 +750,28 @@ class AudioReader {
           (head[pos + 2] << 8) |
           head[pos + 3];
       final payloadStart = pos + 4;
-      if (blockLen <= 0 || payloadStart + blockLen > head.length) break;
-      final payload =
-          Uint8List.sublistView(head, payloadStart, payloadStart + blockLen);
+      if (blockLen <= 0) break;
+
+      // 头部预读窗口只有 64KB，而带内嵌歌词/大封面的 FLAC 里
+      // VORBIS_COMMENT 常常超过这个长度——之前会直接 break，
+      // 导致「本地FLAC 的内嵌歌词读不出来」。这里按需回文件补读。
+      final Uint8List payload;
+      if (payloadStart + blockLen <= head.length) {
+        payload =
+            Uint8List.sublistView(head, payloadStart, payloadStart + blockLen);
+      } else if (payloadStart + blockLen <= len) {
+        payload = _readAt(raf, payloadStart, blockLen);
+      } else {
+        break;
+      }
+      if (payload.length < blockLen) break;
 
       switch (type) {
         case 0: // STREAMINFO
           if (blockLen >= 18) {
             sampleRate = (payload[10] << 12) | (payload[11] << 4) | (payload[12] >> 4);
+            // 声道数占STREAMINFO 里payload[12] 的低 4 bit（存的是值-1）
+            channels = (payload[12] & 0x0F) + 1;
             final totalSamples = ((payload[13] & 0x0F) << 32) |
                 (payload[14] << 24) |
                 (payload[15] << 16) |
@@ -615,8 +791,11 @@ class AudioReader {
                 artist = kv.$2;
               case 'ALBUM':
                 album = kv.$2;
+              // LYRICS 是老写法；UNSYNCEDLYRICS 是官方推荐键名。
+              // 真实 FLAC 文件两个都有人用，缺一个就表现为「读不出歌词」。
               case 'LYRICS':
-                lyric = kv.$2;
+              case 'UNSYNCEDLYRICS':
+                if (lyric.isEmpty) lyric = kv.$2;
             }
           }
         case 6: // PICTURE
@@ -642,6 +821,8 @@ class AudioReader {
       coverMime: coverMime,
       durationMs: durationMs,
       sampleRate: sampleRate,
+      channels: channels,
+      codec: 'flac',
       coverBytes: cover,
     );
   }
@@ -727,6 +908,28 @@ class AudioReader {
       }
     }
 
+    // 真正的采样率 / 声道数 / 编码在 stsd 里。
+    //
+    // mvhd.timescale 是**影片时长的时基**（真实文件里几乎总是 1000），
+    // 跟音频采样率毫无关系——之前直接拿它当 sampleRate，
+    // 显示出来永远是「1 kHz」这种鬼话。
+    var sampleRate = 0;
+    var channels = 0;
+    var codec = '';
+    final trak = _findBoxWithin(buf, moov.start, moov.end, 'trak');
+    if (trak.exists) {
+      final stbl = _findBoxWithin(buf, trak.start, trak.end, 'stbl');
+      if (stbl.exists) {
+        final stsd = _findBoxWithin(buf, stbl.start, stbl.end, 'stsd');
+        if (stsd.exists) {
+          final a = _parseMp4AudioEntry(buf, stsd.start, stsd.end);
+          sampleRate = a.$1;
+          channels = a.$2;
+          codec = a.$3;
+        }
+      }
+    }
+
     String title = '', artist = '', album = '', lyric = '';
     Uint8List? cover;
     String coverMime = '';
@@ -770,9 +973,56 @@ class AudioReader {
       format: 'm4a',
       coverMime: coverMime,
       durationMs: durationMs,
-      sampleRate: timescale,
+      sampleRate: sampleRate,
+      channels: channels,
+      codec: codec,
       coverBytes: cover,
     );
+  }
+
+  /// 从 `stsd` 里取第一个音频采样描述：返回 (采样率, 声道数, 编码名)。
+  ///
+  /// `stsd` 是 FullBox：跳过 4 字节 version+flags，再跳 4 字节 entry count，
+  /// 之后是一串采样条目，每条形如 `size(4) + format(4) + payload`。
+  ///
+  /// AudioSampleEntry（`mp4a` 等）的 payload 布局（相对**盒头之后**的偏移）：
+  /// ```
+  ///  0..5  reserved(6)
+  ///  6..7  data_reference_index
+  ///  8..9  version     10..11 revision     12..15 vendor
+  /// 16..17 channelcount    18..19 samplesize
+  /// 20..21 pre_defined     22..23 reserved
+  /// 24..27 samplerate（16.16 定点，高 16 字节即整数部分）
+  /// ```
+  /// 注意这些偏移相对 payload，也就是相对盒起点要**再加 8**（size + type）。
+  static (int, int, String) _parseMp4AudioEntry(
+      Uint8List buf, int start, int end) {
+    final pos = start + 8; // version+flags(4) + entryCount(4)
+    // 盒头 8 + payload 最小 28 = 36
+    if (pos + 36 > end || pos + 36 > buf.length) return (0, 0, '');
+    final size = _be32(buf, pos);
+    if (size < 36 || pos + size > end) return (0, 0, '');
+    final fmt = String.fromCharCodes(buf.sublist(pos + 4, pos + 8));
+
+    final payload = pos + 8; // 越过 size + type
+    final channels = (buf[payload + 16] << 8) | buf[payload + 17];
+    // 16.16 定点：高位16 字节就是整数部分
+    final sampleRate = (buf[payload + 24] << 8) | buf[payload + 25];
+
+    final codec = switch (fmt) {
+      'mp4a' => 'aac',
+      'alac' => 'alac',
+      'ac-3' => 'ac3',
+      'ec-3' => 'eac3',
+      'samr' => 'amr',
+      'sawb' => 'amr-wb',
+      'Opus' => 'opus',
+      'fLaC' => 'flac',
+      '.mp3' => 'mp3',
+      'lpcm' => 'pcm',
+      _ => '',
+    };
+    return (sampleRate, channels, codec);
   }
 
   /// 在 [buf] 的 [start,end) 范围内按路径查找盒子（如 udta → meta → ilst）。
@@ -798,6 +1048,8 @@ class AudioReader {
     Uint8List? cover;
     String coverMime = '';
     var sampleRate = 0;
+    var channels = 0;
+    var codec = '';
 
     // 首页的 identification header 给出采样率
     if (_eq(head, 0, 'OggS') && head.length >= 30) {
@@ -814,10 +1066,19 @@ class AudioReader {
           // Vorbis identification header：
           // 0 包类型 / 1-6 'vorbis' / 7-10 版本 / 11 声道 / 12-15 采样率
           if (p.length >= 16) {
+            channels = p[11];
             sampleRate = _le32(p, 12);
+            codec = 'vorbis';
           }
         } else if (p.length > 8 && _eq(p, 0, 'OpusHead')) {
+          // OpusHead：0-7 'OpusHead' / 8 声道 / 9-12 预跳
+          channels = p.length > 8 ? p[8] : 0;
           sampleRate = 48000; // Opus 恒为 48k
+          codec = 'opus';
+        } else if (p.length > 8 && _eq(p, 0, '\x7fFLAC')) {
+          // Ogg-FLAC：内部包映射 / 0-4 包类型 / 5-7 'FLAC' / …
+          // 真实参数在后续 STREAMINFO 里，这里只标记编码。
+          codec = 'flac';
         }
       }
     }
@@ -864,6 +1125,8 @@ class AudioReader {
       coverMime: coverMime,
       durationMs: durationMs,
       sampleRate: sampleRate,
+      channels: channels,
+      codec: codec,
       coverBytes: cover,
     );
   }
@@ -963,6 +1226,8 @@ class AudioReader {
     var byteRate = 0;
     var dataSize = 0;
     var sampleRate = 0;
+    var channels = 0;
+    var audioFormat = 0;
     String title = '', artist = '', album = '';
 
     var pos = 12;
@@ -975,6 +1240,8 @@ class AudioReader {
       if (id == 'fmt ' && payloadStart + 16 <= head.length) {
         // 标准 16 字节 PCM fmt：
         // 0-1 格式 / 2-3 声道 / 4-7 采样率 / 8-11 字节率 / 12-13 块对齐 / 14-15 位深
+        audioFormat = head[payloadStart] | (head[payloadStart + 1] << 8);
+        channels = head[payloadStart + 2] | (head[payloadStart + 3] << 8);
         sampleRate = _le32(head, payloadStart + 4);
         byteRate = _le32(head, payloadStart + 8);
       } else if (id == 'data') {
@@ -1019,6 +1286,15 @@ class AudioReader {
       durationMs: durationMs,
       bitrate: bitrate,
       sampleRate: sampleRate,
+      channels: channels,
+      // WAV 是容器：1 = PCM，3 = IEEE float，6 = A-law，7 = mu-law
+      codec: switch (audioFormat) {
+        1 => 'pcm',
+        3 => 'pcm-float',
+        6 => 'alaw',
+        7 => 'mulaw',
+        _ => '',
+      },
     );
   }
 

@@ -266,10 +266,12 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
             ],
             const SizedBox(height: 4),
-            const Text(
-              '只会删除内存中的封面缓存与缓存目录里的临时文件（含日志导出）。'
+            Text(
+              '会清空：内存里的封面缓存，以及缓存目录下的'
+              '${CacheManager.managedDirNames.join(' / ')}'
+              '（含日志导出与解密时的文件副本）。\n'
               '下载的歌曲、播放历史、歌单与本地音乐库都不受影响。',
-              style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+              style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
             ),
           ],
         ),
@@ -287,13 +289,25 @@ class _SettingsPageState extends State<SettingsPage> {
     );
     if (confirmed != true) return;
 
-    final freed = await CacheManager.clear();
+    // 删不掉的条目要如实上报：静默吞掉异常会让「权限不足 / 文件占用」
+    // 表现为「点了没反应」，比报错更让人困惑。
+    final issues = <String>[];
+    final freed = await CacheManager.clear(
+        onIssue: (path, reason) => issues.add(path));
     // 本地歌曲封面另有一份独立内存缓存，在 ui 层，这里一并清掉
     LocalCoverCache.clear();
     if (!mounted) return;
-    _showSnack(
-      freed <= 0 ? '缓存已清理' : '缓存已清理，释放 ${CacheManager.formatBytes(freed)}',
-    );
+    if (issues.isNotEmpty) {
+      _showSnack(
+        '已释放 ${CacheManager.formatBytes(freed)}，'
+        '但有 ${issues.length} 个文件删不掉（可能正被占用）',
+        isError: true,
+      );
+    } else {
+      _showSnack(freed <= 0
+          ? '缓存已清理'
+          : '缓存已清理，释放 ${CacheManager.formatBytes(freed)}');
+    }
     _refreshCacheSize();
   }
 

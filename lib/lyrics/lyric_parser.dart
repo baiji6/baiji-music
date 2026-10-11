@@ -96,7 +96,25 @@ class LyricParser {
 
   /// 输入可能是密文，按 QRC 加密 → base64 → 原文 的顺序尝试还原。
   static String _autoDecode(String raw) {
-    final s = raw.trim();
+    var s = raw.trim();
+
+    // 0) 去掉 QQ 内嵌歌词常见的前缀标记。
+    //
+    // 标签工具写 USLT/©lyr 时经常带上协议头，比如 `QRC64://`、`QRC://`、
+    // `LRCLIB://`、`bLyric/`。不剥掉的话后面两条正则都会因为出现非
+    // base64 字符而失配，密文会被当成明文歌词直接返回——于是播放器显示
+    // 出一整行十六进制乱码。
+    for (final p in const [
+      'QRC64://',
+      'QRC://',
+      'LRCLIB://',
+      'bLyric/',
+    ]) {
+      if (s.toUpperCase().startsWith(p.toUpperCase())) {
+        s = s.substring(p.length).trim();
+        break;
+      }
+    }
 
     // 1) QQ QRC：纯 hex 且不短（DES 块 8 字节对齐）
     if (s.isNotEmpty && RegExp(r'^[0-9A-Fa-f]+$').hasMatch(s) && s.length >= 16) {
@@ -114,6 +132,20 @@ class LyricParser {
         }
       } catch (_) {
         // 非 base64，按原文继续
+      }
+    }
+
+    // 3) QRC64 是 base64 而非 hex：剥掉前缀后可能仍被上一步的正则漏判
+    //（带 '=' 填充或换行的情形），这里再兜一次。
+    if (s != raw.trim() &&
+        RegExp(r'^[A-Za-z0-9+/=\s]+$').hasMatch(s) &&
+        s.length >= 8) {
+      try {
+        final bytes = base64Decode(s.replaceAll(RegExp(r'\s'), ''));
+        final text = utf8.decode(bytes, allowMalformed: true);
+        if (text.isNotEmpty && _looksLikeLyric(text)) return text;
+      } catch (_) {
+        // 忽略
       }
     }
 

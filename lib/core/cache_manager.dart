@@ -41,6 +41,35 @@ class CacheManager {
   static const String imagesDirName = 'images';
   static const String miscDirName = 'misc';
 
+  /// 解密页会把 file_picker 给的临时路径**复制**一份到本地再读——
+  /// 移动端那个路径随时会被系统回收，副本必须活到解密结束。
+  ///
+  /// 这些副本是纯临时数据（几百 MB 很正常），所以放进受管缓存目录，
+  /// 用户点「清理缓存」时能真删掉。之前它落在系统临时目录里，
+  /// 既绕过了自定义路径，也永远清不掉。
+  static const String tempDirName = 'tmp';
+
+  /// [clear] 会清空内容的子目录。
+  ///
+  /// **统计与清理必须用同一个列表**（[breakdown] 也用它）：
+  /// 之前 breakdown 额外统计了系统临时目录而 clear 不删，
+  /// 移动端两者还指向同一个 app cache 目录（父与子），
+  /// 于是数字清完几乎不降——用户只会看到「点了没反应」。
+  static const List<String> managedDirNames = [
+    imagesDirName,
+    miscDirName,
+    tempDirName,
+  ];
+
+  /// 受管目录的绝对路径。
+  static Future<List<Directory>> managedDirs() async {
+    final root = await cacheRoot();
+    return [
+      for (final name in managedDirNames)
+        Directory('${root.path}${Platform.pathSeparator}$name'),
+    ];
+  }
+
   static String? _runtimeRoot;
 
   /// 用户自定义的缓存目录；为空表示用系统默认。
@@ -144,6 +173,9 @@ class CacheManager {
   }
 
   /// 各类缓存占用明细。
+  ///
+  /// **统计口径必须与 [clear] 完全一致**——只统计不清理的条目会让
+  /// 「占用」和「清完之后的占用」对不上，用户只会觉得清理没生效。
   static Future<List<CacheEntry>> breakdown() async {
     final out = <CacheEntry>[];
 
@@ -155,21 +187,17 @@ class CacheManager {
       detail: '$live 张在用 / 上限 $memoryLimitMb MB',
     ));
 
-    final root = await cacheRoot();
+    final dirs = await managedDirs();
     var cacheBytes = 0;
-    for (final name in [imagesDirName, miscDirName]) {
-      cacheBytes += await dirSize(
-          Directory('${root.path}${Platform.pathSeparator}$name'));
+    for (final dir in dirs) {
+      cacheBytes += await dirSize(dir);
     }
-    out.add(CacheEntry('缓存目录（临时文件）', cacheBytes,
-        detail: '${root.path}（只统计 images/与 misc/）'));
-
-    try {
-      final tmp = await getTemporaryDirectory();
-      out.add(CacheEntry('系统临时目录', await dirSize(tmp), detail: tmp.path));
-    } catch (e) {
-      AppLog.w('CacheManager', '读取临时目录失败: $e');
-    }
+    final root = await cacheRoot();
+    out.add(CacheEntry(
+      '缓存目录',
+      cacheBytes,
+      detail: '${root.path}\n（${managedDirNames.join(' / ')}，清理时会全部清空）',
+    ));
 
     return out;
   }
@@ -189,7 +217,10 @@ class CacheManager {
   ///
   /// 注意本地歌曲封面另有一份独立的字节缓存（`LocalCoverCache`，在 ui 层，
   /// 200 条上限），由设置页在调用本方法后一并清掉——core 不反向依赖 ui。
-  static Future<int> clear() async {
+  ///
+  /// [onIssue] 用来回传删不掉的条目：静默吞掉异常会让「权限不足」
+  /// 表现为「点了没反应」，比报错更让人困惑。
+  static Future<int> clear({void Function(String path, String reason)? onIssue}) async {
     var freed = 0;
 
     // 整个内存缓存清空：正在显示的封面会闪一下并重新请求一次
@@ -197,22 +228,19 @@ class CacheManager {
       ..clear()
       ..clearLiveImages();
 
-    final root = await cacheRoot();
-    // 只删App 自己建的这两个子目录，不碰根目录下用户可能自己放的东西
-    for (final name in [imagesDirName, miscDirName]) {
-      final dir = Directory('${root.path}${Platform.pathSeparator}$name');
-      freed += await _emptyDir(dir);
+    // 清空 [managedDirNames] 里的全部子目录，范围与 breakdown() 严格一致。
+    // 只删 App 自己建的目录，不碰根目录下用户可能自己放的东西。
+    for (final dir in await managedDirs()) {
+      freed += await _emptyDir(dir, onIssue);
     }
-    //系统临时目录只统计、绝不删除：桌面端 getTemporaryDirectory() 返回的是
-    // 系统共享目录（Linux /tmp、macOS /var/folders/...、Windows %TEMP%），
-    // 递归删它会波及同机其它应用正在用的文件，Linux 上还会影响其他用户。
 
     AppLog.i('CacheManager', '缓存已清理，释放约 ${formatBytes(freed)}');
     return freed;
   }
 
   /// 清空目录内容但保留目录本身。返回释放的字节数。
-  static Future<int> _emptyDir(Directory dir) async {
+  static Future<int> _emptyDir(Directory dir,
+      [void Function(String path, String reason)? onIssue]) async {
     if (!await dir.exists()) return 0;
     var freed = 0;
     try {
@@ -225,11 +253,16 @@ class CacheManager {
             freed += await dirSize(e);
             await e.delete(recursive: true);
           }
-        } catch (_) {
-          // 单个文件删不掉（占用中）不影响其它
+        } catch (err) {
+          // 单个文件删不掉（占用中 / 权限不足）不影响其它，但要如实上报。
+          onIssue?.call(e.path, '$err');
+          AppLog.w('CacheManager', '删除失败 ${e.path}: $err');
         }
       }
-    } catch (_) {}
+    } catch (err) {
+      onIssue?.call(dir.path, '$err');
+      AppLog.w('CacheManager', '遍历目录失败 ${dir.path}: $err');
+    }
     return freed;
   }
 

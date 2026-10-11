@@ -11,6 +11,7 @@ library;
 import 'dart:convert';
 
 import '../core/app_logger.dart';
+import '../local/local_scanner.dart';
 import '../lyrics/lyric_model.dart';
 import '../lyrics/lyric_parser.dart';
 import '../models/models.dart';
@@ -23,14 +24,35 @@ class LyricApi {
   LyricApi._();
 
   /// 按来源取结构化歌词；失败返回空歌词（不抛异常）。
+  ///
+  /// **本地歌曲必须先分流**：`song.isLocal` 既不是 netease 也不是可用的
+  /// QQ mid（本地 mid 只是文件路径的 hashCode），直接落进 [qq] 必然失败——
+  /// 请求拿回来的只会是"歌曲不存在"，于是本地内嵌歌词永远显示不出来。
   static Future<Lyrics> of(Song song) async {
     try {
+      if (song.isLocal) return await local(song);
       if (song.isNetease) return await netease(song);
       return await qq(song);
     } catch (e) {
       AppLog.w('LyricApi', '获取歌词失败: $e');
       return Lyrics.empty;
     }
+  }
+
+  // ==================== 本地文件 ====================
+
+  /// 本地歌曲歌词：先找同目录的外挂 `.lrc`，再读文件内嵌标签。
+  ///
+  /// 读取与解密都由 [LocalScanner.readLyricFor] 完成；解析交给
+  /// [LyricParser]——它能处理 LRC / 增强 LRC / QRC 逐字 / YRC 逐字 / TTML，
+  /// 也会自动解密 QQ 的 QRC 密文，所以内嵌的是逐字歌词也能直接染色。
+  static Future<Lyrics> local(Song song) async {
+    final raw = await LocalScanner.readLyricFor(song);
+    if (raw.trim().isEmpty) {
+      AppLog.i('LyricApi', '本地歌曲无歌词: ${song.localPath}');
+      return Lyrics.empty;
+    }
+    return LyricParser.parse(raw);
   }
 
   // ==================== QQ 音乐 ====================

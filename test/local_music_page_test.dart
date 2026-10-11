@@ -117,14 +117,14 @@ void main() {
     expect(find.text('扫描目录'), findsNothing);
 
     // 从溢出菜单里打开
-    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.tap(find.byIcon(Icons.swap_vert_rounded));
     await tester.pumpAndSettle();
     await tester.tap(find.text('显示目录管理'));
     await tester.pumpAndSettle();
     expect(find.text('扫描目录'), findsOneWidget);
 
     // 再点一次收起
-    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.tap(find.byIcon(Icons.swap_vert_rounded));
     await tester.pumpAndSettle();
     await tester.tap(find.text('隐藏目录管理'));
     await tester.pumpAndSettle();
@@ -136,7 +136,7 @@ void main() {
     await LocalMusicStore.markScanned();
     await pump(tester);
 
-    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.tap(find.byIcon(Icons.swap_vert_rounded));
     await tester.pumpAndSettle();
     await tester.tap(find.text('显示目录管理'));
     await tester.pumpAndSettle();

@@ -565,18 +565,84 @@ int _compareSongs(Song a, Song b) {
   return a.name.compareTo(b.name);
 }
 
-/// 外部歌词：与音频同目录、同名，扩展名为 .lrc。
+/// 外部歌词：与音频同目录、同名，扩展名 `.lrc` / `.txt`。
+///
+/// 也会接受 `歌曲.lrc`（比音频多一层后缀）这种常见命名，
+/// 以及 `.qrc`（QQ 的逐字格式，解析器会自动解密）。
 String? _readExternalLyric(String audioPath) {
   final dot = audioPath.lastIndexOf('.');
   if (dot <= 0) return null;
   final base = audioPath.substring(0, dot);
-  for (final ext in <String>['.lrc', '.LRC']) {
-    final f = File('$base$ext');
+  final name = base.split(Platform.pathSeparator).last;
+
+  // 候选文件名，按优先级排列。命名习惯差异很大，都试一遍。
+  final candidates = <String>[
+    for (final ext in const ['.lrc', '.LRC', '.qrc', '.QRC', '.txt'])
+      '$base$ext',
+    // 「歌曲.mp3」配「歌曲.lrc」以外的「歌曲 - 歌手.lrc」等变体暂不支持，
+    // 避免同目录多首歌时互相串词。
+  ];
+
+  for (final path in candidates) {
+    final f = File(path);
     try {
-      if (f.existsSync()) return f.readAsStringSync();
+      if (!f.existsSync()) continue;
+      final text = f.readAsStringSync();
+      if (text.trim().isEmpty) continue;
+      // 纯文本里可能混着别的内容（比如歌词说明），只认带时间标签的。
+      if (!_looksLikeLyricFile(text)) continue;
+      return text;
     } catch (_) {
       // 读不了就试下一个
     }
   }
+  // 上面都不可用时退回第一个存在且非空的 .lrc，交由解析器判断
+  for (final ext in const ['.lrc', '.LRC', '.txt']) {
+    final f = File('$base$ext');
+    try {
+      if (f.existsSync()) {
+        final text = f.readAsStringSync();
+        if (text.trim().isNotEmpty) return text;
+      }
+    } catch (_) {}
+  }
+  // 最后再试一次「多层后缀」命名：foo.mp3 -> foo.something.lrc
+  try {
+    final dir = File(audioPath).parent.path;
+    final stem =
+        name.contains('.') ? name.substring(0, name.lastIndexOf('.')) : name;
+    for (final e in _dirLrcCandidatesSync(dir, stem)) {
+      final f = File(e);
+      if (f.existsSync()) {
+        final text = f.readAsStringSync();
+        if (text.trim().isNotEmpty) return text;
+      }
+    }
+  } catch (_) {}
   return null;
+}
+
+/// 粗判文本是否像歌词文件（含时间标签或逐字标记）。
+bool _looksLikeLyricFile(String t) {
+  if (t.length > 512 * 1024) return false;
+  return RegExp(r'\[\d+:\d+').hasMatch(t) ||
+      RegExp(r'\[\d+,\d+\]').hasMatch(t) ||
+      t.contains('<Lyric_1') ||
+      t.contains('<tt') ||
+      RegExp(r'^\s*\[ti:|\[al:|\[ar:', multiLine: true).hasMatch(t);
+}
+
+/// 找出 `stem.*.lrc` 这种多余一层后缀的候选（同步实现，供上面调用）。
+List<String> _dirLrcCandidatesSync(String dir, String stem) {
+  final out = <String>[];
+  try {
+    for (final e in Directory(dir).listSync(followLinks: false)) {
+      if (e is! File) continue;
+      final n = e.path.split(Platform.pathSeparator).last.toLowerCase();
+      if (!n.endsWith('.lrc')) continue;
+      if (n.startsWith(stem.toLowerCase())) out.add(e.path);
+    }
+  } catch (_) {}
+  out.sort();
+  return out;
 }

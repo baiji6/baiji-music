@@ -4,8 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/app_logger.dart';
 import '../../data/history_store.dart';
-import '../../download/download_extras.dart';
-import '../../download/download_manager.dart';
+import '../../download/download_task.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
@@ -303,30 +302,22 @@ class _SearchHomeState extends State<SearchHome> {
     );
   }
 
+  /// 下载单曲。进度与结果统一交给全局任务队列，本页只弹提示；
+  /// 想看进度条请去「下载管理」页。
   Future<void> _downloadSong(Song song) async {
-    _showSnack('开始下载…', isError: false);
-    try {
-      final path = await DownloadManager.instance.download(
-        song,
-        qqQuality: PlayerController.instance.currentQuality,
-        neQuality: PlayerController.instance.currentNeteaseQuality,
-      );
-      if (path != null) {
-        String extra = '';
-        try {
-          extra = await DownloadExtras.attach(filePath: path, song: song);
-        } catch (e) {
-          AppLog.w('SearchHome', '写入歌词/封面失败: $e');
-        }
-        if (!mounted) return;
-        final name = path.split(Platform.pathSeparator).last;
-        _showSnack(extra.isEmpty ? '下载完成: $name' : '$name · $extra');
-      } else {
-        _showSnack('下载失败（无可用直链）', isError: true);
-      }
-    } catch (e) {
-      _showSnack('下载失败: $e', isError: true);
+    _showSnack('已加入下载队列');
+    final path = await runManagedDownload(
+      song,
+      qqQuality: PlayerController.instance.currentQuality,
+      neQuality: PlayerController.instance.currentNeteaseQuality,
+    );
+    if (!mounted) return;
+    if (path == null) {
+      _showSnack('下载失败，可在下载管理查看原因', isError: true);
+      return;
     }
+    final name = path.split(Platform.pathSeparator).last;
+    _showSnack('下载完成: $name');
   }
 
   @override

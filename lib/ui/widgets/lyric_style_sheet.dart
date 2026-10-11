@@ -181,7 +181,9 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
               child: Text(
-                '正在唱的这一行会按这个倍率放大显示。1.00× 表示不放大，'
+                '正在唱的这一行会按这个倍率放大显示，默认 1.12×（轻微放大）。'
+                '1.00× 表示完全不放大，所有行字号一致——此时歌词的层次完全靠'
+                '颜色区分：当前行逐字染色（唱过的字亮青色），其余行统一暗灰。'
                 '调大后整屏能看到的歌词行会变少。',
                 style: const TextStyle(
                     fontSize: 11, color: AppColors.textTertiary),

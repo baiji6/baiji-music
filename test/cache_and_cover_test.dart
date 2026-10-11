@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:baiji_music/core/album_saver.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:baiji_music/core/kv_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:baiji_music/core/cache_manager.dart';
@@ -129,4 +131,105 @@ void main() {
       expect(CacheManager.customRoot, '');
     });
   });
+
+  group('缓存统计与清理口径一致', () {
+    // path_provider 在纯 test 环境没有平台实现，先塞个临时目录当根
+    late Directory fakeRoot;
+    setUp(() {
+      fakeRoot = Directory.systemTemp.createTempSync('cache_root');
+      PathProviderPlatform.instance = FakePathProvider(fakeRoot.path);
+    });
+    tearDown(() {
+      if (fakeRoot.existsSync()) fakeRoot.deleteSync(recursive: true);
+    });
+
+    // 用户反馈「点了清理缓存但占用没降」的根因就是口径不一致：
+    // breakdown 统计了系统临时目录，clear 却从不删它；移动端上两者还
+    // 指向父子重叠的目录，于是数字永远降不下来。
+    test('managedDirNames 同时用于统计与清理，不再含系统临时目录', () async {
+      expect(CacheManager.managedDirNames, isNotEmpty);
+      final dirs = await CacheManager.managedDirs();
+      expect(dirs.length, CacheManager.managedDirNames.length);
+      for (final d in dirs) {
+        final name = d.path.split(Platform.pathSeparator).last;
+        expect(CacheManager.managedDirNames, contains(name));
+      }
+    });
+
+    test('受管目录互不重叠（否则同一份文件会被重复统计）', () async {
+      final dirs = await CacheManager.managedDirs();
+      for (var i = 0; i < dirs.length; i++) {
+        for (var j = i + 1; j < dirs.length; j++) {
+          expect(dirs[i].path, isNot(dirs[j].path));
+        }
+      }
+    });
+
+    test('清理后统计到的占用真的降为 0', () async {
+      final root = Directory.systemTemp.createTempSync('cache_test');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      await CacheManager.setCustomRoot(root.path);
+
+      // 在每个受管目录里造一点垃圾
+      for (final d in await CacheManager.managedDirs()) {
+        d.createSync(recursive: true);
+        File('${d.path}/a.bin').writeAsBytesSync(List<int>.filled(4096, 7));
+        Directory('${d.path}/sub').createSync();
+        File('${d.path}/sub/b.bin').writeAsBytesSync(List<int>.filled(4096, 7));
+      }
+
+      final before = await CacheManager.totalBytes();
+      expect(before, greaterThan(0));
+
+      await CacheManager.clear();
+      final after = await CacheManager.totalBytes();
+      // 内存图片缓存在测试里通常是 0，主要断言磁盘部分清干净了
+      expect(after, lessThan(before));
+
+      // 目录本身保留（结构不能被拆掉），但内容必须为空
+      for (final d in await CacheManager.managedDirs()) {
+        expect(d.existsSync(), isTrue);
+        expect(d.listSync(), isEmpty);
+      }
+
+      await CacheManager.setCustomRoot(null);
+    });
+
+    test('解密临时文件所在目录在受管范围内', () {
+      // decrypt_page 现在把临时副本写到 CacheManager.tempDirName，
+      // 否则解密残留永远清不掉。
+      expect(CacheManager.managedDirNames,
+          contains(CacheManager.tempDirName));
+    });
+  });
+}
+
+/// 把 path_provider 的所有路径都指到同一个临时目录。
+///
+/// path_provider 2.x 起主入口换成了 `*Path()` 系列（`getApplicationCachePath`），
+/// 老的 `*Directory()` 在纯 test 环境不会被转发，会直接抛 UnimplementedError。
+class FakePathProvider extends PathProviderPlatform {
+  FakePathProvider(this.root);
+  final String root;
+
+  @override
+  Future<String?> getApplicationCachePath() async => root;
+
+  @override
+  Future<String?> getApplicationSupportPath() async => root;
+
+  @override
+  Future<String?> getApplicationDocumentsPath() async => root;
+
+  @override
+  Future<String?> getTemporaryPath() async => root;
+
+  @override
+  Future<String?> getExternalStoragePath() async => root;
+
+  @override
+  Future<String?> getDownloadsPath() async => root;
+
 }

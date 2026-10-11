@@ -2,7 +2,7 @@ name: baiji_music
 description: "白姬音乐 - 跨平台音乐播放客户端（iOS / macOS / Windows / Linux / Android / HarmonyOS）"
 publish_to: 'none'
 
-version: 2.2.2-fix3
+version: 2.2.3
 
 environment:
   sdk: ^3.13.5
@@ -54,6 +54,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  # 测试里替换 path_provider 的平台实现（纯 test 环境没有真实实现），
+  # 所以要显式声明为直接依赖。
+  path_provider_platform_interface: ^2.1.0
 
 flutter:
   uses-material-design: true

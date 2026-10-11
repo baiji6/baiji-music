@@ -16,6 +16,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/cache_manager.dart';
 import '../../decrypt/decryptor.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
@@ -96,10 +97,15 @@ class _DecryptPageState extends State<DecryptPage> {
       for (final f in res.files) {
         final p = f.path;
         if (p == null) continue;
-        // file_picker 在部分平台给的是临时缓存路径，移动端要自己落到持久目录
+        // file_picker 在移动端给的是系统临时缓存路径，随时可能被系统回收，
+        // 所以复制一份到 App 自己的缓存目录里再读。
+        //
+        // 放在 CacheManager 的受管子目录，而不是 getTemporaryDirectory()：
+        // 后者在移动端往往就是 cacheRoot 的父目录——既绕过了用户自定义的
+        // 缓存路径，也让这份可能几百 MB 的副本永远清不掉。
         if (Platform.isAndroid || Platform.isIOS) {
-          final cacheDir = (await getTemporaryDirectory()).path;
-          final real = '$cacheDir/${f.name}';
+          final dir = await CacheManager.subDir(CacheManager.tempDirName);
+          final real = '${dir.path}${Platform.pathSeparator}${f.name}';
           if (!await File(real).exists()) {
             await File(p).copy(real);
           }

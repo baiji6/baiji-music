@@ -5,8 +5,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/app_logger.dart';
+import '../../core/kv_store.dart';
 import '../../data/local_music_store.dart';
 import '../../local/local_scanner.dart';
+import '../../local/local_song_query.dart';
 import '../../models/models.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
@@ -31,13 +33,25 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   bool _scanning = false;
   LocalScanProgress? _progress;
   String _hint = '';
+  bool _hintWarn = false;
   Timer? _hintTimer;
 
   bool _showDirs = false;
 
+  // ---- 搜索 / 排序（偏好持久化到 KvStore） ----
+  static const String _kSortKey = 'localMusic.sortKey';
+  static const String _kSortDesc = 'localMusic.sortDesc';
+
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+  LocalSortKey _sortKey = LocalSortKey.title;
+  bool _sortDesc = false;
+  bool _searchOpen = false;
+
   @override
   void initState() {
     super.initState();
+    _restoreSortPref();
     _load();
     // 首次自动扫：只在从没扫过的时候触发，避免每次进页面都扫一遍
     if (!LocalMusicStore.hasScanned()) {
@@ -48,7 +62,50 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   @override
   void dispose() {
     _hintTimer?.cancel();
+    _searchCtrl.dispose();
     super.dispose();
+  }
+
+  void _restoreSortPref() {
+    try {
+      final kv = KvStore.instance;
+      _sortKey = LocalSortKey.fromId(kv.getString(_kSortKey));
+      _sortDesc = kv.getBool(_kSortDesc);
+    } catch (_) {
+      // KvStore 未初始化时用默认值，不影响浏览
+    }
+  }
+
+  Future<void> _setSort(LocalSortKey key, {bool? desc}) async {
+    setState(() {
+      _sortKey = key;
+      if (desc != null) _sortDesc = desc;
+    });
+    try {
+      final kv = KvStore.instance;
+      await kv.setString(_kSortKey, key.id);
+      await kv.setBool(_kSortDesc, _sortDesc);
+    } catch (_) {/* 持久化失败不阻塞交互 */}
+  }
+
+  /// 当前真正要渲染的列表：原始库 → 过滤 → 排序。
+  ///
+  /// 播放队列也用它，保证 `startIndex` 与屏幕上的行号一致。
+  List<Song> get _view => LocalSongQuery.apply(
+        _songs,
+        query: _query,
+        key: _sortKey,
+        desc: _sortDesc,
+      );
+
+  String get _sortLabel => '${_sortKey.label}${_sortDesc ? ' ↓' : ' ↑'}';
+
+  /// 无临时提示时的常驻计数行（同时暴露当前排序方式）。
+  String _countLine() {
+    final total = _songs.length;
+    final shown = _view.length;
+    if (_query.trim().isEmpty) return '共 $total 首 · 按$_sortLabel排列';
+    return '匹配 $shown / $total 首 · 按$_sortLabel排列';
   }
 
   void _load() {
@@ -60,11 +117,17 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
 
   void _flash(String text, {bool warn = false}) {
     _hintTimer?.cancel();
-    setState(() => _hint = text);
+    setState(() {
+      _hint = text;
+      _hintWarn = warn;
+    });
     if (warn) return; // 错误信息保留，直到下次操作
     _hintTimer = Timer(const Duration(seconds: 3), () {
       if (!mounted) return;
-      setState(() => _hint = '');
+      setState(() {
+        _hint = '';
+        _hintWarn = false;
+      });
     });
   }
 
@@ -199,7 +262,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
       _flash('文件已不存在，请重新扫描', warn: true);
       return;
     }
-    PlayerController.instance.playQueue(_songs, startIndex: index);
+    PlayerController.instance.playQueue(_view, startIndex: index);
     setState(() {});
   }
 
@@ -223,24 +286,71 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
         title: const Text('本地音乐'),
         actions: [
           IconButton(
-            tooltip: '重新扫描（增量）',
-            icon: const Icon(Icons.refresh_rounded, color: AppColors.cyan),
-            onPressed: _scanning ? null : () => _scan(),
+            tooltip: _searchOpen ? '关闭搜索' : '搜索本地歌曲',
+            icon: Icon(
+              _searchOpen ? Icons.search_off_rounded : Icons.search_rounded,
+              color: _searchOpen ? AppColors.cyan : null,
+            ),
+            onPressed: () {
+              if (_searchOpen) {
+                _searchCtrl.clear();
+                setState(() {
+                  _searchOpen = false;
+                  _query = '';
+                });
+              } else {
+                setState(() => _searchOpen = true);
+              }
+            },
           ),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert_rounded),
+            tooltip: '排序：$_sortLabel',
+            icon: const Icon(Icons.swap_vert_rounded),
             color: AppColors.bg2,
             onSelected: (v) {
-              switch (v) {
-                case 'dirs':
-                  setState(() => _showDirs = !_showDirs);
-                case 'force':
-                  _scan(force: true);
-                case 'clear':
-                  _clearAll();
+              if (v.startsWith('k:')) {
+                final key = LocalSortKey.fromId(v.substring(2));
+                // 同一项再点一次就翻转升降序
+                _setSort(key, desc: key == _sortKey ? !_sortDesc : false);
+              } else if (v == 'dirs') {
+                setState(() => _showDirs = !_showDirs);
+              } else if (v == 'force') {
+                _scan(force: true);
+              } else if (v == 'clear') {
+                _clearAll();
               }
             },
             itemBuilder: (_) => [
+              for (final k in LocalSortKey.values)
+                PopupMenuItem<String>(
+                  value: 'k:${k.id}',
+                  child: Row(
+                    children: [
+                      Icon(
+                        k == _sortKey
+                            ? Icons.radio_button_checked_rounded
+                            : Icons.radio_button_unchecked_rounded,
+                        size: 17,
+                        color: k == _sortKey
+                            ? AppColors.cyan
+                            : AppColors.textSecondary,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(k.label, style: const TextStyle(fontSize: 13)),
+                      if (k == _sortKey) ...[
+                        const Spacer(),
+                        Icon(
+                          _sortDesc
+                              ? Icons.arrow_downward_rounded
+                              : Icons.arrow_upward_rounded,
+                          size: 15,
+                          color: AppColors.cyan,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              const PopupMenuDivider(),
               PopUpItem(
                 _showDirs ? '隐藏目录管理' : '显示目录管理',
                 'dirs',
@@ -249,6 +359,11 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
               PopUpItem('全量重扫', 'force', Icons.restart_alt_rounded).item,
               PopUpItem('清空列表', 'clear', Icons.delete_outline_rounded).item,
             ],
+          ),
+          IconButton(
+            tooltip: '重新扫描（增量）',
+            icon: const Icon(Icons.refresh_rounded, color: AppColors.cyan),
+            onPressed: _scanning ? null : () => _scan(),
           ),
         ],
       ),
@@ -263,41 +378,93 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
               valueColor: const AlwaysStoppedAnimation<Color>(AppColors.cyan),
             ),
 
+          // 搜索框
+          if (_searchOpen) _buildSearchBar(),
+
           // 目录管理
           if (_showDirs) _buildDirPanel(),
 
-          // 提示行
-          if (_hint.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.info_outline_rounded,
-                    size: 14,
-                    color: AppColors.textTertiary,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      _scanning
-                          ? '正在扫描 ${_progress?.done ?? 0}/${_progress?.total ?? 0}…'
-                          : _hint,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textTertiary,
-                      ),
+          // 提示行 / 计数行
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+            child: Row(
+              children: [
+                Icon(
+                  _hint.isNotEmpty && _hint.contains('失败')
+                      ? Icons.error_outline_rounded
+                      : _scanning
+                          ? Icons.info_outline_rounded
+                          : Icons.library_music_outlined,
+                  size: 14,
+                  color: _hintWarn
+                      ? AppColors.magenta
+                      : AppColors.textTertiary,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _scanning
+                        ? '正在扫描 ${_progress?.done ?? 0}/${_progress?.total ?? 0}…'
+                        : _hint.isNotEmpty
+                            ? _hint
+                            : _countLine(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textTertiary,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
+          ),
 
           Expanded(child: _buildBody(current)),
         ],
       ),
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+      child: GlassCard(
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+        child: Row(
+          children: [
+            const Icon(Icons.search_rounded, size: 18, color: AppColors.textTertiary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                style: const TextStyle(fontSize: 13),
+                cursorColor: AppColors.cyan,
+                textInputAction: TextInputAction.search,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: InputBorder.none,
+                  hintText: '搜索歌名 / 歌手 / 专辑',
+                  hintStyle: TextStyle(fontSize: 13, color: AppColors.textTertiary),
+                ),
+                onChanged: (v) => setState(() => _query = v),
+              ),
+            ),
+            if (_query.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.close_rounded, size: 16),
+                color: AppColors.textTertiary,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () {
+                  _searchCtrl.clear();
+                  setState(() => _query = '');
+                },
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -433,11 +600,45 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
       );
     }
 
+    final view = _view;
+    if (view.isEmpty) {
+      // 有库但搜索/排序后为空 —— 是筛选结果为空，不是没有音乐
+      if (_query.trim().isNotEmpty) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.search_off_rounded,
+                    size: 48, color: AppColors.textTertiary),
+                const SizedBox(height: 14),
+                Text(
+                  '没有匹配「${_query.trim()}」的歌曲',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () {
+                    _searchCtrl.clear();
+                    setState(() => _query = '');
+                  },
+                  child: const Text('清空搜索',
+                      style: TextStyle(fontSize: 12, color: AppColors.cyan)),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    }
+
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      itemCount: _songs.length,
+      itemCount: view.length,
       itemBuilder: (ctx, i) {
-        final s = _songs[i];
+        final s = view[i];
         final playing = current?.mid == s.mid;
         return GlassCard(
           margin: const EdgeInsets.only(bottom: 8),

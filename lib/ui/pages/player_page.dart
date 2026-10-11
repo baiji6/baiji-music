@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/lyric_settings.dart';
 import 'package:baiji_music/data/history_store.dart';
-import 'package:baiji_music/download/download_extras.dart';
 import 'package:baiji_music/download/download_manager.dart';
+import 'package:baiji_music/download/download_task.dart';
 import 'package:baiji_music/lyrics/lyric_model.dart';
+import 'package:baiji_music/metadata/audio_spec.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/lyric_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
@@ -49,7 +49,11 @@ class _PlayerPageState extends State<PlayerPage> {
   int _pageIndex = 0;
 
   /// 下载进度 0~1；null 表示当前没有下载任务（0 表示刚开始、还拿不到总长度）。
+  ///
+  /// 数据来自全局 [DownloadTaskRegistry] 中**当前歌曲**的那个任务，
+  /// 所以离开页面再回来进度还在，也不会因为重建而丢。
   double? _downloadProgress;
+  StreamSubscription<List<DownloadTask>>? _taskSub;
 
   /// 当前歌曲的歌词Future（切歌时重建）。
   Future<Lyrics>? _lyricsFuture;
@@ -70,6 +74,11 @@ class _PlayerPageState extends State<PlayerPage> {
     _playing = _player.isPlaying;
     _syncFavorite();
     _loadLyrics();
+    _syncDownloadProgress();
+    _taskSub = DownloadTaskRegistry.instance.changes.listen((tasks) {
+      if (!mounted) return;
+      setState(() => _syncDownloadProgress(tasks));
+    });
 
     _songSub = _player.onSongChanged.listen((song) {
       if (!mounted) return;
@@ -108,8 +117,28 @@ class _PlayerPageState extends State<PlayerPage> {
     _qualitySub?.cancel();
     _neQualitySub?.cancel();
     _playSub?.cancel();
+    _taskSub?.cancel();
     _pages.dispose();
     super.dispose();
+  }
+
+  /// 把全局任务队列里**当前歌曲**的进度同步到 [_downloadProgress]。
+  ///
+  /// 只关心当前歌曲：下载别的歌不该让当前播放页的按钮转圈。
+  /// 返回值直接给 setState 用，省一次 setState。
+  double? _syncDownloadProgress([List<DownloadTask>? tasks]) {
+    final s = _song;
+    if (s == null) return _downloadProgress = null;
+    final list = tasks ?? DownloadTaskRegistry.instance.tasks;
+    DownloadTask? mine;
+    for (final t in list) {
+      if (t.song.mid == s.mid) {
+        mine = t;
+        break;
+      }
+    }
+    if (mine == null || !mine.state.isActive) return _downloadProgress = null;
+    return _downloadProgress = mine.ratio ?? 0;
   }
 
   void _syncFavorite() {
@@ -233,54 +262,23 @@ class _PlayerPageState extends State<PlayerPage> {
     }
   }
 
+  /// 下载单曲。实际下载交给全局任务队列（进度可在下载管理页看），
+  /// 本页只在下载完成后提示结果——播放器上只留一个轻量提示更干净。
   Future<void> _runDownload(
     Song song, {
     required Quality qq,
     required NeteaseQuality ne,
   }) async {
     if (!mounted) return;
-    setState(() => _downloadProgress = 0);
-    String? path;
-    String? error;
-    try {
-      path = await DownloadManager.instance.download(
-        song,
-        qqQuality: qq,
-        neQuality: ne,
-        onProgress: (done, total) {
-          if (!mounted) return;
-          // 服务端未给出总长度时 total <= 0，退化为不确定进度
-          setState(() => _downloadProgress =
-              total > 0 ? (done / total).clamp(0.0, 1.0) : 0.0);
-        },
-      );
-    } catch (e) {
-      error = '$e';
-    }
+    _showSnack('已加入下载队列');
+    final path = await runManagedDownload(song, qqQuality: qq, neQuality: ne);
     if (!mounted) return;
-    if (error != null) {
-      setState(() => _downloadProgress = null);
-      _showSnack('下载失败: $error', isError: true);
-      return;
-    }
     if (path == null) {
-      setState(() => _downloadProgress = null);
-      _showSnack('下载失败（无可用直链）', isError: true);
+      _showSnack('下载失败，可在下载管理查看原因', isError: true);
       return;
     }
-
-    // 音频已落盘，再按设置补齐歌词 / 封面并写入元数据：
-    // 这一步失败只影响附加信息，不回滚音频，也不再显示进度条。
-    String extra = '';
-    try {
-      extra = await DownloadExtras.attach(filePath: path, song: song);
-    } catch (e) {
-      AppLog.w('PlayerPage', '写入歌词/封面失败: $e');
-    }
-    if (!mounted) return;
-    setState(() => _downloadProgress = null);
     final name = path.split(Platform.pathSeparator).last;
-    _showSnack(extra.isEmpty ? '下载完成: $name' : '$name · $extra');
+    _showSnack('下载完成: $name');
   }
 
   /// 弹出音质选择底部弹层，返回用户选择的音质（取消返回 null）。
@@ -434,7 +432,7 @@ class _PlayerPageState extends State<PlayerPage> {
         },
       );
 
-  /// 封面下方的操作行：下载 + 音质切换。
+  /// 封面下方的操作行：下载 + 音质切换 + 音频规格。
   Widget _buildActions() => Row(
         mainAxisAlignment: MainAxisAlignment.center,
         mainAxisSize: MainAxisSize.min,
@@ -452,8 +450,29 @@ class _PlayerPageState extends State<PlayerPage> {
             onQq: _pickQqQuality,
             onNetease: _pickNeteaseQuality,
           ),
+          const SizedBox(width: 12),
+          // 音频规格（采样率 / 比特率 / 声道 / 编码）
+          IconButton(
+            onPressed: _song == null ? null : _showAudioSpec,
+            icon: const Icon(Icons.graphic_eq_rounded, size: 20),
+            color: AppColors.cyan,
+            disabledColor: AppColors.textTertiary,
+            tooltip: '音频规格',
+          ),
         ],
       );
+
+  /// 打开「音频规格」面板。
+  ///
+  /// 本地歌曲要读文件头、在线流要问解码器，都是异步的——先转圈再填，
+  /// 不用弹窗先空着再突然跳出内容。
+  Future<void> _showAudioSpec() async {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _AudioSpecSheet(),
+    );
+  }
 
   Widget _buildBottom(bool landscape) {
     if (!landscape) {
@@ -1544,20 +1563,18 @@ class _LyricViewState extends State<_LyricView>
     });
   }
 
-  Widget _buildLine(LyricLine line,
-      {required bool isActive, required bool sung}) {
+  Widget _buildLine(LyricLine line, {required bool isActive}) {
     final settings = LyricSettings.instance;
 
-    // 当前行放大并加粗，是整屏的视觉重心；非当前行压小一档形成层次。
+    // 当前行轻微放大加粗，是整屏的视觉重心；非当前行压一档形成层次。
     final size =
         isActive ? settings.fontSize * settings.activeScale : settings.fontSize;
     final weight = isActive ? FontWeight.w800 : FontWeight.w500;
     final height = isActive ? 1.32 : 1.45;
 
     if (!line.isWordLevel) {
-      final color = isActive
-          ? AppColors.textPrimary
-          : (sung ? AppColors.textSecondary : AppColors.textTertiary);
+      final color =
+          isActive ? AppColors.textPrimary : AppColors.textTertiary;
       return Text(
         line.displayText,
         textAlign: settings.textAlign,
@@ -1570,9 +1587,11 @@ class _LyricViewState extends State<_LyricView>
       );
     }
 
-    // 非当前行不必逐帧重绘：整行按"已唱过 / 未唱"静态着色即可。
+    // 非当前行统一暗灰：**不区分已唱 / 未唱**。
+    //
+    // 参考视频里层次完全由"当前行亮青、其余暗灰"建立，已唱过的行并没有
+    // 更亮的残留色——那样整屏会散出一堆半亮不亮的中灰，行与行之间读不清。
     if (!isActive) {
-      final color = sung ? AppColors.textSecondary : AppColors.textTertiary;
       return RichText(
         textAlign: settings.textAlign,
         text: TextSpan(
@@ -1584,7 +1603,7 @@ class _LyricViewState extends State<_LyricView>
                   fontSize: size,
                   height: height,
                   fontWeight: weight,
-                  color: color,
+                  color: AppColors.textTertiary,
                 ),
               ),
           ],
@@ -1592,7 +1611,7 @@ class _LyricViewState extends State<_LyricView>
       );
     }
 
-    // 当前行：逐字染色 + 整行放大。放大只影响字号，
+    // 当前行：逐字染色 + 轻微放大。放大只影响字号，
     // 逐字高亮是另一条独立的渲染链路，两者不能互相取代。
     return _KaraokeLine(
       line: line,
@@ -1629,15 +1648,15 @@ class _LyricViewState extends State<_LyricView>
               child: Container(
                 key: _keys[i],
                 width: double.infinity,
-                // 当前行字号变大了，行距也相应放宽，避免上下行贴上来
+                // 当前行字号略大，行距相应放宽一点即可（不需要原来 16那么大的留白）
                 padding: EdgeInsets.symmetric(
-                    horizontal: 26, vertical: isActive ? 16 : 9),
+                    horizontal: 26, vertical: isActive ? 11 : 9),
                 child: Column(
                   crossAxisAlignment: settings.alignLeft
                       ? CrossAxisAlignment.start
                       : CrossAxisAlignment.center,
                   children: [
-                    _buildLine(line, isActive: isActive, sung: i < _active),
+                    _buildLine(line, isActive: isActive),
                     if (line.translation != null &&
                         line.translation!.isNotEmpty)
                       Padding(
@@ -1693,6 +1712,155 @@ class _LyricViewState extends State<_LyricView>
   }
 }
 
+/// 音频规格面板：采样率 / 比特率 / 声道 / 容器与编码。
+///
+/// 数据来源分两种（见 [AudioSpecService]）：
+/// 本地歌曲直接读文件头，在线流问 libmpv。拿不到的值显示「未知」而不是猜。
+class _AudioSpecSheet extends StatefulWidget {
+  const _AudioSpecSheet();
+
+  @override
+  State<_AudioSpecSheet> createState() => _AudioSpecSheetState();
+}
+
+class _AudioSpecSheetState extends State<_AudioSpecSheet> {
+  late Future<AudioSpec> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = AudioSpecService.ofCurrent();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.bg2,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.textTertiary.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Row(
+                children: [
+                  Icon(Icons.graphic_eq_rounded, size: 18, color: AppColors.cyan),
+                  SizedBox(width: 8),
+                  Text(
+                    '音频规格',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              FutureBuilder<AudioSpec>(
+                future: _future,
+                builder: (ctx, snap) {
+                  if (snap.connectionState != ConnectionState.done) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 26),
+                      child: Center(
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    );
+                  }
+                  final spec = snap.data ?? const AudioSpec();
+                  if (spec.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 22),
+                      child: Text(
+                        '没能读到这首歌的音频规格。'
+                        '在线流要等解码器给出信息，如果刚切歌可以稍等几秒再打开。',
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.6,
+                          color: AppColors.textTertiary,
+                        ),
+                      ),
+                    );
+                  }
+                  final items = spec.items;
+                  return Column(
+                    children: [
+                      for (final it in items)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 7),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(
+                                width: 92,
+                                child: Text(
+                                  it.label,
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    color: AppColors.textTertiary,
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  it.value,
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    color: AppColors.textPrimary,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      const SizedBox(height: 10),
+                      const Text(
+                        '采样率越高还原细节越多；比特率是无损以外的音质档，'
+                        '无损格式（FLAC / ALAC）通常不标注固定码率。',
+                        style: TextStyle(
+                          fontSize: 11,
+                          height: 1.5,
+                          color: AppColors.textTertiary,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
+              Center(
+                child: TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('关闭',
+                      style: TextStyle(color: AppColors.textTertiary)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 当前行的逐字卡拉 OK 染色。
 ///
 /// 与"整行放大"是两条独立的渲染链路：放大决定字号，逐字染色决定颜色，
@@ -1735,9 +1903,10 @@ class _KaraokeLine extends StatelessWidget {
                     fontSize: fontSize,
                     height: height,
                     fontWeight: FontWeight.w800,
-                    //未唱到 = 灰，唱过了 = 亮蓝，正在唱的部分按进度渐变填充。
+                    // 未唱到 = 当前行自己的暗灰（比其它行略亮一点，
+                    // 否则用户分不清"当前行在哪"）；唱过了 = 亮青。
                     color: Color.lerp(
-                      AppColors.textTertiary,
+                      AppColors.textSecondary,
                       AppColors.cyan,
                       _ease(w.progressAt(posMs)),
                     ),

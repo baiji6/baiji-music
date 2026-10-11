@@ -94,12 +94,66 @@ Uint8List _id3Frame(String id, List<int> payload, int major) {
   return b.takeBytes();
 }
 
+/// ID3v2.2 帧：`id(3) + size(3)`，没有 flags 字段。
+///
+/// v2.2（1998 年）只有 3 字节帧 ID 和 3 字节长度，且**没有帧标志**，
+/// 用 v2.3/2.4 的解析器读会整体错位。
+Uint8List id3v22Frame(String id3, List<int> payload) {
+  assert(id3.length == 3, 'v2.2 帧 ID 必须是 3 个字符');
+  final b = bb();
+  b.add(ascii.encode(id3));
+  final n = payload.length;
+  b.add(<int>[(n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF]);
+  b.add(payload);
+  return b.takeBytes();
+}
+
+/// ID3v2.2 的文本帧（`TT2`=标题 / `TP1`=艺术家 / `TAL`=专辑）。
+Uint8List id3v22TextFrame(String id3, String text, Id3Enc enc) =>
+    // _encText 已经带 encoding字节，不要重复加
+    id3v22Frame(id3, _encText(text, enc));
+
+/// SYLT（同步逐字歌词）：`enc(1) + lang(3) + timestampFormat(1) + contentType(1) + desc + 终止符 + 若干同步文本`。
+///
+/// 每条同步文本为 `text\0 + timestamp(4)`，时间戳单位由 timestampFormat 决定
+/// （1 = MPEG 帧号，2 = 毫秒）。这里统一用 2（毫秒），读取端才能直接换算。
+///
+/// [words] 每项是 `(文本, 毫秒)`。
+Uint8List syltFrame(List<(String, int)> words, {Id3Enc enc = Id3Enc.utf8}) {
+  final b = bb();
+  b.addByte(enc.index);
+  b.add(ascii.encode('eng'));
+  b.addByte(2); // timestampFormat: 毫秒
+  b.addByte(1); // contentType: 歌词
+  // 空描述符 + 终止符
+  if (enc == Id3Enc.utf16bom || enc == Id3Enc.utf16be) {
+    b.add(<int>[0x00, 0x00]);
+  } else {
+    b.addByte(0x00);
+  }
+  for (final (text, ms) in words) {
+    if (enc == Id3Enc.utf16bom || enc == Id3Enc.utf16be) {
+      b.add(_utf16Units(text, bigEndian: true));
+      b.add(<int>[0x00, 0x00]); // UTF-16 终止符
+    } else {
+      b.add(enc == Id3Enc.utf8 ? utf8.encode(text) : latin1.encode(text));
+      b.addByte(0x00);
+    }
+    u32be(b, ms);
+  }
+  return _id3Frame('SYLT', b.takeBytes(), 3);
+}
+
 /// TIT2 / TPE1 / TALB 这类文本帧。
 Uint8List _textFrame(String id, String text, Id3Enc enc, int major) =>
     _id3Frame(id, _encText(text, enc), major);
 
 /// USLT：`enc(1) + lang(3) + 描述符 + 终止符 + 正文`，描述符这里留空。
-Uint8List _usltFrame(String lyric, Id3Enc enc, int major) {
+Uint8List _usltFrame(String lyric, Id3Enc enc, int major) =>
+    _id3Frame('USLT', _usltPayload(lyric, enc), major);
+
+/// USLT 的载荷部分（v2.3 的 `USLT` 与 v2.2 的 `ULT ` 通用）。
+Uint8List _usltPayload(String lyric, Id3Enc enc) {
   final b = bb();
   b.addByte(enc.index);
   b.add(ascii.encode('eng'));
@@ -111,7 +165,7 @@ Uint8List _usltFrame(String lyric, Id3Enc enc, int major) {
     b.addByte(0x00);
     b.add(enc == Id3Enc.utf8 ? utf8.encode(lyric) : latin1.encode(lyric));
   }
-  return _id3Frame('USLT', b.takeBytes(), major);
+  return b.takeBytes();
 }
 
 /// APIC：`enc(1) + mime\0 + picType(1) + 描述 + 终止符 + 图片数据`。
@@ -141,12 +195,32 @@ Uint8List buildId3v2({
   Id3Enc enc = Id3Enc.utf8,
   int major = 3,
   int padding = 0,
+  List<(String, int)>? sylt,
+  List<String> v22Titles = const [],
 }) {
   final body = bb();
-  if (title.isNotEmpty) body.add(_textFrame('TIT2', title, enc, major));
-  if (artist.isNotEmpty) body.add(_textFrame('TPE1', artist, enc, major));
-  if (album.isNotEmpty) body.add(_textFrame('TALB', album, enc, major));
-  if (lyric.isNotEmpty) body.add(_usltFrame(lyric, enc, major));
+  // major == 2 时整张标签都得用 v2.2 的 3 字节帧 ID + 3 字节长度，
+  // 混用 v2.3 帧会让真实解析器（和被测代码）整体错位。
+  if (major == 2) {
+    if (title.isNotEmpty) body.add(id3v22TextFrame('TT2', title, enc));
+    if (artist.isNotEmpty) body.add(id3v22TextFrame('TP1', artist, enc));
+    if (album.isNotEmpty) body.add(id3v22TextFrame('TAL', album, enc));
+    if (lyric.isNotEmpty) {
+      body.add(id3v22Frame('ULT', _usltPayload(lyric, enc)));
+    }
+    for (final t in v22Titles) {
+      body.add(id3v22TextFrame('TT2', t, enc));
+    }
+  } else {
+    if (title.isNotEmpty) body.add(_textFrame('TIT2', title, enc, major));
+    if (artist.isNotEmpty) body.add(_textFrame('TPE1', artist, enc, major));
+    if (album.isNotEmpty) body.add(_textFrame('TALB', album, enc, major));
+    if (lyric.isNotEmpty) body.add(_usltFrame(lyric, enc, major));
+    if (sylt != null) body.add(syltFrame(sylt, enc: enc));
+    for (final t in v22Titles) {
+      body.add(id3v22TextFrame('TT2', t, enc));
+    }
+  }
   if (cover != null) body.add(_apicFrame(cover, coverMime, enc, major));
   if (padding > 0) body.add(List<int>.filled(padding, 0));
 
@@ -245,6 +319,8 @@ Uint8List buildMp3({
   int audioBytes = 8192,
   int bitrateKbps = 128,
   int sampleRate = 44100,
+  List<(String, int)>? sylt,
+  List<String> v22Titles = const [],
 }) {
   final out = bb();
 
@@ -258,6 +334,8 @@ Uint8List buildMp3({
       coverMime: coverMime,
       enc: enc,
       major: id3Major,
+      sylt: sylt,
+      v22Titles: v22Titles,
     ));
   }
 
@@ -433,6 +511,58 @@ Uint8List mvhdBox({int timescale = 44100, int duration = 0, int version = 0}) {
   return mkBox('mvhd', p.takeBytes());
 }
 
+/// `mp4a` 音频采样条目（AudioSampleEntry）。
+///
+/// offset 16 起是 16 bit 声道数，offset 24 起是 16.16 定点采样率——
+/// 这两处才是**真实**音频参数（`mvhd.timescale` 是影片时长时间基，通常 1000，
+/// 拿它当采样率是错的）。
+Uint8List mp4aEntry({
+  int sampleRate = 44100,
+  int channels = 2,
+  String format = 'mp4a',
+}) {
+  final p = bb();
+  p.add(List<int>.filled(6, 0)); // reserved(6)
+  p.add(<int>[0, 1]); // data_reference_index = 1
+  p.add(<int>[0, 0]); // version
+  p.add(<int>[0, 0]); // revision
+  p.add(<int>[0, 0, 0, 0]); // vendor
+  p.add(<int>[(channels >> 8) & 0xFF, channels & 0xFF]); // channelcount
+  p.add(<int>[0, 16]); // sampleSize = 16 bit
+  p.add(<int>[0, 0]); // pre_defined
+  p.add(<int>[0, 0]); // reserved
+  p.add(<int>[
+    (sampleRate >> 8) & 0xFF, sampleRate & 0xFF, // 16.16 定点：整数部分
+    0, 0, // 小数部分
+  ]);
+  p.add(<int>[0, 0, 0, 0]); // 压缩后为 0（VBR 时无意义）
+  return mkBox(format, p.takeBytes());
+}
+
+/// `stsd` 采样描述表（FullBox）。
+Uint8List stsdBox(Uint8List entry) {
+  final p = bb();
+  p.add(<int>[0, 0, 0, 0]); // version + flags
+  p.add(<int>[0, 0, 0, 1]); // entry_count = 1
+  p.add(entry);
+  return mkBox('stsd', p.takeBytes());
+}
+
+/// 最小可解析的 trak → mdia → minf → stbl → stsd 链路。
+///
+/// 有了它，读取端才能拿到真实采样率/声道/编码；只有 mvhd 的假盒子会让
+/// 采样率恒为 0。
+Uint8List audioTrak({
+  int sampleRate = 44100,
+  int channels = 2,
+}) {
+  final stsd = stsdBox(mp4aEntry(sampleRate: sampleRate, channels: channels));
+  final stbl = mkBox('stbl', <int>[...stsd]);
+  final minf = mkBox('minf', <int>[...stbl]);
+  final mdia = mkBox('mdia', <int>[...minf]);
+  return mkBox('trak', <int>[...mdia]);
+}
+
 /// ilst 条目：`data` 盒包一层，内容为 UTF-8 文本或图片字节。
 Uint8List _ilstTextItem(String type, String text) {
   final d = bb();
@@ -460,6 +590,8 @@ Uint8List buildMp4({
   int duration = 0,
   int mvhdVersion = 0,
   bool moovAtTail = false,
+  int sampleRate = 0,
+  int channels = 2,
 }) {
   final items = bb();
   if (title.isNotEmpty) items.add(_ilstTextItem('©nam', title));
@@ -478,7 +610,11 @@ Uint8List buildMp4({
     duration: duration,
     version: mvhdVersion,
   );
-  final trak = mkBox('trak', List<int>.filled(32, 0));
+  // sampleRate <= 0 时退化为"只有 mvhd 的空架子"，用于验证读取端不会把
+  // mvhd.timescale 误当采样率。
+  final trak = sampleRate > 0
+      ? audioTrak(sampleRate: sampleRate, channels: channels)
+      : mkBox('trak', List<int>.filled(32, 0));
   final moov = mkBox('moov', <int>[...mvhd, ...trak, ...udta]);
 
   final ftyp = mkBox('ftyp', List<int>.filled(8, 0));
