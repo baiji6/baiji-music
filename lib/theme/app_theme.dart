@@ -36,6 +36,10 @@ class AppColors {
   static const Color success = Color(0xFF2EE6A8);
   static const Color warning = Color(0xFFFFB74D);
 
+  // 歌词逐字填充的已唱色：荧光黄绿，取自参考视频的实测色值
+  // （#A6F684 一档），与 success 的青绿刻意区分开。
+  static const Color karaoke = Color(0xFFA8F685);
+
   // 辉光
   static const List<Color> glowCyan = [Color(0x5500E5FF), Color(0x0000E5FF)];
   static const List<Color> glowViolet = [Color(0x557C4DFF), Color(0x007C4DFF)];

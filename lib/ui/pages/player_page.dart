@@ -6,6 +6,7 @@ import 'package:baiji_music/core/lyric_settings.dart';
 import 'package:baiji_music/data/history_store.dart';
 import 'package:baiji_music/download/download_manager.dart';
 import 'package:baiji_music/download/download_task.dart';
+import 'package:baiji_music/lyrics/karaoke_fill.dart';
 import 'package:baiji_music/lyrics/lyric_model.dart';
 import 'package:baiji_music/metadata/audio_spec.dart';
 import 'package:baiji_music/models/models.dart';
@@ -1589,30 +1590,24 @@ class _LyricViewState extends State<_LyricView>
 
     // 非当前行统一暗灰：**不区分已唱 / 未唱**。
     //
-    // 参考视频里层次完全由"当前行亮青、其余暗灰"建立，已唱过的行并没有
-    // 更亮的残留色——那样整屏会散出一堆半亮不亮的中灰，行与行之间读不清。
+    // 参考视频里层次完全由"当前行白字被逐字填成绿色、其余暗灰"建立，
+    // 已唱过的行并没有更亮的残留色——那样整屏会散出一堆半亮不亮的中灰，
+    // 行与行之间读不清。颜色统一后逐字 span 可以合并成整行 Text。
     if (!isActive) {
-      return RichText(
+      return Text(
+        line.displayText,
         textAlign: settings.textAlign,
-        text: TextSpan(
-          children: [
-            for (final w in line.words)
-              TextSpan(
-                text: w.text,
-                style: TextStyle(
-                  fontSize: size,
-                  height: height,
-                  fontWeight: weight,
-                  color: AppColors.textTertiary,
-                ),
-              ),
-          ],
+        style: TextStyle(
+          fontSize: size,
+          height: height,
+          fontWeight: weight,
+          color: AppColors.textTertiary,
         ),
       );
     }
 
-    // 当前行：逐字染色 + 轻微放大。放大只影响字号，
-    // 逐字高亮是另一条独立的渲染链路，两者不能互相取代。
+    // 当前行：逐字填充 + 轻微放大。放大只影响字号，
+    // 逐字填满是另一条独立的渲染链路，两者不能互相取代。
     return _KaraokeLine(
       line: line,
       head: _head,
@@ -1861,11 +1856,23 @@ class _AudioSpecSheetState extends State<_AudioSpecSheet> {
   }
 }
 
-/// 当前行的逐字卡拉 OK 染色。
+/// 当前行的逐字卡拉 OK 填充。
 ///
-/// 与"整行放大"是两条独立的渲染链路：放大决定字号，逐字染色决定颜色，
-/// 两者必须同时存在——只放大不染色，逐字歌词就等于没了。
-class _KaraokeLine extends StatelessWidget {
+/// 严格对照视频效果：每个字在自己的起止时间内**从左往右逐渐填满**——
+/// 字的左半是已唱色、右半是未唱色，填充边界是一条竖线，随播放推进扫过
+/// 整个字，直到该字结束才完全变绿。**不是**整字一起渐变跳色。
+///
+/// 实现方式：[ShaderMask] + 分段 [LinearGradient]。
+/// - 用 [TextPainter] 量出每个字在行内的水平区间 `[left, right]`（文本
+///   不变时缓存，播放期间只重算填充进度，不重新排版）；
+/// - 每个字按 `progressAt` 算出填充前沿 `left + 宽度×进度`，在渐变上放
+///   「前沿之前 = 已唱色、之后 = 未唱色」的硬 stop，即得到竖直边界；
+/// - `BlendMode.srcIn` 用渐变整体替换文字颜色，文字本身的 alpha（字形）
+///   原样保留。
+///
+/// 与"整行放大"是两条独立的渲染链路：放大决定字号，逐字填充决定颜色，
+/// 两者必须同时存在——只放大不填充，逐字歌词就等于没了。
+class _KaraokeLine extends StatefulWidget {
   const _KaraokeLine({
     required this.line,
     required this.head,
@@ -1880,40 +1887,139 @@ class _KaraokeLine extends StatelessWidget {
   final double height;
   final TextAlign align;
 
-  /// smoothstep：把线性进度映射为 S 曲线，起止更柔和，不再有"跳一格"的生硬感。
-  static double _ease(double p) {
-    if (p <= 0) return 0;
-    if (p >= 1) return 1;
-    return p * p * (3 - 2 * p);
+  @override
+  State<_KaraokeLine> createState() => _KaraokeLineState();
+}
+
+class _KaraokeLineState extends State<_KaraokeLine> {
+  /// 每个字在行内的水平区间（像素）。空列表 = 该字无文本（QRC 罗马音占位）。
+  List<List<double>>? _wordSpans;
+
+  /// 量取 [_wordSpans] 时使用的排版宽度，用于判断缓存是否失效。
+  double _laidWidth = -1;
+
+  /// 排版后的内容宽度（归一化 stop 用；多行换行时等于排版宽度）。
+  double _contentWidth = 0;
+
+  TextSpan _span(Color color) => TextSpan(
+        children: [
+          for (final w in widget.line.words)
+            TextSpan(
+              text: w.text,
+              style: TextStyle(
+                fontSize: widget.fontSize,
+                height: widget.height,
+                fontWeight: FontWeight.w800,
+                color: color,
+              ),
+            ),
+        ],
+      );
+
+  /// 用 TextPainter 量每个字的水平区间。文本/字号/宽度不变时直接复用，
+  /// 避免每帧重排版——播放期间这里只在进度 tick 里被调用。
+  void _measure(double maxWidth) {
+    if (_wordSpans != null && _laidWidth == maxWidth) return;
+    final painter = TextPainter(
+      text: _span(Colors.white),
+      textAlign: widget.align,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: maxWidth);
+
+    final spans = <List<double>>[];
+    var offset = 0;
+    for (final w in widget.line.words) {
+      final len = w.text.length;
+      if (len > 0) {
+        final boxes = painter.getBoxesForSelection(
+          TextSelection(baseOffset: offset, extentOffset: offset + len),
+        );
+        if (boxes.isNotEmpty) {
+          var left = double.infinity;
+          var right = double.negativeInfinity;
+          for (final b in boxes) {
+            if (b.left < left) left = b.left;
+            if (b.right > right) right = b.right;
+          }
+          spans.add([left, right]);
+        } else {
+          spans.add(const <double>[]);
+        }
+      } else {
+        spans.add(const <double>[]);
+      }
+      offset += len;
+    }
+    _wordSpans = spans;
+    _contentWidth = painter.width;
+    _laidWidth = maxWidth;
+    painter.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _KaraokeLine oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.line != widget.line ||
+        oldWidget.fontSize != widget.fontSize ||
+        oldWidget.height != widget.height ||
+        oldWidget.align != widget.align) {
+      _wordSpans = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _wordSpans = null;
+    super.dispose();
+  }
+
+  Gradient? _buildGradient(int posMs) {
+    final spans = _wordSpans;
+    if (spans == null || _contentWidth <= 0) return null;
+
+    // 已唱 = 荧光黄绿（视频实测色值），未唱 = 亮白。分段逻辑在
+    // KaraokeFill 里，那里是纯函数，有独立单测覆盖各种进度组合。
+    final built = KaraokeFill.build(
+      wordSpans: spans,
+      ratios: [
+        for (final w in widget.line.words) w.progressAt(posMs),
+      ],
+      width: _contentWidth,
+      sung: AppColors.karaoke,
+      unsung: AppColors.textPrimary,
+    );
+    if (built == null) return null;
+    return LinearGradient(
+      colors: built.$2,
+      stops: built.$1,
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return RepaintBoundary(
       child: ValueListenableBuilder<int>(
-        valueListenable: head,
-        builder: (ctx, posMs, _) => RichText(
-          textAlign: align,
-          text: TextSpan(
-            children: [
-              for (final w in line.words)
-                TextSpan(
-                  text: w.text,
-                  style: TextStyle(
-                    fontSize: fontSize,
-                    height: height,
-                    fontWeight: FontWeight.w800,
-                    // 未唱到 = 当前行自己的暗灰（比其它行略亮一点，
-                    // 否则用户分不清"当前行在哪"）；唱过了 = 亮青。
-                    color: Color.lerp(
-                      AppColors.textSecondary,
-                      AppColors.cyan,
-                      _ease(w.progressAt(posMs)),
-                    ),
-                  ),
-                ),
-            ],
-          ),
+        valueListenable: widget.head,
+        builder: (ctx, posMs, _) => LayoutBuilder(
+          builder: (ctx, constraints) {
+            final maxWidth = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : double.infinity;
+            _measure(maxWidth);
+            final gradient = _buildGradient(posMs);
+            final child = RichText(
+              textAlign: widget.align,
+              text: _span(Colors.white),
+            );
+            if (gradient == null) return child;
+            return ShaderMask(
+              blendMode: BlendMode.srcIn,
+              shaderCallback: (bounds) => gradient.createShader(bounds),
+              child: child,
+            );
+          },
         ),
       ),
     );
