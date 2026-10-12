@@ -6,6 +6,62 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.2.4
+
+本版本一共五项改动：歌词渲染更顺滑、歌词三色可调、更新检测修复误判、
+歌词字重与圆角可调，以及一次**全 App 的 UI 框架切换**。
+
+### ✨ 新增
+
+**歌词颜色自定义（RGB 取色，默认白）**
+
+播放页新增歌词配色面板，已唱色 / 当前行未唱色 / 非当前行色三色均可独立调节：
+
+- 默认保持视频实测值：已唱荧光黄绿 `#A8F685`、当前行白 `#FFFFFF`、非当前行暗灰
+- 支持 RGB 三个通道滑条微调 + 十六进制输入 + 预设色板，改完即时生效
+- 设置持久化到本地，重启后恢复；一键重置回默认
+
+**歌词字重与圆角可调**
+
+- 字重：300~900 十档可调（默认 800），非当前行自动比当前行轻一档
+- 歌词行圆角：0~40 可调（默认 24），作用于歌词面板背景
+- 两项均实时预览、越界自动钳制、可重置
+
+### 🔧 修复
+
+**歌词过渡平滑化**
+
+逐字填充的边界不再是硬切换：每个字的填充前沿增加一段渐变过渡带，
+上一字唱完与下一字唱起之间不再"跳色"，视觉上连续跟进。
+
+**版本号带 fix 字样时检测更新误判最新**
+
+`2.2.3-fix1` 这类带 `-fixN` 后缀的本地版本，此前与 tag `v2.2.3` 比较时
+被判定为"已是最新"，实际 GitHub 上已有新版本。语义化版本比较现在会先
+剥离预发布/构建后缀再按主次修订号比较，并正确识别 `fixN` 迭代高于同号发行版。
+
+### 🎨 UI
+
+**全 App 界面切换为 Miuix 设计语言**
+
+所有页面的控件由 Material 系统一换成 Miuix 组件，视觉与交互一致：
+
+| 场景 | 之前（Material） | 现在（Miuix） |
+|---|---|---|
+| 页面骨架 | `Scaffold` + `AppBar` | `MiuixScaffold` + `MiuixTopAppBar` |
+| 对话框 / 底部弹层 | 命令式 `showDialog` / `showModalBottomSheet` | 声明式 `MiuixOverlayDialog` / `MiuixOverlayBottomSheet` |
+| 列表行 | `ListTile` | `MiuixPressable` 自定义行 |
+| 输入框 | `TextField` + `InputDecoration` | `MiuixTextField` |
+| 按钮 | `TextButton` / `IconButton` / `FloatingActionButton` | `MiuixTextButton` / `MiuixIconButton` / `MiuixFloatingActionButton` |
+| 分割线 | `Divider` | `MiuixHorizontalDivider` |
+| 进度 | `CircularProgressIndicator` / `LinearProgressIndicator` | `MiuixCircularProgressIndicator` / `MiuixLinearProgressIndicator` |
+| 下拉刷新 | `RefreshIndicator` | `MiuixPullToRefresh` |
+| 提示条 | `SnackBar` + `ScaffoldMessenger` | 全局 `showAppSnack` + `MiuixSnackbarHost` |
+
+霓虹品牌组件（GlassCard / NeonButton / NeonText / TagBadge / CoverImage）保留原视觉，
+仅把按压反馈升级为 Miuix 的按压曲线。全局圆角由 Miuix squircle 主题统一承担，
+歌词卡片圆角仍可按上一节单独调节。
+
 ## 2.2.3-fix1
 
 逐字歌词的填充方式按视频逐帧核对后重做。上一版（2.2.3）的效果是**整字渐变跳色**，

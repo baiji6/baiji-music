@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../data/history_store.dart';
 import '../../player/player_controller.dart';
@@ -20,24 +21,29 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   Widget build(BuildContext context) {
     final recent = HistoryStore.playHistory();
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('播放历史'),
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      topBar: MiuixTopAppBar(
+        title: '播放历史',
+        color: Colors.transparent,
+        navigationIcon: MiuixIconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: AppColors.textPrimary, size: 20),
+        ),
         actions: [
           if (recent.isNotEmpty)
-            TextButton(
+            MiuixTextButton(
+              '清空',
               onPressed: () {
                 HistoryStore.clearPlay();
                 _refresh();
               },
-              child: const Text('清空', style: TextStyle(color: AppColors.danger, fontSize: 13)),
+              textStyle: const TextStyle(color: AppColors.danger, fontSize: 13),
             ),
         ],
       ),
-      body: recent.isEmpty
+      content: (padding) => recent.isEmpty
           ? const Center(
               child: Text(
                 '暂无播放记录\n去搜索页听一首歌吧',
@@ -48,45 +54,66 @@ class _HistoryPageState extends State<HistoryPage> {
           : ListView.builder(
               padding: const EdgeInsets.all(16),
               itemCount: recent.length,
-              itemBuilder: (ctx, i) => GlassCard(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  leading: CoverImage(song: recent[i], size: 44, radius: 10),
-                  title: Text(
-                    recent[i].name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: PlayerController.instance.currentSong?.mid == recent[i].mid
-                          ? AppColors.cyan
-                          : null,
+              itemBuilder: (ctx, i) {
+                final song = recent[i];
+                final isCurrent =
+                    PlayerController.instance.currentSong?.mid == song.mid;
+                return GlassCard(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  child: MiuixPressable(
+                    onPressed: () {
+                      PlayerController.instance.playQueue(recent, startIndex: i);
+                      _refresh();
+                    },
+                    borderRadius: BorderRadius.circular(18),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      child: Row(
+                        children: [
+                          CoverImage(song: song, size: 44, radius: 10),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  song.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: isCurrent
+                                        ? AppColors.cyan
+                                        : AppColors.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  song.singer,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: AppColors.textTertiary),
+                                ),
+                              ],
+                            ),
+                          ),
+                          TagBadge(
+                            song.isNetease ? '网易云' : 'QQ',
+                            color: song.isNetease
+                                ? AppColors.magenta
+                                : AppColors.cyan,
+                          ),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.play_arrow_rounded,
+                              color: AppColors.cyan, size: 24),
+                        ],
+                      ),
                     ),
                   ),
-                  subtitle: Text(
-                    recent[i].singer,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TagBadge(
-                        recent[i].isNetease ? '网易云' : 'QQ',
-                        color: recent[i].isNetease ? AppColors.magenta : AppColors.cyan,
-                      ),
-                      const SizedBox(width: 8),
-                      const Icon(Icons.play_arrow_rounded, color: AppColors.cyan, size: 24),
-                    ],
-                  ),
-                  onTap: () {
-                    PlayerController.instance.playQueue(recent, startIndex: i);
-                    _refresh();
-                  },
-                ),
-              ),
+                );
+              },
             ),
     );
   }

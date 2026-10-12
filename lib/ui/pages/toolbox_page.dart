@@ -5,6 +5,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
@@ -15,13 +16,18 @@ class ToolboxPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('工具箱'),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      topBar: MiuixTopAppBar(
+        title: '工具箱',
+        color: Colors.transparent,
+        navigationIcon: MiuixIconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: AppColors.textPrimary, size: 20),
+        ),
       ),
-      body: ListView(
+      content: (padding) => ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
         children: const [
           SectionHeader(title: '音乐工具'),

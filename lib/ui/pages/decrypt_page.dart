@@ -14,11 +14,13 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/cache_manager.dart';
 import '../../decrypt/decryptor.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 import 'decrypt_keys_page.dart';
 
@@ -299,19 +301,25 @@ class _DecryptPageState extends State<DecryptPage> {
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    showAppSnack(msg);
   }
 
   @override
   Widget build(BuildContext context) {
     final total = _tasks.length;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('本地音乐解密'),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
+      topBar: MiuixTopAppBar(
+        title: '本地音乐解密',
+        color: Colors.transparent,
+        navigationIcon: MiuixIconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: AppColors.textPrimary, size: 20),
+        ),
       ),
-      body: ListView(
+      content: (padding) => ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
         children: [
           // 说明
@@ -355,19 +363,15 @@ class _DecryptPageState extends State<DecryptPage> {
           // 密钥
           SectionHeader(
             title: '密钥',
-            trailing: TextButton.icon(
+            trailing: MiuixTextButton(
+              '密钥管理',
               onPressed: () async {
                 await Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => const DecryptKeysPage(),
                 ));
                 await _loadKeys();
               },
-              icon: const Icon(Icons.key_rounded, size: 16),
-              label: const Text('密钥管理'),
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.cyan,
-                textStyle: const TextStyle(fontSize: 12),
-              ),
+              textStyle: const TextStyle(color: AppColors.cyan, fontSize: 12),
             ),
           ),
           GlassCard(
@@ -427,10 +431,10 @@ class _DecryptPageState extends State<DecryptPage> {
             title: '待解密文件',
             trailing: total == 0
                 ? null
-                : TextButton(
+                : MiuixTextButton(
+                    '清空',
                     onPressed: _busy ? null : _clear,
-                    child: const Text('清空',
-                        style: TextStyle(fontSize: 12)),
+                    textStyle: const TextStyle(fontSize: 12),
                   ),
           ),
           Row(
@@ -491,36 +495,67 @@ class _DecryptPageState extends State<DecryptPage> {
           GlassCard(
             padding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              leading: const Icon(Icons.save_alt_rounded,
-                  size: 20, color: AppColors.cyan),
-              title: Text(
-                _outputDir ?? '未选择',
-                style: const TextStyle(
-                    fontSize: 12, color: AppColors.textSecondary),
+            child: MiuixPressable(
+              onPressed: _busy ? null : _chooseOutputDir,
+              borderRadius: BorderRadius.circular(18),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    const Icon(Icons.save_alt_rounded,
+                        size: 20, color: AppColors.cyan),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _outputDir ?? '未选择',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textSecondary),
+                      ),
+                    ),
+                    const Icon(Icons.edit_outlined, size: 17),
+                  ],
+                ),
               ),
-              trailing: const Icon(Icons.edit_outlined, size: 17),
-              onTap: _busy ? null : _chooseOutputDir,
             ),
           ),
         ],
       ),
       floatingActionButton: _busy
-          ? FloatingActionButton.extended(
+          ? MiuixFloatingActionButton(
               onPressed: _cancel,
-              backgroundColor: AppColors.danger,
-              foregroundColor: Colors.white,
-              icon: const Icon(Icons.stop_rounded),
-              label: Text('停止 $_finished/$total'),
+              containerColor: AppColors.danger,
+              child: MiuixContentColor(
+                color: Colors.white,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.stop_rounded),
+                      const SizedBox(width: 6),
+                      Text('停止 $_finished/$total'),
+                    ],
+                  ),
+                ),
+              ),
             )
-          : FloatingActionButton.extended(
+          : MiuixFloatingActionButton(
               onPressed: _start,
-              backgroundColor: AppColors.cyan,
-              foregroundColor: Colors.black,
-              icon: const Icon(Icons.lock_open_rounded),
-              label: const Text('开始解密'),
+              containerColor: AppColors.cyan,
+              child: MiuixContentColor(
+                color: Colors.black,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 18),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock_open_rounded),
+                      SizedBox(width: 6),
+                      Text('开始解密'),
+                    ],
+                  ),
+                ),
+              ),
             ),
     );
   }
@@ -614,8 +649,8 @@ class _TaskTile extends StatelessWidget {
             width: 18,
             height: 18,
             child: task.running
-                ? const CircularProgressIndicator(
-                    strokeWidth: 2, color: AppColors.cyan)
+                ? const MiuixCircularProgressIndicator(
+                    size: 18, strokeWidth: 2)
                 : Icon(
                     task.error != null
                         ? Icons.error_outline_rounded

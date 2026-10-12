@@ -14,11 +14,13 @@ import 'package:baiji_music/network/lyric_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/core/album_saver.dart';
+import 'package:baiji_music/ui/widgets/app_snackbar.dart';
 import 'package:baiji_music/ui/widgets/cover_image.dart';
 import 'package:baiji_music/ui/widgets/lyric_style_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/scheduler.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 /// 播放页：封面 + 进度条 + 播放控制 + 平台化音质切换 + 下载 + 歌词（逐字/译文/点击跳转）。
 ///
@@ -59,6 +61,15 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 当前歌曲的歌词Future（切歌时重建）。
   Future<Lyrics>? _lyricsFuture;
   String _lyricsKey = '';
+
+  // ===== Miuix 声明式弹层的显隐 =====
+  bool _showLyricStyleSheet = false;
+  bool _showAudioSpecSheet = false;
+  bool _showDownloadQualitySheet = false;
+  bool _showPlayQualitySheet = false;
+
+  /// 下载音质弹层正在为哪首歌选音质。
+  Song? _pendingDownloadSong;
 
   StreamSubscription<Song?>? _songSub;
   StreamSubscription<Quality?>? _qualitySub;
@@ -166,13 +177,7 @@ class _PlayerPageState extends State<PlayerPage> {
 
   void _showSnack(String msg, {bool isError = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg, style: const TextStyle(fontSize: 13)),
-        backgroundColor: isError ? AppColors.danger : AppColors.cyan,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    showAppSnack(msg);
   }
 
   Future<void> _toggleFavorite() async {
@@ -231,35 +236,33 @@ class _PlayerPageState extends State<PlayerPage> {
 
   // ===== 下载（按平台选音质） =====
 
+  /// 第一步：弹音质选择（Miuix 声明式弹层），选完再走 [_onDownloadQualityPicked]。
   Future<void> _download() async {
     final s = _song;
     if (s == null || _downloadProgress != null) return;
+    setState(() {
+      _pendingDownloadSong = s;
+      _showDownloadQualitySheet = true;
+    });
+  }
 
+  /// 第二步：音质已选好，落库并加入下载队列。
+  Future<void> _onDownloadQualityPicked(Object picked) async {
+    final s = _pendingDownloadSong;
+    setState(() {
+      _showDownloadQualitySheet = false;
+      _pendingDownloadSong = null;
+    });
+    if (s == null) return;
     final dm = DownloadManager.instance;
     if (s.isNetease) {
-      final picked = await _pickQuality<NeteaseQuality>(
-        title: '下载音质 · 网易云音乐',
-        options: NeteaseQuality.downloadOptions,
-        current: dm.neQuality,
-        label: (q) => q.label,
-        subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
-      );
-      if (picked == null || !mounted) return;
-      await dm.saveNeQuality(picked);
-      await _runDownload(s, qq: dm.qqQuality, ne: picked);
+      final q = picked as NeteaseQuality;
+      await dm.saveNeQuality(q);
+      await _runDownload(s, qq: dm.qqQuality, ne: q);
     } else {
-      final picked = await _pickQuality<Quality>(
-        title: '下载音质 · QQ 音乐',
-        options: Quality.downloadOptions,
-        current: dm.qqQuality,
-        label: (q) => q.label,
-        subtitle: (q) => q.bitrate > 0
-            ? '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}'
-            : q.ext.replaceFirst('.', '').toUpperCase(),
-      );
-      if (picked == null || !mounted) return;
-      await dm.saveQqQuality(picked);
-      await _runDownload(s, qq: picked, ne: dm.neQuality);
+      final q = picked as Quality;
+      await dm.saveQqQuality(q);
+      await _runDownload(s, qq: q, ne: dm.neQuality);
     }
   }
 
@@ -286,36 +289,16 @@ class _PlayerPageState extends State<PlayerPage> {
   ///
   /// 用 [isScrollControlled] + 固定 72% 高度 + [ListView.builder]，
   /// 保证 QQ 音乐 17 档（末档 AAC 48）一定能滚到、看得见。
-  Future<T?> _pickQuality<T>({
-    required String title,
-    required List<T> options,
-    required T current,
-    required String Function(T) label,
-    String Function(T)? subtitle,
-  }) {
-    return showModalBottomSheet<T>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => _QualitySheet<T>(
-        title: title,
-        options: options,
-        current: current,
-        label: label,
-        subtitle: subtitle,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final song = _song;
     final landscape =
         MediaQuery.of(context).orientation == Orientation.landscape;
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Container(
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
+      content: (_) => Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
@@ -349,6 +332,89 @@ class _PlayerPageState extends State<PlayerPage> {
           ),
         ),
       ),
+      // Miuix 弹层统一挂在脚手架的 popup 作用域内（Stack 本身不占布局）
+      bottomBar: _buildSheets(),
+    );
+  }
+
+  /// 播放页的全部声明式弹层（歌词样式 / 音频规格 / 下载音质 / 播放音质）。
+  Widget _buildSheets() {
+    final song = _song;
+    return Stack(
+      children: [
+        // 歌词样式（字号 / 对齐 / 放大 / 字重 / 圆角 / 三色）
+        showLyricStyleSheet(
+          show: _showLyricStyleSheet,
+          onDismiss: () => setState(() => _showLyricStyleSheet = false),
+        ),
+        // 音频规格
+        MiuixOverlayBottomSheet(
+          show: _showAudioSpecSheet,
+          title: '音频规格',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () => setState(() => _showAudioSpecSheet = false),
+          content: _AudioSpecSheet(
+            onDismiss: () => setState(() => _showAudioSpecSheet = false),
+          ),
+        ),
+        // 下载音质（按平台）
+        MiuixOverlayBottomSheet(
+          show: _showDownloadQualitySheet,
+          title: song != null && song.isNetease
+              ? '下载音质 · 网易云音乐'
+              : '下载音质 · QQ 音乐',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () => setState(() {
+            _showDownloadQualitySheet = false;
+            _pendingDownloadSong = null;
+          }),
+          content: song != null && song.isNetease
+              ? _QualitySheet<NeteaseQuality>(
+                  options: NeteaseQuality.downloadOptions,
+                  current: DownloadManager.instance.neQuality,
+                  label: (q) => q.label,
+                  subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
+                  onSelect: (q) => _onDownloadQualityPicked(q),
+                )
+              : _QualitySheet<Quality>(
+                  options: Quality.downloadOptions,
+                  current: DownloadManager.instance.qqQuality,
+                  label: (q) => q.label,
+                  subtitle: (q) => q.bitrate > 0
+                      ? '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}'
+                      : q.ext.replaceFirst('.', '').toUpperCase(),
+                  onSelect: (q) => _onDownloadQualityPicked(q),
+                ),
+        ),
+        // 播放音质切换（按平台）
+        MiuixOverlayBottomSheet(
+          show: _showPlayQualitySheet,
+          title: song != null && song.isNetease
+              ? '网易云音乐 · 播放音质'
+              : 'QQ 音乐 · 播放音质',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () => setState(() => _showPlayQualitySheet = false),
+          content: song != null && song.isNetease
+              ? _QualitySheet<NeteaseQuality>(
+                  options: NeteaseQuality.playbackOptions,
+                  current: _player.currentNeteaseQuality,
+                  label: (q) => q.label,
+                  onSelect: (q) {
+                    setState(() => _showPlayQualitySheet = false);
+                    _pickNeteaseQuality(q);
+                  },
+                )
+              : _QualitySheet<Quality>(
+                  options: Quality.playbackOptions,
+                  current: _player.currentQuality,
+                  label: (q) => q.label,
+                  onSelect: (q) {
+                    setState(() => _showPlayQualitySheet = false);
+                    _pickQqQuality(q);
+                  },
+                ),
+        ),
+      ],
     );
   }
 
@@ -356,10 +422,10 @@ class _PlayerPageState extends State<PlayerPage> {
         padding: EdgeInsets.fromLTRB(6, landscape ? 2 : 8, 14, 0),
         child: Row(
           children: [
-            IconButton(
-              icon: const Icon(Icons.keyboard_arrow_down_rounded,
-                  color: AppColors.textSecondary, size: 28),
+            MiuixIconButton(
               onPressed: () => Navigator.of(context).pop(),
+              child: const Icon(Icons.keyboard_arrow_down_rounded,
+                  color: AppColors.textSecondary, size: 28),
             ),
             const SizedBox(width: 2),
             const Text('正在播放',
@@ -368,11 +434,11 @@ class _PlayerPageState extends State<PlayerPage> {
             if (song != null) _SourceChip(song: song),
             const SizedBox(width: 4),
             // 歌词字号 / 对齐的快捷入口，不必绕到设置页
-            IconButton(
-              tooltip: '歌词样式',
-              icon: const Icon(Icons.format_size_rounded,
+            MiuixIconButton(
+              onPressed: () =>
+                  setState(() => _showLyricStyleSheet = true),
+              child: const Icon(Icons.format_size_rounded,
                   color: AppColors.textSecondary, size: 20),
-              onPressed: () => showLyricStyleSheet(context),
             ),
           ],
         ),
@@ -448,17 +514,17 @@ class _PlayerPageState extends State<PlayerPage> {
             song: _song,
             actualQq: _actualQq,
             actualNe: _actualNe,
-            onQq: _pickQqQuality,
-            onNetease: _pickNeteaseQuality,
+            onOpenSheet: () =>
+                setState(() => _showPlayQualitySheet = true),
           ),
           const SizedBox(width: 12),
           // 音频规格（采样率 / 比特率 / 声道 / 编码）
-          IconButton(
-            onPressed: _song == null ? null : _showAudioSpec,
-            icon: const Icon(Icons.graphic_eq_rounded, size: 20),
-            color: AppColors.cyan,
-            disabledColor: AppColors.textTertiary,
-            tooltip: '音频规格',
+          MiuixIconButton(
+            onPressed: _song == null
+                ? null
+                : () => setState(() => _showAudioSpecSheet = true),
+            child: const Icon(Icons.graphic_eq_rounded,
+                size: 20, color: AppColors.cyan),
           ),
         ],
       );
@@ -467,13 +533,6 @@ class _PlayerPageState extends State<PlayerPage> {
   ///
   /// 本地歌曲要读文件头、在线流要问解码器，都是异步的——先转圈再填，
   /// 不用弹窗先空着再突然跳出内容。
-  Future<void> _showAudioSpec() async {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const _AudioSpecSheet(),
-    );
-  }
 
   Widget _buildBottom(bool landscape) {
     if (!landscape) {
@@ -540,6 +599,10 @@ class _PlayerPageState extends State<PlayerPage> {
           child: Text('暂无歌词',
               style: TextStyle(color: AppColors.textTertiary, fontSize: 13)));
     }
+    // 歌词卡片：半透明玻璃底 + 可调圆角（LyricSettings.corner）。
+    // 圆角为 0 时退化成直角卡片，视觉上与旧版一致。
+    final settings = LyricSettings.instance;
+    final corner = settings.corner;
     return FutureBuilder<Lyrics>(
       future: future,
       builder: (ctx, snap) {
@@ -548,8 +611,8 @@ class _PlayerPageState extends State<PlayerPage> {
             child: SizedBox(
                 width: 22,
                 height: 22,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: AppColors.cyan)),
+                child: MiuixCircularProgressIndicator(
+                    strokeWidth: 2, size: 22)),
           );
         }
         final lyrics = snap.data;
@@ -560,11 +623,21 @@ class _PlayerPageState extends State<PlayerPage> {
                 style: TextStyle(color: AppColors.textTertiary, fontSize: 13)),
           );
         }
-        return _LyricView(
-          key: ValueKey(_lyricsKey),
-          lyrics: lyrics,
-          onSeek: _seekTo,
-          padFactor: padFactor,
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(corner),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: AppColors.surfaceGlass,
+              borderRadius: BorderRadius.circular(corner),
+              border: Border.all(color: AppColors.strokeGlass),
+            ),
+            child: _LyricView(
+              key: ValueKey(_lyricsKey),
+              lyrics: lyrics,
+              onSeek: _seekTo,
+              padFactor: padFactor,
+            ),
+          ),
         );
       },
     );
@@ -689,9 +762,9 @@ class _PageIndicator extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           for (var i = 0; i < count; i++)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => onTap(i),
+            MiuixPressable(
+              onPressed: () => onTap(i),
+              borderRadius: BorderRadius.circular(3),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                 child: AnimatedContainer(
@@ -749,15 +822,8 @@ class _CoverArt extends StatelessWidget {
 
   /// 长按封面保存到相册。桌面端与 gal 不支持的平台会给出明确提示。
   Future<void> _saveCover(BuildContext context) async {
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    final ok = messenger?.showSnackBar;
     void say(String text, {bool error = false}) {
-      ok?.call(SnackBar(
-        content: Text(text),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 3),
-        backgroundColor: error ? AppColors.bg2 : null,
-      ));
+      showAppSnack(text);
     }
 
     say('正在保存封面…');
@@ -776,8 +842,11 @@ class _CoverArt extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final radius = size * 0.11;
-    return GestureDetector(
+    return MiuixPressable(
+      // 封面只响应长按（保存到相册）；给个空的 onPressed 让组件保持启用。
+      onPressed: () {},
       onLongPress: () => _saveCover(context),
+      borderRadius: BorderRadius.circular(radius),
       child: Container(
         width: size,
         height: size,
@@ -873,20 +942,10 @@ class _ProgressSection extends StatelessWidget {
     );
   }
 
-  Widget _slider(double maxMs, int value) => SliderTheme(
-        data: SliderThemeData(
-          trackHeight: 4,
-          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-          overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-          activeTrackColor: AppColors.cyan,
-          inactiveTrackColor: AppColors.surfaceGlassStrong,
-          thumbColor: AppColors.cyan,
-        ),
-        child: Slider(
-          value: value.toDouble().clamp(0.0, maxMs),
-          max: maxMs,
-          onChanged: (v) => onSeek(Duration(milliseconds: v.round())),
-        ),
+  Widget _slider(double maxMs, int value) => MiuixSlider(
+        value: value.toDouble().clamp(0.0, maxMs),
+        max: maxMs,
+        onValueChanged: (v) => onSeek(Duration(milliseconds: v.round())),
       );
 }
 
@@ -929,21 +988,16 @@ class _ControlsRow extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
         children: [
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-            icon: Icon(mode.icon, size: compact ? 19 : 22),
-            color: AppColors.textSecondary,
-            tooltip: mode.label,
+          MiuixIconButton(
             onPressed: hasSong ? () => onMode() : null,
+            child: Icon(mode.icon,
+                size: compact ? 19 : 22, color: AppColors.textSecondary),
           ),
           SizedBox(width: compact ? 8 : 0),
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-            icon: Icon(Icons.skip_previous_rounded, size: compact ? 26 : 34),
-            color: dim,
+          MiuixIconButton(
             onPressed: hasSong ? () => onPrev() : null,
+            child: Icon(Icons.skip_previous_rounded,
+                size: compact ? 26 : 34, color: dim),
           ),
           SizedBox(width: compact ? 10 : 0),
           Container(
@@ -965,34 +1019,29 @@ class _ControlsRow extends StatelessWidget {
                     ]
                   : null,
             ),
-            child: IconButton(
-              icon: Icon(
+            child: MiuixIconButton(
+              onPressed: hasSong ? () => onToggle() : null,
+              child: Icon(
                 playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
                 color: hasSong ? Colors.white : AppColors.textTertiary,
                 size: main * 0.55,
               ),
-              onPressed: hasSong ? () => onToggle() : null,
             ),
           ),
           SizedBox(width: compact ? 10 : 0),
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-            icon: Icon(Icons.skip_next_rounded, size: compact ? 26 : 34),
-            color: dim,
+          MiuixIconButton(
             onPressed: hasSong ? () => onNext() : null,
+            child: Icon(Icons.skip_next_rounded,
+                size: compact ? 26 : 34, color: dim),
           ),
           SizedBox(width: compact ? 8 : 0),
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-            icon: Icon(
+          MiuixIconButton(
+            onPressed: hasSong ? () => onFavorite() : null,
+            child: Icon(
               favorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
               size: compact ? 20 : 23,
+              color: favorite ? AppColors.aqua : AppColors.textSecondary,
             ),
-            color: favorite ? AppColors.aqua : AppColors.textSecondary,
-            tooltip: favorite ? '取消收藏' : '收藏',
-            onPressed: hasSong ? () => onFavorite() : null,
           ),
         ],
       ),
@@ -1012,15 +1061,15 @@ class _QualityButton extends StatelessWidget {
     required this.song,
     required this.actualQq,
     required this.actualNe,
-    required this.onQq,
-    required this.onNetease,
+    required this.onOpenSheet,
   });
 
   final Song? song;
   final Quality? actualQq;
   final NeteaseQuality? actualNe;
-  final ValueChanged<Quality> onQq;
-  final ValueChanged<NeteaseQuality> onNetease;
+
+  /// 点击胶囊：打开「播放音质」Miuix 弹层（由页面状态驱动显隐）。
+  final VoidCallback onOpenSheet;
 
   @override
   Widget build(BuildContext context) {
@@ -1035,31 +1084,9 @@ class _QualityButton extends StatelessWidget {
     final effective = actualQq ?? requested;
     final downgraded = actualQq != null && actualQq!.code != requested.code;
 
-    return PopupMenuButton<String>(
-      tooltip: downgraded
-          ? 'QQ 音乐音质：请求 ${requested.label}，实际 $effective（已降级）'
-          : 'QQ 音乐音质',
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      color: AppColors.bg2,
-      onSelected: (code) {
-        final q = Quality.fromCode(code);
-        if (q != null) onQq(q);
-      },
-      itemBuilder: (ctx) => [
-        const PopupMenuItem<String>(
-          enabled: false,
-          child: Text('QQ 音乐 · 播放音质',
-              style: TextStyle(fontSize: 11, color: AppColors.textTertiary)),
-        ),
-        for (final q in Quality.playbackOptions)
-          PopupMenuItem<String>(
-            value: q.code,
-            child: _menuRow(
-              label: q.label,
-              checked: q.code == effective.code,
-            ),
-          ),
-      ],
+    return MiuixPressable(
+      onPressed: onOpenSheet,
+      borderRadius: BorderRadius.circular(19),
       child: _pill(
         label: effective.label,
         downgraded: downgraded,
@@ -1074,31 +1101,9 @@ class _QualityButton extends StatelessWidget {
     final effective = actualNe ?? requested;
     final downgraded = actualNe != null && actualNe!.level != requested.level;
 
-    return PopupMenuButton<String>(
-      tooltip: downgraded
-          ? '网易云音质：请求 ${requested.label}，实际 $effective（已降级）'
-          : '网易云音质',
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      color: AppColors.bg2,
-      onSelected: (level) {
-        final q = NeteaseQuality.fromLevel(level);
-        if (q != null) onNetease(q);
-      },
-      itemBuilder: (ctx) => [
-        const PopupMenuItem<String>(
-          enabled: false,
-          child: Text('网易云音乐 · 播放音质',
-              style: TextStyle(fontSize: 11, color: AppColors.textTertiary)),
-        ),
-        for (final q in NeteaseQuality.playbackOptions)
-          PopupMenuItem<String>(
-            value: q.level,
-            child: _menuRow(
-              label: q.label,
-              checked: q.level == effective.level,
-            ),
-          ),
-      ],
+    return MiuixPressable(
+      onPressed: onOpenSheet,
+      borderRadius: BorderRadius.circular(19),
       child: _pill(
         label: effective.label,
         downgraded: downgraded,
@@ -1106,19 +1111,6 @@ class _QualityButton extends StatelessWidget {
       ),
     );
   }
-
-  static Widget _menuRow({required String label, required bool checked}) =>
-      Row(
-        children: [
-          Icon(
-            checked ? Icons.check_rounded : Icons.audiotrack_rounded,
-            size: 16,
-            color: checked ? AppColors.cyan : AppColors.textTertiary,
-          ),
-          const SizedBox(width: 10),
-          Text(label, style: const TextStyle(fontSize: 13)),
-        ],
-      );
 
   static Widget _pill({
     required String label,
@@ -1173,51 +1165,48 @@ class _DownloadButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = progress;
     final downloading = p != null;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(19),
-        onTap: enabled && !downloading ? onTap : null,
-        child: Container(
-          height: 38,
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceGlass,
-            borderRadius: BorderRadius.circular(19),
-            border: Border.all(color: AppColors.strokeGlass),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (downloading)
-                SizedBox(
-                  width: 15,
-                  height: 15,
-                  child: CircularProgressIndicator(
-                    // 服务端未返回总长度时（进度仍为 0）退化为不确定态
-                    value: p > 0 ? p : null,
-                    strokeWidth: 2,
-                    color: AppColors.cyan,
-                  ),
-                )
-              else
-                Icon(Icons.download_rounded,
-                    size: 16,
-                    color: enabled ? AppColors.cyan : AppColors.textTertiary),
-              const SizedBox(width: 6),
-              Text(
-                downloading
-                    ? (p > 0 ? '${(p * 100).round()}%' : '下载中')
-                    : '下载',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color:
-                      enabled ? AppColors.textSecondary : AppColors.textTertiary,
+    return MiuixPressable(
+      onPressed: enabled && !downloading ? onTap : null,
+      borderRadius: BorderRadius.circular(19),
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceGlass,
+          borderRadius: BorderRadius.circular(19),
+          border: Border.all(color: AppColors.strokeGlass),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (downloading)
+              SizedBox(
+                width: 15,
+                height: 15,
+                child: MiuixCircularProgressIndicator(
+                  // 服务端未返回总长度时（进度仍为 0）退化为不确定态
+                  progress: p > 0 ? p : null,
+                  strokeWidth: 2,
+                  size: 15,
                 ),
+              )
+            else
+              Icon(Icons.download_rounded,
+                  size: 16,
+                  color: enabled ? AppColors.cyan : AppColors.textTertiary),
+            const SizedBox(width: 6),
+            Text(
+              downloading
+                  ? (p > 0 ? '${(p * 100).round()}%' : '下载中')
+                  : '下载',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color:
+                    enabled ? AppColors.textSecondary : AppColors.textTertiary,
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -1231,162 +1220,94 @@ class _DownloadButton extends StatelessWidget {
 /// 旧实现用 `ConstrainedBox(maxHeight: 屏高 * 0.5)` + `SingleChildScrollView`，
 /// QQ 音乐 17 档（末档 AAC 48）会被裁在可视区之外且没有滚动条提示。
 /// 现在改为：固定 72% 屏高 + [ListView.builder] + 常驻滚动条，末档一定可滚到。
+///
+/// 由 [MiuixOverlayBottomSheet] 承载（标题 / 拖拽把手 / 圆角都是 Miuix 的），
+/// 选中后回调 [onSelect]，显隐由页面状态驱动。
 class _QualitySheet<T> extends StatelessWidget {
   const _QualitySheet({
-    required this.title,
     required this.options,
     required this.current,
     required this.label,
+    required this.onSelect,
     this.subtitle,
   });
 
-  final String title;
   final List<T> options;
   final T current;
   final String Function(T) label;
   final String Function(T)? subtitle;
+  final ValueChanged<T> onSelect;
 
   @override
   Widget build(BuildContext context) {
-    final height = MediaQuery.of(context).size.height * 0.72;
-    return Container(
+    final height = MediaQuery.sizeOf(context).height * 0.6;
+    return SizedBox(
       height: height,
-      decoration: const BoxDecoration(
-        color: AppColors.bg2,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 拖拽把手
-            Padding(
-              padding: const EdgeInsets.only(top: 10, bottom: 4),
-              child: Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.strokeGlass,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+      child: Scrollbar(
+        thumbVisibility: true,
+        child: ListView.builder(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 18),
+          itemCount: options.length,
+          itemBuilder: (ctx, i) {
+            final q = options[i];
+            final selected = q == current;
+            final sub = subtitle?.call(q) ?? '';
+            return MiuixPressable(
+              onPressed: () => onSelect(q),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? AppColors.cyan.withValues(alpha: 0.12)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 8, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.w900),
+                child: Row(
+                  children: [
+                    Icon(
+                      selected
+                          ? Icons.check_circle_rounded
+                          : Icons.audiotrack_rounded,
+                      size: 18,
+                      color: selected
+                          ? AppColors.cyan
+                          : AppColors.textTertiary,
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded, size: 20),
-                    color: AppColors.textTertiary,
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-              child: Row(
-                children: [
-                  const Icon(Icons.info_outline_rounded,
-                      size: 12, color: AppColors.textTertiary),
-                  const SizedBox(width: 5),
-                  const Expanded(
-                    child: Text(
-                      '若所选音质不可用，会自动降级到最近的一档可用音质',
-                      style:
-                          TextStyle(fontSize: 11, color: AppColors.textTertiary),
-                    ),
-                  ),
-                  Text('共 ${options.length} 档',
-                      style: const TextStyle(
-                          fontSize: 11, color: AppColors.textTertiary)),
-                ],
-              ),
-            ),
-            const Divider(height: 1, color: AppColors.strokeGlass),
-            Expanded(
-              child: Scrollbar(
-                thumbVisibility: true,
-                child: ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 18),
-                  itemCount: options.length,
-                  itemBuilder: (ctx, i) {
-                    final q = options[i];
-                    final selected = q == current;
-                    final sub = subtitle?.call(q) ?? '';
-                    return Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () => Navigator.of(context).pop(q),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: selected
-                                ? AppColors.cyan.withValues(alpha: 0.12)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(12),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            label(q),
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: selected
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: selected
+                                  ? AppColors.cyan
+                                  : AppColors.textPrimary,
+                            ),
                           ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                selected
-                                    ? Icons.check_circle_rounded
-                                    : Icons.audiotrack_rounded,
-                                size: 18,
-                                color: selected
-                                    ? AppColors.cyan
-                                    : AppColors.textTertiary,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      label(q),
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: selected
-                                            ? FontWeight.w700
-                                            : FontWeight.w500,
-                                        color: selected
-                                            ? AppColors.cyan
-                                            : AppColors.textPrimary,
-                                      ),
-                                    ),
-                                    if (sub.isNotEmpty)
-                                      Text(
-                                        sub,
-                                        style: const TextStyle(
-                                            fontSize: 10,
-                                            color: AppColors.textTertiary),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                          if (sub.isNotEmpty)
+                            Text(
+                              sub,
+                              style: const TextStyle(
+                                  fontSize: 10,
+                                  color: AppColors.textTertiary),
+                            ),
+                        ],
                       ),
-                    );
-                  },
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
@@ -1570,12 +1491,12 @@ class _LyricViewState extends State<_LyricView>
     // 当前行轻微放大加粗，是整屏的视觉重心；非当前行压一档形成层次。
     final size =
         isActive ? settings.fontSize * settings.activeScale : settings.fontSize;
-    final weight = isActive ? FontWeight.w800 : FontWeight.w500;
+    final weight = isActive ? settings.activeWeight : settings.inactiveWeight;
     final height = isActive ? 1.32 : 1.45;
 
     if (!line.isWordLevel) {
       final color =
-          isActive ? AppColors.textPrimary : AppColors.textTertiary;
+          isActive ? settings.unsungColor : settings.inactiveColor;
       return Text(
         line.displayText,
         textAlign: settings.textAlign,
@@ -1601,7 +1522,7 @@ class _LyricViewState extends State<_LyricView>
           fontSize: size,
           height: height,
           fontWeight: weight,
-          color: AppColors.textTertiary,
+          color: settings.inactiveColor,
         ),
       );
     }
@@ -1614,6 +1535,7 @@ class _LyricViewState extends State<_LyricView>
       fontSize: size,
       height: height,
       align: settings.textAlign,
+      weight: settings.activeWeight,
     );
   }
 
@@ -1637,9 +1559,8 @@ class _LyricViewState extends State<_LyricView>
           itemBuilder: (ctx, i) {
             final line = lyrics[i];
             final isActive = i == _active;
-            return GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => widget.onSeek(Duration(milliseconds: line.startMs)),
+            return MiuixPressable(
+              onPressed: () => widget.onSeek(Duration(milliseconds: line.startMs)),
               child: Container(
                 key: _keys[i],
                 width: double.infinity,
@@ -1712,7 +1633,10 @@ class _LyricViewState extends State<_LyricView>
 /// 数据来源分两种（见 [AudioSpecService]）：
 /// 本地歌曲直接读文件头，在线流问 libmpv。拿不到的值显示「未知」而不是猜。
 class _AudioSpecSheet extends StatefulWidget {
-  const _AudioSpecSheet();
+  const _AudioSpecSheet({required this.onDismiss});
+
+  /// 关闭弹层（由页面状态驱动显隐）。
+  final VoidCallback onDismiss;
 
   @override
   State<_AudioSpecSheet> createState() => _AudioSpecSheetState();
@@ -1729,127 +1653,110 @@ class _AudioSpecSheetState extends State<_AudioSpecSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.bg2,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.textTertiary.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+    // 外层 Container / 拖拽把手 / SafeArea 由 MiuixOverlayBottomSheet 提供
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.graphic_eq_rounded,
+                    size: 18, color: AppColors.cyan),
+                SizedBox(width: 8),
+                Text(
+                  '音频规格',
+                  style:
+                      TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                 ),
-              ),
-              const SizedBox(height: 16),
-              const Row(
-                children: [
-                  Icon(Icons.graphic_eq_rounded, size: 18, color: AppColors.cyan),
-                  SizedBox(width: 8),
-                  Text(
-                    '音频规格',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              FutureBuilder<AudioSpec>(
-                future: _future,
-                builder: (ctx, snap) {
-                  if (snap.connectionState != ConnectionState.done) {
-                    return const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 26),
-                      child: Center(
-                        child: SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            FutureBuilder<AudioSpec>(
+              future: _future,
+              builder: (ctx, snap) {
+                if (snap.connectionState != ConnectionState.done) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 26),
+                    child: Center(
+                      child: SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: MiuixCircularProgressIndicator(
+                            strokeWidth: 2, size: 22),
                       ),
-                    );
-                  }
-                  final spec = snap.data ?? const AudioSpec();
-                  if (spec.isEmpty) {
-                    return const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 22),
-                      child: Text(
-                        '没能读到这首歌的音频规格。'
-                        '在线流要等解码器给出信息，如果刚切歌可以稍等几秒再打开。',
-                        style: TextStyle(
-                          fontSize: 12,
-                          height: 1.6,
-                          color: AppColors.textTertiary,
-                        ),
-                      ),
-                    );
-                  }
-                  final items = spec.items;
-                  return Column(
-                    children: [
-                      for (final it in items)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 7),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                width: 92,
-                                child: Text(
-                                  it.label,
-                                  style: const TextStyle(
-                                    fontSize: 12.5,
-                                    color: AppColors.textTertiary,
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                child: Text(
-                                  it.value,
-                                  style: const TextStyle(
-                                    fontSize: 12.5,
-                                    color: AppColors.textPrimary,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      const SizedBox(height: 10),
-                      const Text(
-                        '采样率越高还原细节越多；比特率是无损以外的音质档，'
-                        '无损格式（FLAC / ALAC）通常不标注固定码率。',
-                        style: TextStyle(
-                          fontSize: 11,
-                          height: 1.5,
-                          color: AppColors.textTertiary,
-                        ),
-                      ),
-                    ],
+                    ),
                   );
-                },
-              ),
-              const SizedBox(height: 12),
-              Center(
-                child: TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('关闭',
-                      style: TextStyle(color: AppColors.textTertiary)),
-                ),
-              ),
-            ],
-          ),
+                }
+                final spec = snap.data ?? const AudioSpec();
+                if (spec.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 22),
+                    child: Text(
+                      '没能读到这首歌的音频规格。'
+                      '在线流要等解码器给出信息，如果刚切歌可以稍等几秒再打开。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.6,
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+                  );
+                }
+                final items = spec.items;
+                return Column(
+                  children: [
+                    for (final it in items)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 7),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              width: 92,
+                              child: Text(
+                                it.label,
+                                style: const TextStyle(
+                                  fontSize: 12.5,
+                                  color: AppColors.textTertiary,
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                it.value,
+                                style: const TextStyle(
+                                  fontSize: 12.5,
+                                  color: AppColors.textPrimary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      '采样率越高还原细节越多；比特率是无损以外的音质档，'
+                      '无损格式（FLAC / ALAC）通常不标注固定码率。',
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.5,
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            Center(
+              child: MiuixTextButton('关闭', onPressed: widget.onDismiss),
+            ),
+          ],
         ),
       ),
     );
@@ -1879,6 +1786,7 @@ class _KaraokeLine extends StatefulWidget {
     required this.fontSize,
     required this.height,
     required this.align,
+    required this.weight,
   });
 
   final LyricLine line;
@@ -1886,6 +1794,9 @@ class _KaraokeLine extends StatefulWidget {
   final double fontSize;
   final double height;
   final TextAlign align;
+
+  /// 当前行字重。字重变化会改变每个字的字形宽度，缓存必须失效重量排。
+  final FontWeight weight;
 
   @override
   State<_KaraokeLine> createState() => _KaraokeLineState();
@@ -1909,7 +1820,7 @@ class _KaraokeLineState extends State<_KaraokeLine> {
               style: TextStyle(
                 fontSize: widget.fontSize,
                 height: widget.height,
-                fontWeight: FontWeight.w800,
+                fontWeight: widget.weight,
                 color: color,
               ),
             ),
@@ -1962,7 +1873,8 @@ class _KaraokeLineState extends State<_KaraokeLine> {
     if (oldWidget.line != widget.line ||
         oldWidget.fontSize != widget.fontSize ||
         oldWidget.height != widget.height ||
-        oldWidget.align != widget.align) {
+        oldWidget.align != widget.align ||
+        oldWidget.weight != widget.weight) {
       _wordSpans = null;
     }
   }
@@ -1977,16 +1889,17 @@ class _KaraokeLineState extends State<_KaraokeLine> {
     final spans = _wordSpans;
     if (spans == null || _contentWidth <= 0) return null;
 
-    // 已唱 = 荧光黄绿（视频实测色值），未唱 = 亮白。分段逻辑在
-    // KaraokeFill 里，那里是纯函数，有独立单测覆盖各种进度组合。
+    // 已唱 / 未唱色来自 LyricSettings（默认荧光黄绿 + 亮白，可在设置里
+    // 自定义）。分段逻辑在 KaraokeFill 里，那里是纯函数，有独立单测。
+    final settings = LyricSettings.instance;
     final built = KaraokeFill.build(
       wordSpans: spans,
       ratios: [
         for (final w in widget.line.words) w.progressAt(posMs),
       ],
       width: _contentWidth,
-      sung: AppColors.karaoke,
-      unsung: AppColors.textPrimary,
+      sung: settings.sungColor,
+      unsung: settings.unsungColor,
     );
     if (built == null) return null;
     return LinearGradient(

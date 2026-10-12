@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_version.dart';
 import '../../theme/app_theme.dart';
@@ -10,14 +11,18 @@ class AboutPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('关于'),
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      topBar: MiuixTopAppBar(
+        title: '关于',
+        color: Colors.transparent,
+        navigationIcon: MiuixIconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: AppColors.textPrimary, size: 20),
+        ),
       ),
-      body: SingleChildScrollView(
+      content: (padding) => SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
@@ -51,13 +56,17 @@ class AboutPage extends StatelessWidget {
               child: Column(
                 children: [
                   _infoTile('平台支持', 'iOS / macOS / Windows / Linux / Android'),
-                  const Divider(height: 1, color: AppColors.strokeGlass),
+                  const MiuixHorizontalDivider(
+                      thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('音源', 'QQ 音乐 + 网易云音乐'),
-                  const Divider(height: 1, color: AppColors.strokeGlass),
+                  const MiuixHorizontalDivider(
+                      thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('技术栈', 'Flutter 3.47 · Dart · 纯 Dart 加密'),
-                  const Divider(height: 1, color: AppColors.strokeGlass),
+                  const MiuixHorizontalDivider(
+                      thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('构建加固', 'R8 / UPX / Dart Obfuscate / Strip'),
-                  const Divider(height: 1, color: AppColors.strokeGlass),
+                  const MiuixHorizontalDivider(
+                      thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('作者', '白姬9527'),
                 ],
               ),

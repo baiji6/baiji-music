@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'core/agreement_store.dart';
@@ -46,6 +47,9 @@ class _BaijiMusicAppState extends State<BaijiMusicApp> {
   /// ——这正是"检查更新点了没反应"的根因。
   final _navigatorKey = GlobalKey<NavigatorState>();
 
+  /// 待展示的更新信息（MiuixOverlayDialog 是声明式组件，靠这个字段驱动）。
+  UpdateInfo? _pendingUpdate;
+
   @override
   void initState() {
     super.initState();
@@ -71,69 +75,21 @@ class _BaijiMusicAppState extends State<BaijiMusicApp> {
     await Future.delayed(const Duration(seconds: 2)); // 延迟检查，避免启动时卡顿
     final outcome = await UpdateChecker.instance.check();
     if (!mounted) return;
-    final ctx = _dialogContext;
-    if (ctx == null || !ctx.mounted) return;
     if (outcome.state == UpdateState.available && outcome.info != null) {
-      _showUpdateDialog(ctx, outcome.info!);
+      setState(() => _pendingUpdate = outcome.info);
     }
   }
 
-  void _showUpdateDialog(BuildContext context, UpdateInfo info) {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.bg2,
-        title: const Text('发现新版本', style: TextStyle(fontSize: 16)),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                info.name.isNotEmpty ? '${info.name}（${info.tag}）' : info.tag,
-                style: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w600),
-              ),
-              if (info.body.trim().isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  info.summary(200),
-                  style: const TextStyle(
-                      fontSize: 12, color: AppColors.textTertiary),
-                ),
-              ],
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await UpdateChecker.instance.ignore(info.tag);
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('忽略此版本',
-                style: TextStyle(color: AppColors.textTertiary)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('稍后', style: TextStyle(color: AppColors.textTertiary)),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              UpdateChecker.instance.openRelease(info.url);
-            },
-            child: const Text('前往更新', style: TextStyle(color: AppColors.cyan)),
-          ),
-        ],
-      ),
-    );
+  /// 更新弹窗的「忽略」：写入忽略列表并关闭。
+  Future<void> _ignoreUpdate(UpdateInfo info) async {
+    await UpdateChecker.instance.ignore(info.tag);
+    if (!mounted) return;
+    setState(() => _pendingUpdate = null);
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    final app = MaterialApp(
       title: '白姬音乐',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
@@ -146,6 +102,87 @@ class _BaijiMusicAppState extends State<BaijiMusicApp> {
           LibraryHome(),
         ],
       ),
+    );
+
+    // Miuix 主题骨架：种子色取品牌紫，整套 Miuix 组件（导航栏 / 偏好项 /
+    // 滑块 / 开关 / 对话框）直接长在 App 的霓虹视觉体系上。
+    // MiuixPopupScope + MiuixPopupHost：在 MaterialApp 之外自建弹窗根域，
+    // 让全局更新提示（MiuixOverlayDialog）有地方渲染——各页面内的
+    // MiuixScaffold 也会复用这个 root，不会出现第二套遮罩层。
+    return MiuixTheme(
+      data: AppTheme.miuix(),
+      child: MiuixPopupScope(
+        establishRoot: true,
+        child: Stack(
+          children: [
+            app,
+            MiuixOverlayDialog(
+              show: _pendingUpdate != null,
+              title: '发现新版本',
+              summary: _pendingUpdate?.tag ?? '',
+              backgroundColor: AppColors.bg2,
+              onDismissRequest: () {
+                if (mounted) setState(() => _pendingUpdate = null);
+              },
+              content: _buildUpdateDialogContent(),
+            ),
+            const MiuixPopupHost(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUpdateDialogContent() {
+    final info = _pendingUpdate;
+    if (info == null) return const SizedBox.shrink();
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (info.name.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              info.name,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ),
+        if (info.body.trim().isNotEmpty)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 260),
+            child: SingleChildScrollView(
+              child: Text(
+                info.summary(200),
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.6,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        const SizedBox(height: 18),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            MiuixTextButton('忽略此版本', onPressed: () => _ignoreUpdate(info)),
+            const SizedBox(width: 8),
+            MiuixTextButton('稍后', onPressed: () {
+              if (mounted) setState(() => _pendingUpdate = null);
+            }),
+            const SizedBox(width: 8),
+            MiuixTextButton('前往更新', onPressed: () {
+              if (mounted) setState(() => _pendingUpdate = null);
+              UpdateChecker.instance.openRelease(info.url);
+            }),
+          ],
+        ),
+      ],
     );
   }
 }

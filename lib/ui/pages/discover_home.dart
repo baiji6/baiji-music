@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../data/history_store.dart';
 import '../../models/models.dart';
@@ -20,7 +21,17 @@ class _DiscoverHomeState extends State<DiscoverHome> {
 
   static const _quickActions = <(String, IconData, Color)>[];
 
+  /// 下拉刷新的转圈状态（提升给 MiuixPullToRefresh）。
+  bool _refreshing = false;
+
   List<Song> get _recent => HistoryStore.playHistory();
+
+  Future<void> _refresh() async {
+    setState(() => _refreshing = true);
+    await Future.delayed(const Duration(milliseconds: 450));
+    if (!mounted) return;
+    setState(() => _refreshing = false);
+  }
 
   void _playAllRecent() {
     final recent = _recent;
@@ -36,12 +47,11 @@ class _DiscoverHomeState extends State<DiscoverHome> {
   Widget build(BuildContext context) {
     final recent = _recent;
     return SafeArea(
-      child: RefreshIndicator(
-        onRefresh: () async {
-          if (mounted) setState(() {});
-        },
+      child: MiuixPullToRefresh(
+        isRefreshing: _refreshing,
+        onRefresh: _refresh,
         color: AppColors.cyan,
-        backgroundColor: AppColors.surfaceGlass,
+        refreshTexts: const ['下拉刷新', '松手立即刷新', '正在刷新…', '刷新完成'],
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(
               parent: BouncingScrollPhysics()),
@@ -180,19 +190,23 @@ class _DiscoverHomeState extends State<DiscoverHome> {
                 subtitle: '继续收听',
                 trailing: recent.isEmpty
                     ? null
-                    : GestureDetector(
-                        onTap: _playAllRecent,
-                        child: const Row(
-                          children: [
-                            Icon(Icons.play_circle_fill_rounded,
-                                color: AppColors.cyan, size: 16),
-                            SizedBox(width: 4),
-                            Text(
-                              '全部播放',
-                              style: TextStyle(
-                                  fontSize: 12, color: AppColors.cyan),
-                            ),
-                          ],
+                    : MiuixPressable(
+                        onPressed: _playAllRecent,
+                        borderRadius: BorderRadius.circular(8),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                          child: Row(
+                            children: [
+                              Icon(Icons.play_circle_fill_rounded,
+                                  color: AppColors.cyan, size: 16),
+                              SizedBox(width: 4),
+                              Text(
+                                '全部播放',
+                                style: TextStyle(
+                                    fontSize: 12, color: AppColors.cyan),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
               ),
@@ -245,36 +259,51 @@ class _RecentTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isCurrent = PlayerController.instance.currentSong?.mid == song.mid;
-    return ListTile(
-      leading: CoverImage(song: song, size: 44, radius: 12),
-      title: Text(
-        song.name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          color: isCurrent ? AppColors.cyan : null,
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            CoverImage(song: song, size: 44, radius: 12),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    song.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color:
+                          isCurrent ? AppColors.cyan : AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    song.singer,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.textTertiary),
+                  ),
+                ],
+              ),
+            ),
+            TagBadge(
+              song.isNetease ? '网易云' : 'QQ',
+              color: song.isNetease ? AppColors.magenta : AppColors.cyan,
+            ),
+            const SizedBox(width: 8),
+            const Icon(Icons.play_arrow_rounded,
+                color: AppColors.cyan, size: 26),
+          ],
         ),
       ),
-      subtitle: Text(
-        song.singer,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TagBadge(
-            song.isNetease ? '网易云' : 'QQ',
-            color: song.isNetease ? AppColors.magenta : AppColors.cyan,
-          ),
-          const SizedBox(width: 8),
-          const Icon(Icons.play_arrow_rounded, color: AppColors.cyan, size: 26),
-        ],
-      ),
-      onTap: onTap,
     );
   }
 }

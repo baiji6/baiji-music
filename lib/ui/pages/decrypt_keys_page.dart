@@ -13,12 +13,14 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../decrypt/decryptor.dart' show DecryptPlatform;
 import '../../decrypt/key_scanner.dart';
 import '../../decrypt/key_store.dart';
 import '../../decrypt/qingting.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 
 /// 供解密页复用的加载入口：把密钥摊平成一个可跨 isolate 传递的字符串 map。
@@ -65,10 +67,36 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   /// 当前选中的平台Tab。所有录入动作都只作用于这个平台。
   DecryptPlatform _platform = DecryptPlatform.qqMusic;
 
+  // ==================== 弹层显隐（Miuix 弹窗是声明式的）====================
+  bool _showManualDialog = false;
+  bool _showWarnDialog = false;
+  bool _showImportTextDialog = false;
+  bool _showQingTingHintDialog = false;
+  bool _showQingTingDialog = false;
+  bool _showScanReportDialog = false;
+  bool _showClearAllDialog = false;
+
+  /// 手动填写提交后待确认（不需要密钥的平台会先弹一次提醒）。
+  DecryptKeyEntry? _pendingEntry;
+
+  /// 导入文本对话框的输入框（页面级持有，随页面销毁）。
+  final _importController = TextEditingController();
+
+  /// 扫描报告的明细。
+  List<String> _scanNotes = const [];
+  int _scanFailed = 0;
+  int _scanImported = 0;
+
   @override
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void dispose() {
+    _importController.dispose();
+    super.dispose();
   }
 
   Future<void> _reload() async {
@@ -84,105 +112,55 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   List<DecryptKeyEntry> _entriesOf(DecryptPlatform p) =>
       _keys?.entriesOf(p) ?? const [];
 
+  void _toast(String msg) => showAppSnack(msg);
+
   // ==================== 手动填写 ====================
 
-  Future<void> _manualInput() async {
-    final platform = _platform;
+  void _openManualInput() {
+    setState(() => _showManualDialog = true);
+  }
 
-    final entry = await showDialog<DecryptKeyEntry>(
-      context: context,
-      builder: (ctx) => _ManualKeyDialog(platform: platform),
-    );
-    if (entry == null) return;
-
-    // 网易云的密钥在文件头里、咪咕能自己猜，填了也没用——
-    // 提前说清楚，免得用户以为自己填对了却解不出。
-    if (!platform.needsKey && mounted) {
-      final go = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text('${platform.label}通常不需要密钥'),
-          content: Text(
-            '${platform.label}的密钥已经内置在文件里或可由文件头推导。'
-            '你仍然可以保存它，但通常不会影响解密结果。\n\n'
-            '确定要保存吗？',
-            style: const TextStyle(fontSize: 13, height: 1.6),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('不保存')),
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('仍然保存')),
-          ],
-        ),
-      );
-      if (go != true) return;
+  /// 手动填写对话框提交：不需要密钥的平台先提醒一次再入库。
+  void _onManualSubmit(DecryptKeyEntry entry) {
+    if (_platform.needsKey) {
+      _saveEntry(entry);
+      return;
     }
+    setState(() {
+      _showManualDialog = false;
+      _pendingEntry = entry;
+      _showWarnDialog = true;
+    });
+  }
 
+  Future<void> _saveEntry(DecryptKeyEntry entry) async {
     await _keys!.add(entry);
     await _reload();
-    _toast('已添加到${platform.label}');
+    _toast('已添加到${_platform.label}');
+  }
+
+  void _confirmWarnSave() {
+    final entry = _pendingEntry;
+    setState(() {
+      _showWarnDialog = false;
+      _pendingEntry = null;
+    });
+    if (entry != null) _saveEntry(entry);
   }
 
   // ==================== 导入文本 ====================
 
-  Future<void> _importText() async {
-    final platform = _platform;
-    final controller = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('导入密钥文本 → ${platform.label}'),
-        content: SizedBox(
-          width: 420,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _importHint(platform),
-                style: const TextStyle(fontSize: 12, height: 1.6),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                maxLines: 8,
-                minLines: 5,
-                style: const TextStyle(fontSize: 12),
-                decoration: InputDecoration(
-                  border: const OutlineInputBorder(),
-                  hintText: switch (platform) {
-                    DecryptPlatform.qingting => '000102030405060708090a0b0c0d0e0f',
-                    DecryptPlatform.kuwo => '12345678-128,UVFNdXNpYyBFbmNWMixLZXk6...',
-                    DecryptPlatform.kugou =>
-                      '8fd2a1c0e3b95d7f4a6b8c2d1e0f3a5b,UVFNdXNpYyBFbmNWMixLZXk6...',
-                    _ => '歌曲名.mp3,UVFNdXNpYyBFbmNWMixLZXk6...',
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('导入')),
-        ],
-      ),
-    );
-    if (ok != true) {
-      controller.dispose();
-      return;
-    }
-    final count = _keys!.importText(controller.text, platform: platform);
-    controller.dispose();
-    await _reload();
-    _toast('已向${platform.label}导入 $count 条');
+  void _openImportText() {
+    _importController.clear();
+    setState(() => _showImportTextDialog = true);
+  }
+
+  void _runImportText() {
+    final count =
+        _keys!.importText(_importController.text, platform: _platform);
+    setState(() => _showImportTextDialog = false);
+    _reload();
+    _toast('已向${_platform.label}导入 $count 条');
   }
 
   /// 导入文本的格式说明。**每种平台的分隔符含义都不同**——
@@ -210,34 +188,17 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
 
   // ==================== 导入数据库 ====================
 
-  Future<void> _importDatabase() async {
-    final platform = _platform;
+  void _openImportDatabase() {
     // 蜻蜓的密钥是设备派生出来的，不是从客户端库里扫出来的——直接引导去生成。
-    if (platform == DecryptPlatform.qingting) {
-      final go = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('蜻蜓 FM 密钥无法扫描'),
-          content: const Text(
-            '蜻蜓 FM 的密钥是由手机机型信息（product / device / manufacturer / '
-            'brand / board / model）派生出来的，不存在于任何客户端数据库里。\n\n'
-            '请用「由设备信息生成」按钮，按你手机的真实机型信息生成。',
-            style: TextStyle(fontSize: 13, height: 1.6),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('关闭')),
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('去生成')),
-          ],
-        ),
-      );
-      if (go == true && mounted) _openQingTingGenerator();
+    if (_platform == DecryptPlatform.qingting) {
+      setState(() => _showQingTingHintDialog = true);
       return;
     }
+    _runImportDatabase();
+  }
 
+  Future<void> _runImportDatabase() async {
+    final platform = _platform;
     try {
       final res = await FilePicker.platform.pickFiles(allowMultiple: true);
       if (res == null || res.files.isEmpty || !mounted) return;
@@ -285,55 +246,26 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   // ==================== 蜻蜓设备信息生成 ====================
 
   void _openQingTingGenerator() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => const _QingTingGeneratorDialog(),
-    );
+    setState(() {
+      _showQingTingHintDialog = false;
+      _showQingTingDialog = true;
+    });
+  }
+
+  void _onQingTingSaved() {
+    setState(() => _showQingTingDialog = false);
+    _reload();
+    _toast('已保存到蜻蜓 FM');
   }
 
   /// 扫描报告：让用户看清每个文件命中了什么、为什么某个文件没中。
   void _showScanReport(List<String> notes, int failed, {int imported = 0}) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(imported > 0 ? '已导入 $imported 条密钥' : '未找到密钥'),
-        content: SizedBox(
-          width: 460,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (failed > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text('$failed 个文件读取失败',
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFFFF6B6B))),
-                  ),
-                for (final n in notes)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Text('· $n',
-                        style: const TextStyle(fontSize: 11.5, height: 1.5)),
-                  ),
-                const SizedBox(height: 8),
-                const Text(
-                  '提示：QQ 音乐请选择 app_data 目录下的 mmkv 文件；'
-                  '部分客户端会把 ekey 加密存储，遇到这种情况请改用「手动填写」。',
-                  style: TextStyle(
-                      fontSize: 11, height: 1.5, color: AppColors.textTertiary),
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-        ],
-      ),
-    );
+    setState(() {
+      _scanNotes = notes;
+      _scanFailed = failed;
+      _scanImported = imported;
+      _showScanReportDialog = true;
+    });
   }
 
   Future<void> _delete(DecryptKeyEntry e) async {
@@ -342,65 +274,49 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   }
 
   /// 只清空当前 Tab 的平台，不动其他平台的密钥。
-  Future<void> _clearAll() async {
+  void _openClearAll() {
     final platform = _platform;
     final n = _entriesOf(platform).length;
     if (n == 0) {
       _toast('${platform.label} 还没有密钥');
       return;
     }
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('清空${platform.label}的全部密钥？'),
-        content: Text(
-          '将删除 $n 条。其他平台的密钥不受影响。\n'
-          '清空后需要重新导入或填写，否则无法解密。',
-          style: const TextStyle(fontSize: 13, height: 1.6),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-            style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFFF6B6B)),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('清空'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
+    setState(() => _showClearAllDialog = true);
+  }
+
+  Future<void> _confirmClearAll() async {
+    final platform = _platform;
+    setState(() => _showClearAllDialog = false);
     await _keys!.clearPlatform(platform);
     await _reload();
     _toast('已清空${platform.label}');
   }
 
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
-
   @override
   Widget build(BuildContext context) {
     final keys = _keys;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('密钥管理'),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
+      topBar: MiuixTopAppBar(
+        title: '密钥管理',
+        navigationIcon: MiuixIconButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Icon(Icons.arrow_back_rounded,
+              color: AppColors.textPrimary),
+        ),
         actions: [
           if (keys != null && keys.isNotEmpty)
-            TextButton(
-              onPressed: _clearAll,
-              child: const Text('清空',
-                  style: TextStyle(color: Color(0xFFFF6B6B))),
+            MiuixTextButton(
+              '清空',
+              onPressed: _openClearAll,
+              textStyle: const TextStyle(
+                  color: Color(0xFFFF6B6B), fontWeight: FontWeight.w700),
             ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
+      content: (padding) => _loading
+          ? const Center(child: MiuixCircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
               children: [
@@ -422,7 +338,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                       child: _MiniAction(
                         icon: Icons.edit_outlined,
                         label: '手动填写',
-                        onTap: _manualInput,
+                        onTap: _openManualInput,
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -430,7 +346,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                       child: _MiniAction(
                         icon: Icons.paste_rounded,
                         label: '导入文本',
-                        onTap: _importText,
+                        onTap: _openImportText,
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -438,7 +354,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                       child: _MiniAction(
                         icon: Icons.storage_rounded,
                         label: '导入数据库',
-                        onTap: _importDatabase,
+                        onTap: _openImportDatabase,
                       ),
                     ),
                   ],
@@ -492,6 +408,263 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                   ),
               ],
             ),
+      bottomBar: _buildDialogs(),
+    );
+  }
+
+  /// 集中挂载本页所有 Miuix 声明式弹窗。
+  Widget _buildDialogs() {
+    final maxH = MediaQuery.sizeOf(context).height * 0.62;
+    return Stack(
+      children: [
+        // ---- 手动填写 ----
+        _ManualKeyDialog(
+          show: _showManualDialog,
+          platform: _platform,
+          onDismiss: () => setState(() => _showManualDialog = false),
+          onSubmit: _onManualSubmit,
+        ),
+        // ---- 「该平台通常不需要密钥」的保存确认 ----
+        MiuixOverlayDialog(
+          show: _showWarnDialog,
+          title: '${_platform.label}通常不需要密钥',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () => setState(() {
+            _showWarnDialog = false;
+            _pendingEntry = null;
+          }),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              MiuixText(
+                '${_platform.label}的密钥已经内置在文件里或可由文件头推导。'
+                '你仍然可以保存它，但通常不会影响解密结果。\n\n'
+                '确定要保存吗？',
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                height: 1.6,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton(
+                    '不保存',
+                    onPressed: () => setState(() {
+                      _showWarnDialog = false;
+                      _pendingEntry = null;
+                    }),
+                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(width: 8),
+                  MiuixTextButton(
+                    '仍然保存',
+                    onPressed: _confirmWarnSave,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // ---- 导入文本 ----
+        MiuixOverlayDialog(
+          show: _showImportTextDialog,
+          title: '导入密钥文本 → ${_platform.label}',
+          backgroundColor: AppColors.bg2,
+          maxWidth: 480,
+          onDismissRequest: () =>
+              setState(() => _showImportTextDialog = false),
+          content: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxH),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  MiuixText(
+                    _importHint(_platform),
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                    height: 1.6,
+                  ),
+                  const SizedBox(height: 12),
+                  MiuixTextField(
+                    controller: _importController,
+                    maxLines: 8,
+                    minLines: 5,
+                    autofocus: true,
+                    textStyle: const TextStyle(fontSize: 12),
+                    label: switch (_platform) {
+                      DecryptPlatform.qingting => '000102030405060708090a0b0c0d0e0f',
+                      DecryptPlatform.kuwo =>
+                        '12345678-128,UVFNdXNpYyBFbmNWMixLZXk6...',
+                      DecryptPlatform.kugou =>
+                        '8fd2a1c0e3b95d7f4a6b8c2d1e0f3a5b,UVFNdXNpYyBFbmNWMixLZXk6...',
+                      _ => '歌曲名.mp3,UVFNdXNpYyBFbmNWMixLZXk6...',
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      MiuixTextButton(
+                        '取消',
+                        onPressed: () =>
+                            setState(() => _showImportTextDialog = false),
+                        textStyle:
+                            const TextStyle(color: AppColors.textTertiary),
+                      ),
+                      const SizedBox(width: 8),
+                      MiuixTextButton('导入', onPressed: _runImportText),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        // ---- 蜻蜓无法扫描的引导 ----
+        MiuixOverlayDialog(
+          show: _showQingTingHintDialog,
+          title: '蜻蜓 FM 密钥无法扫描',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showQingTingHintDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              MiuixText(
+                '蜻蜓 FM 的密钥是由手机机型信息（product / device / '
+                'manufacturer / brand / board / model）派生出来的，'
+                '不存在于任何客户端数据库里。\n\n'
+                '请用「由设备信息生成」按钮，按你手机的真实机型信息生成。',
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                height: 1.6,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton(
+                    '关闭',
+                    onPressed: () =>
+                        setState(() => _showQingTingHintDialog = false),
+                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(width: 8),
+                  MiuixTextButton('去生成', onPressed: _openQingTingGenerator),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // ---- 蜻蜓设备信息生成器 ----
+        _QingTingGeneratorDialog(
+          show: _showQingTingDialog,
+          onDismiss: () => setState(() => _showQingTingDialog = false),
+          onSaved: _onQingTingSaved,
+        ),
+        // ---- 扫描报告 ----
+        MiuixOverlayDialog(
+          show: _showScanReportDialog,
+          title: _scanImported > 0 ? '已导入 $_scanImported 条密钥' : '未找到密钥',
+          backgroundColor: AppColors.bg2,
+          maxWidth: 480,
+          onDismissRequest: () =>
+              setState(() => _showScanReportDialog = false),
+          content: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxH),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_scanFailed > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: MiuixText(
+                        '$_scanFailed 个文件读取失败',
+                        color: const Color(0xFFFF6B6B),
+                        fontSize: 12,
+                      ),
+                    ),
+                  for (final n in _scanNotes)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: MiuixText('· $n',
+                          color: AppColors.textSecondary,
+                          fontSize: 11.5,
+                          height: 1.5),
+                    ),
+                  const SizedBox(height: 8),
+                  MiuixText(
+                    '提示：QQ 音乐请选择 app_data 目录下的 mmkv 文件；'
+                    '部分客户端会把 ekey 加密存储，遇到这种情况请改用「手动填写」。',
+                    color: AppColors.textTertiary,
+                    fontSize: 11,
+                    height: 1.5,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      MiuixTextButton(
+                        '知道了',
+                        onPressed: () =>
+                            setState(() => _showScanReportDialog = false),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        // ---- 清空确认 ----
+        MiuixOverlayDialog(
+          show: _showClearAllDialog,
+          title: '清空${_platform.label}的全部密钥？',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () => setState(() => _showClearAllDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              MiuixText(
+                '将删除 ${_entriesOf(_platform).length} 条。'
+                '其他平台的密钥不受影响。\n'
+                '清空后需要重新导入或填写，否则无法解密。',
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                height: 1.6,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton(
+                    '取消',
+                    onPressed: () =>
+                        setState(() => _showClearAllDialog = false),
+                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(width: 8),
+                  MiuixTextButton(
+                    '清空',
+                    onPressed: _confirmClearAll,
+                    textStyle: const TextStyle(
+                        color: Color(0xFFFF6B6B),
+                        fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -506,11 +679,19 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
 /// - 蜻蜓 FM → 只要设备密钥，**没有匹配键**（一把通吃）
 /// - 网易云 / 咪咕 → 密钥在文件头里，不需要匹配键
 ///
-/// 确认后直接返回构造好的 [DecryptKeyEntry]（未入库）。
+/// 确认后通过 [onSubmit] 交出构造好的 [DecryptKeyEntry]（未入库）。
 class _ManualKeyDialog extends StatefulWidget {
-  const _ManualKeyDialog({required this.platform});
+  const _ManualKeyDialog({
+    required this.show,
+    required this.platform,
+    required this.onDismiss,
+    required this.onSubmit,
+  });
 
+  final bool show;
   final DecryptPlatform platform;
+  final VoidCallback onDismiss;
+  final ValueChanged<DecryptKeyEntry> onSubmit;
 
   @override
   State<_ManualKeyDialog> createState() => _ManualKeyDialogState();
@@ -572,15 +753,12 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
           setState(() => _error = '资源 ID 与音质都要填，且必须是数字');
           return;
         }
-        Navigator.pop(
-          context,
-          DecryptKeyEntry(
-            value: value,
-            platform: p,
-            resourceId: rid,
-            qualityId: q,
-          ),
-        );
+        widget.onSubmit(DecryptKeyEntry(
+          value: value,
+          platform: p,
+          resourceId: rid,
+          qualityId: q,
+        ));
         return;
       }
       final mk = _match.text.trim();
@@ -589,15 +767,12 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
             '没有它这条密钥永远匹配不上文件');
         return;
       }
-      Navigator.pop(
-        context,
-        _entryWithMatchKey(value, mk, p),
-      );
+      widget.onSubmit(_entryWithMatchKey(value, mk, p));
       return;
     }
 
     // 蜻蜓 / 网易云 / 咪咕：没有匹配键概念。
-    Navigator.pop(context, DecryptKeyEntry(value: value, platform: p));
+    widget.onSubmit(DecryptKeyEntry(value: value, platform: p));
   }
 
   /// 把「匹配键 + ekey」组装成对应平台的条目。
@@ -615,10 +790,15 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
   @override
   Widget build(BuildContext context) {
     final p = widget.platform;
-    return AlertDialog(
-      title: Text('手动填写密钥 → ${p.label}'),
-      content: SizedBox(
-        width: 440,
+    return MiuixOverlayDialog(
+      show: widget.show,
+      title: '手动填写密钥 → ${p.label}',
+      backgroundColor: AppColors.bg2,
+      maxWidth: 480,
+      onDismissRequest: widget.onDismiss,
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.62),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -631,9 +811,11 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
                   color: AppColors.cyan.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Text(
+                child: MiuixText(
                   _keyHint(p),
-                  style: const TextStyle(fontSize: 11.5, height: 1.55),
+                  color: AppColors.textSecondary,
+                  fontSize: 11.5,
+                  height: 1.55,
                 ),
               ),
               const SizedBox(height: 12),
@@ -642,90 +824,78 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
                 Row(
                   children: [
                     Expanded(
-                      child: TextField(
+                      child: MiuixTextField(
                         controller: _rid,
+                        label: '资源 ID（rid）',
                         keyboardType: TextInputType.number,
-                        style: const TextStyle(fontSize: 12),
-                        decoration: const InputDecoration(
-                          labelText: '资源 ID（rid）',
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                        ),
+                        singleLine: true,
+                        textStyle: const TextStyle(fontSize: 12),
                       ),
                     ),
                     const SizedBox(width: 10),
                     SizedBox(
-                      width: 130,
-                      child: TextField(
+                      width: 150,
+                      child: MiuixTextField(
                         controller: _quality,
+                        label: '音质（quality）',
                         keyboardType: TextInputType.number,
-                        style: const TextStyle(fontSize: 12),
-                        decoration: const InputDecoration(
-                          labelText: '音质（quality）',
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                        ),
+                        singleLine: true,
+                        textStyle: const TextStyle(fontSize: 12),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 6),
-                Text(
+                MiuixText(
                   '两者会拼成 ${_rid.text.trim().isEmpty ? 'rid-quality' : '${_rid.text.trim()}-${_quality.text.trim()}'} '
                   '作为查表键',
-                  style: const TextStyle(
-                      fontSize: 10.5, color: AppColors.textTertiary),
+                  color: AppColors.textTertiary,
+                  fontSize: 10.5,
                 ),
                 const SizedBox(height: 12),
               ] else if (p.needsMatchKey) ...[
-                TextField(
+                MiuixTextField(
                   controller: _match,
-                  style: const TextStyle(fontSize: 12),
-                  decoration: InputDecoration(
-                    labelText: '$_matchLabel（必填）',
-                    hintText: switch (p) {
-                      DecryptPlatform.qqMusic => '例如 歌曲名.mp3',
-                      DecryptPlatform.kugou =>
-                        '32 位十六进制，例如 8fd2a1c0e3b95d7f4a6b8c2d1e0f3a5b',
-                      _ => '',
-                    },
-                    isDense: true,
-                    border: const OutlineInputBorder(),
-                  ),
+                  label: '$_matchLabel（必填）',
+                  singleLine: true,
+                  textStyle: const TextStyle(fontSize: 12),
                   onChanged: (_) => setState(() {}),
                 ),
                 const SizedBox(height: 12),
               ],
               // ---- 密钥本体 ----
-              TextField(
+              MiuixTextField(
                 controller: _value,
                 maxLines: p.keyIsHex ? 1 : 3,
                 minLines: p.keyIsHex ? 1 : 2,
-                style: const TextStyle(fontSize: 12),
-                decoration: InputDecoration(
-                  labelText: p.keyIsHex
-                      ? '设备密钥（32 位 hex，16 字节）'
-                      : _valueLabel(p),
-                  isDense: p.keyIsHex,
-                  border: const OutlineInputBorder(),
-                ),
+                textStyle: const TextStyle(fontSize: 12),
+                label: p.keyIsHex ? '设备密钥（32 位 hex，16 字节）' : _valueLabel(p),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 10),
-                Text(_error!,
-                    style: const TextStyle(
-                        fontSize: 11.5, color: Color(0xFFFF6B6B))),
+                MiuixText(
+                  _error!,
+                  color: const Color(0xFFFF6B6B),
+                  fontSize: 11.5,
+                ),
               ],
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton(
+                    '取消',
+                    onPressed: widget.onDismiss,
+                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(width: 8),
+                  MiuixTextButton('添加', onPressed: _submit),
+                ],
+              ),
             ],
           ),
         ),
       ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消')),
-        FilledButton(onPressed: _submit, child: const Text('添加')),
-      ],
     );
   }
 
@@ -767,7 +937,15 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
 
 /// 蜻蜓 FM 设备密钥生成器：填 6 段机型信息 → 派生 device key。
 class _QingTingGeneratorDialog extends StatefulWidget {
-  const _QingTingGeneratorDialog();
+  const _QingTingGeneratorDialog({
+    required this.show,
+    required this.onDismiss,
+    required this.onSaved,
+  });
+
+  final bool show;
+  final VoidCallback onDismiss;
+  final VoidCallback onSaved;
 
   @override
   State<_QingTingGeneratorDialog> createState() =>
@@ -800,7 +978,7 @@ class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
   void _generate() {
     if (_fields.values.any((c) => c.text.trim().isEmpty)) {
       setState(() => _result = null);
-      _toast('六段机型信息都要填');
+      showAppSnack('六段机型信息都要填');
       return;
     }
     final hex = deviceSecretToHex(
@@ -816,36 +994,45 @@ class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
     setState(() => _result = hex);
   }
 
-  void _toast(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  Future<void> _save() async {
+    final keys = await DecryptKeys.load();
+    await keys.add(DecryptKeyEntry(
+      value: _result!,
+      platform: DecryptPlatform.qingting,
+    ));
+    widget.onSaved();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('由设备信息生成蜻蜓密钥'),
-      content: SizedBox(
-        width: 460,
+    return MiuixOverlayDialog(
+      show: widget.show,
+      title: '由设备信息生成蜻蜓密钥',
+      backgroundColor: AppColors.bg2,
+      maxWidth: 480,
+      onDismissRequest: widget.onDismiss,
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.62),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              MiuixText(
                 '填你手机「关于手机」里的原始值。构建号等字段不要改写，'
                 '差一个字符就解不出正确结果。',
-                style: TextStyle(fontSize: 12, height: 1.6),
+                color: AppColors.textSecondary,
+                fontSize: 12,
+                height: 1.6,
               ),
               const SizedBox(height: 14),
               for (final entry in _fields.entries) ...[
-                TextField(
+                MiuixTextField(
                   controller: entry.value,
-                  style: const TextStyle(fontSize: 12),
-                  decoration: InputDecoration(
-                    labelText: entry.key,
-                    isDense: true,
-                    border: const OutlineInputBorder(),
-                  ),
+                  label: entry.key,
+                  singleLine: true,
+                  textStyle: const TextStyle(fontSize: 12),
                 ),
                 const SizedBox(height: 10),
               ],
@@ -861,43 +1048,39 @@ class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
                   child: SelectableText(
                     _result!,
                     style: const TextStyle(
-                        fontSize: 12, fontFamily: 'monospace'),
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        color: AppColors.textPrimary),
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text(
+                MiuixText(
                   '点「保存到蜻蜓」直接入库；若解出来是噪声，多半是某段机型信息写错了。',
-                  style: TextStyle(
-                      fontSize: 11, height: 1.5, color: AppColors.textTertiary),
+                  color: AppColors.textTertiary,
+                  fontSize: 11,
+                  height: 1.5,
                 ),
               ],
+              const SizedBox(height: 16),
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  MiuixTextButton(
+                    '关闭',
+                    onPressed: widget.onDismiss,
+                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                  ),
+                  MiuixTextButton('生成', onPressed: _generate),
+                  if (_result != null)
+                    MiuixTextButton('保存到蜻蜓', onPressed: _save),
+                ],
+              ),
             ],
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('关闭'),
-        ),
-        TextButton(onPressed: _generate, child: const Text('生成')),
-        if (_result != null)
-          FilledButton(
-            onPressed: () async {
-              final keys = await DecryptKeys.load();
-              await keys.add(DecryptKeyEntry(
-                value: _result!,
-                platform: DecryptPlatform.qingting,
-              ));
-              if (!context.mounted) return;
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已保存到蜻蜓 FM')),
-              );
-            },
-            child: const Text('保存到蜻蜓'),
-          ),
-      ],
     );
   }
 }
@@ -927,8 +1110,8 @@ class _PlatformTabs extends StatelessWidget {
           final n = counts[p] ?? 0;
           final sel = p == current;
           final color = sel ? AppColors.cyan : AppColors.textTertiary;
-          return InkWell(
-            onTap: () => onSelect(p),
+          return MiuixPressable(
+            onPressed: () => onSelect(p),
             borderRadius: BorderRadius.circular(14),
             child: Container(
               width: 92,
@@ -951,7 +1134,8 @@ class _PlatformTabs extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
-                      color: sel ? AppColors.textPrimary : AppColors.textSecondary,
+                      color:
+                          sel ? AppColors.textPrimary : AppColors.textSecondary,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -964,7 +1148,8 @@ class _PlatformTabs extends StatelessWidget {
                     n > 0 ? '$n 条' : '未设置',
                     style: TextStyle(
                       fontSize: 10,
-                      color: n > 0 ? AppColors.cyan : AppColors.textTertiary,
+                      color:
+                          n > 0 ? AppColors.cyan : AppColors.textTertiary,
                     ),
                   ),
                 ],
@@ -1011,7 +1196,8 @@ class _PlatformBanner extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11.5,
                 height: 1.5,
-                color: needs ? const Color(0xFFFFB020) : AppColors.textTertiary,
+                color:
+                    needs ? const Color(0xFFFFB020) : AppColors.textTertiary,
               ),
             ),
           ),
@@ -1076,11 +1262,10 @@ class _KeyTile extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
+          MiuixIconButton(
             onPressed: onDelete,
-            icon: const Icon(Icons.delete_outline_rounded, size: 18),
-            color: AppColors.textTertiary,
-            tooltip: '删除',
+            child: const Icon(Icons.delete_outline_rounded,
+                size: 18, color: AppColors.textTertiary),
           ),
         ],
       ),

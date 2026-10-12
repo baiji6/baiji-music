@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../models/models.dart';
 import '../player/player_controller.dart';
 import '../theme/app_theme.dart';
 import 'pages/player_page.dart';
+import 'widgets/app_snackbar.dart';
 import 'widgets/cover_image.dart';
 
 /// 主界面导航外壳。
@@ -37,9 +39,12 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     final isWide = MediaQuery.sizeOf(context).width >= 860;
 
-    return Scaffold(
-      extendBody: true,
-      body: NebulaBackground(
+    return MiuixScaffold(
+      // 背景交给 NebulaBackground，脚手架本身透明
+      containerColor: Colors.transparent,
+      // 标签页（搜索 / 本地音乐等）里的轻量提示统一走全局宿主
+      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
+      content: (padding) => NebulaBackground(
         child: isWide ? _buildWide(context) : _buildNarrow(context),
       ),
     );
@@ -90,20 +95,17 @@ class _AppShellState extends State<AppShell> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(26),
-        child: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: (i) => setState(() => _index = i),
-          backgroundColor: Colors.transparent,
-          destinations: [
+        // Miuix 导航栏：胶囊玻璃容器内嵌，透明底让外层装饰透出
+        child: MiuixNavigationBar(
+          color: Colors.transparent,
+          showDivider: false,
+          defaultWindowInsetsPadding: false,
+          children: [
             for (var i = 0; i < widget.titles.length; i++)
-              NavigationDestination(
+              MiuixNavigationBarItem(
+                selected: i == _index,
+                onPressed: () => setState(() => _index = i),
                 icon: Icon(_icons[i]),
-                selectedIcon: ShaderMask(
-                  shaderCallback: (bounds) => const LinearGradient(
-                    colors: AppColors.neonGradient,
-                  ).createShader(bounds),
-                  child: Icon(_icons[i], color: Colors.white),
-                ),
                 label: widget.titles[i],
               ),
           ],
@@ -206,8 +208,9 @@ class _RailItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(18),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
@@ -333,13 +336,12 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
         ),
         child: Row(
           children: [
-            GestureDetector(
+            MiuixPressable(
               // 点击封面/歌名区域进入完整播放页
-              onTap: hasSong
+              onPressed: hasSong
                   ? () => Navigator.of(context).push(MaterialPageRoute(
                       builder: (_) => const PlayerPage()))
                   : null,
-              behavior: HitTestBehavior.opaque,
               child: Row(
                 children: [
                   hasSong
@@ -360,7 +362,7 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
               ),
             ),
             const SizedBox(width: 6),
-            IconButton(
+            MiuixIconButton(
               onPressed: hasSong
                   ? () {
                       PlayerController.instance.toggle();
@@ -368,15 +370,15 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
                           _playing = PlayerController.instance.isPlaying);
                     }
                   : null,
-              icon: Icon(
+              child: Icon(
                 _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
                 color: hasSong ? AppColors.cyan : AppColors.textTertiary,
                 size: 28,
               ),
             ),
-            IconButton(
+            MiuixIconButton(
               onPressed: hasSong ? () => PlayerController.instance.next() : null,
-              icon: const Icon(Icons.skip_next_rounded,
+              child: const Icon(Icons.skip_next_rounded,
                   color: AppColors.textSecondary, size: 22),
             ),
           ],
@@ -399,9 +401,10 @@ class _MiniCover extends StatelessWidget {
     );
   }
 }
+
 /// 迷你播放条的标题区（歌名 + 细进度条 + 时间）。
 ///
-/// 独立成一个 widget，便于整体包进 GestureDetector 打开完整播放页。
+/// 独立成一个 widget，便于整体包进 MiuixPressable 打开完整播放页。
 class _MiniTitle extends StatelessWidget {
   const _MiniTitle({
     required this.hasSong,
@@ -439,14 +442,9 @@ class _MiniTitle extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(2),
-                child: LinearProgressIndicator(
-                  minHeight: 3,
-                  value: progress,
-                  backgroundColor: AppColors.surfaceGlassStrong,
-                  valueColor: const AlwaysStoppedAnimation<Color>(AppColors.cyan),
-                ),
+              child: MiuixLinearProgressIndicator(
+                progress: progress,
+                height: 3,
               ),
             ),
             const SizedBox(width: 8),

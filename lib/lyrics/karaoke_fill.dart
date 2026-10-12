@@ -16,6 +16,12 @@ library;
 
 import 'package:flutter/material.dart';
 
+/// 填充边界的过渡带宽度，占字宽的比例。
+///
+/// 硬切（0）会有「跳一格」的生硬感；太宽又会拖出重影。12% 是在
+/// 常见字号下约 2~4 逻辑像素的过渡，肉眼可见但不抢戏。
+const double kKaraokeBlendRatio = 0.12;
+
 class KaraokeFill {
   KaraokeFill._();
 
@@ -25,6 +31,8 @@ class KaraokeFill {
   ///   该字无文本（如 QRC 罗马音里的纯时间占位项），跳过。
   /// - [ratios]：与 [wordSpans] 等长的演唱进度 0~1。
   /// - [width]：整行内容宽度（归一化用），<= 0 时返回 null。
+  /// - [blendRatio]：填充边界的过渡带宽度占字宽的比例，默认
+  ///   [kKaraokeBlendRatio]。0 表示硬切。
   ///
   /// 返回 `(stops, colors)`；没有任何有效字时返回 null。
   /// 保证 stops 严格单调递增且都在 0~1 内，可直接构造 [LinearGradient]。
@@ -34,6 +42,7 @@ class KaraokeFill {
     required double width,
     required Color sung,
     required Color unsung,
+    double blendRatio = kKaraokeBlendRatio,
   }) {
     if (width <= 0 || wordSpans.isEmpty || wordSpans.length != ratios.length) {
       return null;
@@ -57,9 +66,30 @@ class KaraokeFill {
         _put(stops, colors, l, sung, width);
         _put(stops, colors, r, sung, width);
       } else {
-        // 正在唱：左边界起就是已唱色，填充前沿处切回未唱色。
+        // 正在唱：填充前沿处用一条窄过渡带从已唱色渐变到未唱色，
+        // 避免硬切换的「跳一格」感。字太窄时过渡带自动收窄到字内。
+        final w = r - l;
+        final f = l + w * ratio;
+        final blend = (w * blendRatio).clamp(0.0, w);
+        final front = (f - blend / 2).clamp(l, r);
+        final back = (f + blend / 2).clamp(l, r);
         _put(stops, colors, l, sung, width);
-        _put(stops, colors, l + (r - l) * ratio, sung, width);
+        if (back > front) {
+          _put(stops, colors, front, sung, width);
+          // 过渡带内插 3 个中间色，颜色变化更有曲线感
+          for (var t = 1; t <= 3; t++) {
+            final p = t / 4;
+            _put(
+              stops,
+              colors,
+              front + (back - front) * p,
+              Color.lerp(sung, unsung, p)!,
+              width,
+            );
+          }
+        } else {
+          _put(stops, colors, f, sung, width);
+        }
         _put(stops, colors, r, unsung, width);
       }
     }

@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 /// 白姬音乐 · 霓虹未来设计系统
 ///
@@ -242,6 +243,51 @@ class AppTheme {
         },
       ),
     );
+  }
+
+  /// Miuix 主题（暗色 · 霓虹桥接）。
+  ///
+  /// 以 [AppColors.violet] 为种子跑 Monet 取色，再把与品牌强相关的一组角色
+  /// 覆写到白姬的深空霓虹令牌上，保证 Miuix 组件（导航栏 / 偏好项 / 滑块 /
+  /// 开关 / 对话框）长在 App 既有视觉体系里，而不是默认 Miuix 紫。
+  static MiuixThemeData miuix() {
+  final colors = miuixColorsFromSeed(
+    seed: AppColors.violet,
+    paletteStyle: MiuixThemePaletteStyle.vibrant,
+    dark: true,
+  ).copy(
+    // 基底：深空 + 玻璃
+    background: AppColors.bg1,
+    onBackground: AppColors.textPrimary,
+    onBackgroundVariant: AppColors.textSecondary,
+    surface: AppColors.bg1,
+    onSurface: AppColors.textPrimary,
+    surfaceVariant: AppColors.bg2,
+    onSurfaceSecondary: AppColors.textSecondary,
+    onSurfaceVariantSummary: AppColors.textTertiary,
+    onSurfaceVariantActions: AppColors.textSecondary,
+    surfaceContainer: AppColors.bg2,
+    onSurfaceContainer: AppColors.textPrimary,
+    onSurfaceContainerVariant: AppColors.textSecondary,
+    surfaceContainerHigh: AppColors.bg2,
+    onSurfaceContainerHigh: AppColors.textPrimary,
+    surfaceContainerHighest: AppColors.bg2,
+    onSurfaceContainerHighest: AppColors.textPrimary,
+    outline: AppColors.strokeGlass,
+    dividerLine: AppColors.strokeGlass,
+    // 霓虹主色
+    primary: AppColors.violet,
+    onPrimary: Colors.white,
+    primaryVariant: AppColors.magenta,
+    secondary: AppColors.cyan,
+    onSecondary: AppColors.bg0,
+    secondaryContainer: AppColors.bg2,
+    onSecondaryContainer: AppColors.textPrimary,
+    // 状态
+    error: AppColors.danger,
+    onError: Colors.white,
+  );
+  return MiuixThemeData.dark(colors: colors);
   }
 }
 

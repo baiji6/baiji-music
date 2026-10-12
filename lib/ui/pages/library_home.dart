@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_version.dart';
 import '../../data/history_store.dart';
@@ -30,14 +31,28 @@ class LibraryHome extends StatefulWidget {
 class _LibraryHomeState extends State<LibraryHome> {
   String _loginHint = '';
 
+  /// 下拉刷新的转圈状态（提升给 MiuixPullToRefresh）。
+  bool _refreshing = false;
+
+  /// 登录方式选择弹层显隐。
+  bool _showLoginSheet = false;
+
+  /// 退出登录确认对话框显隐。
+  bool _showLogoutDialog = false;
+
   @override
   void initState() {
     super.initState();
     _refresh();
   }
 
-  void _refresh() {
+  Future<void> _refresh() async {
+    setState(() => _refreshing = true);
+    // 让刷新指示器至少走完一轮动画，避免"拉一下就闪没"
+    await Future.delayed(const Duration(milliseconds: 450));
+    if (!mounted) return;
     setState(() {
+      _refreshing = false;
       _loginHint = '';
     });
   }
@@ -47,70 +62,22 @@ class _LibraryHomeState extends State<LibraryHome> {
   String _statusText() =>
       _qqLoggedIn ? '已登录：${AppServices.instance.qq.credential.strMusicid}' : '未登录';
 
-  Future<void> _openLogin() async {
+  /// 账号卡片按钮：未登录 → 弹登录方式选择；已登录 → 弹退出确认。
+  void _openLogin() {
     if (_qqLoggedIn) {
-      final ok = await _confirmLogout(context);
-      if (ok == true) {
-        AppServices.instance.qq.logout();
-        _refresh();
-      }
+      setState(() => _showLogoutDialog = true);
       return;
     }
-    // 弹出登录方式选择
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
-        decoration: const BoxDecoration(
-          color: AppColors.bg2,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '选择登录方式',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [AppColors.cyan, AppColors.aqua]),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.login_rounded, color: Colors.white, size: 20),
-              ),
-              title: const Text('QQ 音乐登录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              subtitle: const Text('Cookie / 二维码扫码', style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
-              trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-              onTap: () => Navigator.pop(ctx, 'qq'),
-            ),
-            const SizedBox(height: 8),
-            ListTile(
-              leading: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [AppColors.magenta, AppColors.violet]),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.login_rounded, color: Colors.white, size: 20),
-              ),
-              title: const Text('网易云音乐登录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              subtitle: const Text('Cookie 登录', style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
-              trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-              onTap: () => Navigator.pop(ctx, 'netease'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (choice == null || !mounted) return;
+    setState(() => _showLoginSheet = true);
+  }
+
+  /// 选定登录方式，关弹层并跳转对应登录页。
+  void _chooseLogin(String choice) {
+    setState(() => _showLoginSheet = false);
+    _goLogin(choice);
+  }
+
+  Future<void> _goLogin(String choice) async {
     // 底部弹层关闭后 context 可能已失效，先取好 Navigator 并在 await 后复查 mounted
     final navigator = Navigator.of(context);
     if (choice == 'qq') {
@@ -128,26 +95,10 @@ class _LibraryHomeState extends State<LibraryHome> {
     }
   }
 
-  Future<bool?> _confirmLogout(BuildContext context) {
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.bg2,
-        title: const Text('退出登录', style: TextStyle(fontSize: 16)),
-        content: const Text('确定退出当前 QQ 音乐账号吗？',
-            style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: AppColors.textTertiary)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('退出', style: TextStyle(color: AppColors.magenta)),
-          ),
-        ],
-      ),
-    );
+  void _confirmLogout() {
+    setState(() => _showLogoutDialog = false);
+    AppServices.instance.qq.logout();
+    _refresh();
   }
 
   @override
@@ -169,191 +120,266 @@ class _LibraryHomeState extends State<LibraryHome> {
           () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const FavoritePage()))),
     ];
 
-    return SafeArea(
-      child: RefreshIndicator(
-        onRefresh: () async => _refresh(),
-        color: AppColors.cyan,
-        backgroundColor: AppColors.surfaceGlass,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(
-              parent: BouncingScrollPhysics()),
-          padding: const EdgeInsets.fromLTRB(20, 26, 20, 30),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const NeonText(
-                '我的',
-                style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1),
-              ),
-              const SizedBox(height: 20),
-
-              // 账号卡片
-              GlassCard(
-                padding: const EdgeInsets.all(20),
-                glowColor: AppColors.violet,
-                child: Row(
-                  children: [
-                    Container(
-                      width: 58,
-                      height: 58,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(colors: AppColors.neonGradient),
-                        borderRadius: BorderRadius.circular(18),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.magenta.withValues(alpha: 0.4),
-                            blurRadius: 18,
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        _qqLoggedIn ? Icons.verified_rounded : Icons.person_rounded,
-                        color: Colors.white,
-                        size: 30,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _statusText(),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 17, fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _qqLoggedIn
-                                ? '绿钻音质已同步 · QQ 音乐'
-                                : '登录 QQ 音乐账号，同步绿钻与无损音质',
-                            style: const TextStyle(
-                                fontSize: 12, color: AppColors.textTertiary),
-                          ),
-                          if (_loginHint.isNotEmpty) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              _loginHint,
-                              style: const TextStyle(
-                                  fontSize: 11, color: AppColors.magenta),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    NeonButton(
-                      label: _qqLoggedIn ? '退出' : '登录',
-                      icon: _qqLoggedIn
-                          ? Icons.logout_rounded
-                          : Icons.login_rounded,
-                      onPressed: _openLogin,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                      radius: 12,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // 本地数据入口
-              const SectionHeader(title: '本地内容'),
-              GridView.count(
-                crossAxisCount: 2,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                mainAxisSpacing: 14,
-                crossAxisSpacing: 14,
-                childAspectRatio: 1.65,
+    return Stack(
+      children: [
+        SafeArea(
+          child: MiuixPullToRefresh(
+            isRefreshing: _refreshing,
+            onRefresh: _refresh,
+            color: AppColors.cyan,
+            refreshTexts: const ['下拉刷新', '松手立即刷新', '正在刷新…', '刷新完成'],
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics()),
+              padding: const EdgeInsets.fromLTRB(20, 26, 20, 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final e in entries)
-                    GlassCard(
-                      padding: const EdgeInsets.all(16),
-                      radius: 20,
-                      onTap: e.$5,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color: e.$4.withValues(alpha: 0.16),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: e.$4.withValues(alpha: 0.4)),
-                            ),
-                            child: Icon(e.$3, color: e.$4, size: 21),
-                          ),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(
-                                e.$1,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const Spacer(),
-                              Text(
-                                e.$2,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: AppColors.textTertiary,
-                                ),
+                  const NeonText(
+                    '我的',
+                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 1),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // 账号卡片
+                  GlassCard(
+                    padding: const EdgeInsets.all(20),
+                    glowColor: AppColors.violet,
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 58,
+                          height: 58,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(colors: AppColors.neonGradient),
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.magenta.withValues(alpha: 0.4),
+                                blurRadius: 18,
                               ),
                             ],
                           ),
-                        ],
-                      ),
+                          child: Icon(
+                            _qqLoggedIn ? Icons.verified_rounded : Icons.person_rounded,
+                            color: Colors.white,
+                            size: 30,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _statusText(),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 17, fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _qqLoggedIn
+                                    ? '绿钻音质已同步 · QQ 音乐'
+                                    : '登录 QQ 音乐账号，同步绿钻与无损音质',
+                                style: const TextStyle(
+                                    fontSize: 12, color: AppColors.textTertiary),
+                              ),
+                              if (_loginHint.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  _loginHint,
+                                  style: const TextStyle(
+                                      fontSize: 11, color: AppColors.magenta),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        NeonButton(
+                          label: _qqLoggedIn ? '退出' : '登录',
+                          icon: _qqLoggedIn
+                              ? Icons.logout_rounded
+                              : Icons.login_rounded,
+                          onPressed: _openLogin,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          radius: 12,
+                        ),
+                      ],
                     ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // 本地数据入口
+                  const SectionHeader(title: '本地内容'),
+                  GridView.count(
+                    crossAxisCount: 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 14,
+                    crossAxisSpacing: 14,
+                    childAspectRatio: 1.65,
+                    children: [
+                      for (final e in entries)
+                        GlassCard(
+                          padding: const EdgeInsets.all(16),
+                          radius: 20,
+                          onTap: e.$5,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: e.$4.withValues(alpha: 0.16),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: e.$4.withValues(alpha: 0.4)),
+                                ),
+                                child: Icon(e.$3, color: e.$4, size: 21),
+                              ),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    e.$1,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  Text(
+                                    e.$2,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.textTertiary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+
+                  // 设置 / 关于
+                  const SectionHeader(title: '更多'),
+                  GlassCard(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
+                      children: [
+                        _SettingTile(
+                          icon: Icons.settings_outlined,
+                          title: '设置',
+                          subtitle: '音质偏好 · 下载目录 · 缓存管理',
+                          color: AppColors.cyan,
+                          onTap: () => _openSettings(context),
+                        ),
+                        _SettingTile(
+                          icon: Icons.build_outlined,
+                          title: '工具箱',
+                          subtitle: '本地音乐解密 · 更多实用工具',
+                          color: AppColors.warning,
+                          onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const ToolboxPage())),
+                        ),
+                        _SettingTile(
+                          icon: Icons.bug_report_outlined,
+                          title: '日志与调试',
+                          subtitle: '查看/导出运行日志',
+                          color: AppColors.violet,
+                          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LogPage())),
+                        ),
+                        _SettingTile(
+                          icon: Icons.info_outline_rounded,
+                          title: '关于',
+                          subtitle: AppVersion.display,
+                          color: AppColors.magenta,
+                          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AboutPage())),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
-              const SizedBox(height: 24),
+            ),
+          ),
+        ),
+        _buildLoginSheet(),
+        _buildLogoutDialog(),
+      ],
+    );
+  }
 
-              // 设置 / 关于
-              const SectionHeader(title: '更多'),
-              GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    _SettingTile(
-                      icon: Icons.settings_outlined,
-                      title: '设置',
-                      subtitle: '音质偏好 · 下载目录 · 缓存管理',
-                      color: AppColors.cyan,
-                      onTap: () => _openSettings(context),
-                    ),
-                    _SettingTile(
-                      icon: Icons.build_outlined,
-                      title: '工具箱',
-                      subtitle: '本地音乐解密 · 更多实用工具',
-                      color: AppColors.warning,
-                      onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const ToolboxPage())),
-                    ),
-                    _SettingTile(
-                      icon: Icons.bug_report_outlined,
-                      title: '日志与调试',
-                      subtitle: '查看/导出运行日志',
-                      color: AppColors.violet,
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LogPage())),
-                    ),
-                    _SettingTile(
-                      icon: Icons.info_outline_rounded,
-                      title: '关于',
-                      subtitle: AppVersion.display,
-                      color: AppColors.magenta,
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AboutPage())),
-                    ),
-                  ],
-                ),
+  /// 登录方式选择弹层（声明式 MiuixOverlayBottomSheet）。
+  Widget _buildLoginSheet() {
+    return MiuixOverlayBottomSheet(
+      show: _showLoginSheet,
+      title: '选择登录方式',
+      backgroundColor: AppColors.bg2,
+      onDismissRequest: () => setState(() => _showLoginSheet = false),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _LoginOptionRow(
+            gradient: const [AppColors.cyan, AppColors.aqua],
+            title: 'QQ 音乐登录',
+            subtitle: 'Cookie / 二维码扫码',
+            onTap: () => _chooseLogin('qq'),
+          ),
+          const SizedBox(height: 8),
+          _LoginOptionRow(
+            gradient: const [AppColors.magenta, AppColors.violet],
+            title: '网易云音乐登录',
+            subtitle: 'Cookie 登录',
+            onTap: () => _chooseLogin('netease'),
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+
+  /// 退出登录确认对话框（声明式 MiuixOverlayDialog，按钮放在 content 里）。
+  Widget _buildLogoutDialog() {
+    return MiuixOverlayDialog(
+      show: _showLogoutDialog,
+      title: '退出登录',
+      maxWidth: 420,
+      backgroundColor: AppColors.bg2,
+      onDismissRequest: () => setState(() => _showLogoutDialog = false),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '确定退出当前 QQ 音乐账号吗？',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              MiuixTextButton(
+                '取消',
+                onPressed: () => setState(() => _showLogoutDialog = false),
+                textStyle: const TextStyle(color: AppColors.textTertiary),
+              ),
+              const SizedBox(width: 8),
+              MiuixTextButton(
+                '退出',
+                onPressed: _confirmLogout,
+                textStyle: const TextStyle(color: AppColors.magenta),
               ),
             ],
           ),
-        ),
+        ],
       ),
     );
   }
@@ -370,6 +396,63 @@ class _LibraryHomeState extends State<LibraryHome> {
   void _openSettings(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const SettingsPage()),
+    );
+  }
+}
+
+/// 登录方式弹层里的一行。
+class _LoginOptionRow extends StatelessWidget {
+  const _LoginOptionRow({
+    required this.gradient,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final List<Color> gradient;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: gradient),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.login_rounded, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -391,12 +474,29 @@ class _SettingTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon, color: color, size: 22),
-      title: Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-      subtitle: Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textTertiary)),
-      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-      onTap: onTap,
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textTertiary)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+          ],
+        ),
+      ),
     );
   }
 }

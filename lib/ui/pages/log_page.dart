@@ -1,11 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/app_logger.dart';
 import '../../core/cache_manager.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/app_snackbar.dart';
 
 /// 日志与调试页：展示应用运行日志，支持六级分级过滤与导出。
 class LogPage extends StatefulWidget {
@@ -25,7 +27,7 @@ class _LogPageState extends State<LogPage> {
     try {
       final logs = AppLog.instance.dump();
       if (logs.isEmpty) {
-        _showSnack('暂无日志可导出');
+        showAppSnack('暂无日志可导出');
         return;
       }
       final text = logs.join('\n');
@@ -41,20 +43,10 @@ class _LogPageState extends State<LogPage> {
     } catch (e) {
       // 这里 await 过了，context 可能已经失效——和 finally 一样要先判mounted
       if (!mounted) return;
-      _showSnack('导出失败: $e', isError: true);
+      showAppSnack('导出失败: $e');
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
-  }
-
-  void _showSnack(String msg, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg, style: const TextStyle(fontSize: 13)),
-        backgroundColor: isError ? AppColors.danger : AppColors.cyan,
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
 
   Color _levelColor(String level) {
@@ -93,35 +85,42 @@ class _LogPageState extends State<LogPage> {
       return _levelIndex(level) >= filterIdx;
     }).toList();
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('日志与调试'),
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
+      topBar: MiuixTopAppBar(
+        title: '日志与调试',
+        color: Colors.transparent,
+        navigationIcon: MiuixIconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: AppColors.textPrimary, size: 20),
+        ),
         actions: [
-          TextButton(
+          MiuixTextButton(
+            '清空',
             onPressed: () {
               AppLog.instance.clear();
-              _showSnack('日志已清空');
+              showAppSnack('日志已清空');
               setState(() {});
             },
-            child: const Text('清空', style: TextStyle(color: AppColors.danger, fontSize: 13)),
+            textStyle: const TextStyle(color: AppColors.danger, fontSize: 13),
           ),
           if (allLogs.isNotEmpty)
-            TextButton(
-              onPressed: _exporting ? null : _exportLogs,
-              child: _exporting
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.cyan),
-                    )
-                  : const Text('导出', style: TextStyle(color: AppColors.cyan, fontSize: 13)),
-            ),
+            if (_exporting)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                child: MiuixCircularProgressIndicator(size: 16, strokeWidth: 2),
+              )
+            else
+              MiuixTextButton(
+                '导出',
+                onPressed: _exportLogs,
+                textStyle: const TextStyle(color: AppColors.cyan, fontSize: 13),
+              ),
         ],
       ),
-      body: Column(
+      content: (padding) => Column(
         children: [
           // 级别过滤栏
           Container(
@@ -135,8 +134,9 @@ class _LogPageState extends State<LogPage> {
                 final active = level == _filterLevel;
                 return Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: GestureDetector(
-                    onTap: () => setState(() => _filterLevel = level),
+                  child: MiuixPressable(
+                    onPressed: () => setState(() => _filterLevel = level),
+                    borderRadius: BorderRadius.circular(16),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
@@ -177,7 +177,7 @@ class _LogPageState extends State<LogPage> {
               ],
             ),
           ),
-          const Divider(height: 1, color: AppColors.strokeGlass),
+          const MiuixHorizontalDivider(thickness: 1, color: AppColors.strokeGlass),
           // 日志列表
           Expanded(
             child: logs.isEmpty

@@ -29,6 +29,35 @@ void main() {
     test('构建号后缀被忽略', () {
       expect(checkerDebugParse('2.1.0+7'), <int>[2, 1, 0]);
       expect(checkerDebugIsNewer('2.1.0+7', '2.1.0'), isFalse);
+      expect(checkerDebugIsNewer('2.1.0', '2.1.0+7'), isFalse);
+    });
+
+    // ------- 项目特有约定：-fixN 是修订发布，比正式版更新 -------
+    // 这是「装 2.2.3 却对 GitHub 上的 v2.2.3-fix1 提示已是最新」的根因。
+    test('fix 后缀比无后缀正式版新（修订发布语义）', () {
+      expect(checkerDebugIsNewer('2.2.3-fix1', '2.2.3'), isTrue);
+      expect(checkerDebugIsNewer('v2.2.3-fix1', '2.2.3'), isTrue);
+      expect(checkerDebugIsNewer('2.2.3', '2.2.3-fix1'), isFalse,
+          reason: '正式版不比修订版新');
+    });
+
+    test('fixN 越大越新', () {
+      expect(checkerDebugIsNewer('2.2.3-fix2', '2.2.3-fix1'), isTrue);
+      expect(checkerDebugIsNewer('2.2.3-fix10', '2.2.3-fix9'), isTrue);
+      expect(checkerDebugIsNewer('2.2.3-fix1', '2.2.3-fix10'), isFalse);
+    });
+
+    test('数字优先：fix 后缀不越过次版本号', () {
+      expect(checkerDebugIsNewer('2.2.4', '2.2.3-fix10'), isTrue);
+      expect(checkerDebugIsNewer('2.2.2-fix9', '2.2.3'), isFalse);
+      expect(checkerDebugIsNewer('2.2.3-fix1', '2.2.4'), isFalse);
+    });
+
+    test('同一版本不同写法不误报（v 前缀 / 空白 / +N）', () {
+      expect(checkerDebugIsNewer(' v2.2.3-fix1 ', '2.2.3-fix1'), isFalse);
+      expect(checkerDebugIsNewer('2.2.3+5', '2.2.3-fix1'), isFalse);
+      expect(checkerDebugIsNewer('2.2.3-fix1+5', '2.2.3'), isTrue,
+          reason: 'fix1+5 仍是 fix1 修订版');
     });
 
     test('大写 V 前缀与空白容忍', () {

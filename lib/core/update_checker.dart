@@ -89,7 +89,8 @@ class UpdateChecker {
   /// [force] 为 true 时忽略「此版本已忽略」的记录（设置页手动检查用）。
   Future<UpdateCheckOutcome> check({bool force = false}) async {
     try {
-      final current = _parseVersion(await getCurrentVersion());
+      final currentRaw = await getCurrentVersion();
+      final current = _parseVersion(currentRaw);
       if (current == null) {
         return const UpdateCheckOutcome.failed('无法读取当前版本号');
       }
@@ -116,8 +117,8 @@ class UpdateChecker {
         final tag = (item['tag_name'] as String?) ?? '';
         final v = _parseVersion(tag);
         if (v == null) continue;
-        if (!_isNewer(v, current)) continue;
-        if (best != null && !_isNewer(v, best.version)) continue;
+        if (!_isNewer(tag, currentRaw)) continue;
+        if (best != null && !_isNewer(tag, best.tag)) continue;
         best = UpdateInfo(
           tag: tag,
           version: v,
@@ -187,15 +188,66 @@ class UpdateChecker {
   }
 
   /// 逐位比较；位数不同时按 0 补齐，避免 `2.0` 与 `2.0.0` 被判为有新版本。
-  static bool _isNewer(List<int> latest, List<int> current) {
-    final n = latest.length > current.length ? latest.length : current.length;
+  ///
+  /// 数字部分完全相同时，进入**后缀比较**。本项目的版本约定与 SemVer 的
+  /// 预发布语义不同：`-fixN` 是**修订发布**（比不带后缀的正式版更新、
+  /// 且 fixN 越大越新），而不是「预发布，比正式版旧」。
+  ///
+  /// 所以 `2.2.3-fix1` 必须判为比 `2.2.3` 新——否则装了 `2.2.3` 的用户
+  /// 看着 GitHub 上的 `v2.2.3-fix1` 却收到「已是最新」。
+  /// 反之 `2.2.4` 与 `2.2.3-fix1` 之间仍是**数字优先**，fixN 再大也不越界。
+  ///
+  /// 规则：
+  /// - 无后缀 / `+N`（build metadata，SemVer 规定不参与排序）：rank 0
+  /// - `-fixN`：rank `1 + N`
+  /// - 其它未知后缀（`-beta` 等）：rank 1000，字典序决胜
+  static bool _isNewer(String latest, String current) {
+    final a = _parseVersion(latest);
+    final b = _parseVersion(current);
+    if (a == null || b == null) return false;
+    final n = a.length > b.length ? a.length : b.length;
     for (var i = 0; i < n; i++) {
-      final a = i < latest.length ? latest[i] : 0;
-      final b = i < current.length ? current[i] : 0;
-      if (a > b) return true;
-      if (a < b) return false;
+      final x = i < a.length ? a[i] : 0;
+      final y = i < b.length ? b[i] : 0;
+      if (x > y) return true;
+      if (x < y) return false;
+    }
+    // 数字相同：比后缀 rank
+    final ra = _suffixRank(latest);
+    final rb = _suffixRank(current);
+    if (ra != rb) return ra > rb;
+    if (ra >= 1000) {
+      // 都是未知后缀，字典序决胜（稳定即可，项目里用不到）
+      return _suffixOf(latest).compareTo(_suffixOf(current)) > 0;
     }
     return false;
+  }
+
+  /// 提取 `-` 之后的原始后缀（不含 `-` 与 `+` 部分）。
+  static String _suffixOf(String v) {
+    final m = RegExp(r'^\d+(?:\.\d+)*(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$')
+        .firstMatch(_stripPrefix(v));
+    return m?.group(1) ?? '';
+  }
+
+  /// 去掉 `v` 前缀与首尾空白（GitHub tag 形如 `v2.2.3-fix1`）。
+  static String _stripPrefix(String v) =>
+      v.trim().replaceFirst(RegExp(r'^[vV]'), '');
+
+  /// 后缀的排序 rank，规则见 [_isNewer] 文档。
+  ///
+  /// `+N` 是 build metadata，SemVer 明确规定不参与优先级，与无后缀同级；
+  /// 只有 `-` 之后的部分才是本项目语境里的修订号（`-fixN`）。
+  static int _suffixRank(String v) {
+    final raw = _stripPrefix(v);
+    final m =
+        RegExp(r'^\d+(?:\.\d+)*([-+])([0-9A-Za-z.-]+)').firstMatch(raw);
+    if (m == null) return 0;
+    final suffix = m.group(2)!;
+    if (m.group(1) == '+') return 0; // build metadata：不参与排序
+    final fix = RegExp(r'^fix(\d+)$').firstMatch(suffix);
+    if (fix != null) return 1 + int.parse(fix.group(1)!);
+    return 1000; // 未知后缀：保守视为比无后缀新，同 rank 内按字典序
   }
 }
 
@@ -229,13 +281,12 @@ class UpdateInfo {
 // Dart 的私有成员无法跨库访问，这里开两个只做转发的钩子，
 // 保证 `_parseVersion` / `_isNewer` 仍是真私有（对外 API 不变）。
 
-/// 仅供测试：解析版本字符串。
+/// 仅供测试：解析版本字符串（只取数字部分，后缀由比较逻辑单独处理）。
 List<int>? checkerDebugParse(String v) => UpdateChecker._parseVersion(v);
 
-/// 仅供测试：判断 [latest] 是否比 [current] 新。
-bool checkerDebugIsNewer(String latest, String current) {
-  final a = UpdateChecker._parseVersion(latest);
-  final b = UpdateChecker._parseVersion(current);
-  if (a == null || b == null) return false;
-  return UpdateChecker._isNewer(a, b);
-}
+/// 仅供测试：判断 tag [latest] 是否比 tag [current] 新。
+///
+/// 入参是完整 tag 串（含 `v` 前缀与 `-fixN` 后缀），
+/// 与 [_isNewer] 的真实调用方式一致。
+bool checkerDebugIsNewer(String latest, String current) =>
+    UpdateChecker._isNewer(latest, current);

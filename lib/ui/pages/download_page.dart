@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../download/download_manager.dart';
 import '../../metadata/audio_reader.dart';
@@ -9,6 +10,7 @@ import '../../models/models.dart';
 import '../../download/download_task.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 
 /// 下载管理页：显示下载任务队列（进行中 + 历史），点完成项可直接播放。
@@ -25,6 +27,9 @@ class DownloadPage extends StatefulWidget {
 class _DownloadPageState extends State<DownloadPage> {
   List<DownloadTask> _tasks = const [];
   StreamSubscription<List<DownloadTask>>? _sub;
+
+  /// 「清空下载（删文件）」确认弹窗显隐。
+  bool _showClearAllDialog = false;
 
   @override
   void initState() {
@@ -66,7 +71,7 @@ class _DownloadPageState extends State<DownloadPage> {
         .whereType<File>()
         .where(_isAudio)
         .toList()
-        ..sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+      ..sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
 
     for (final f in files) {
       if (known.contains(f.path)) continue;
@@ -143,21 +148,13 @@ class _DownloadPageState extends State<DownloadPage> {
 
   Future<void> _play(DownloadTask task) async {
     if (!File(task.filePath).existsSync()) {
-      _snack('文件已被删除或移动', isError: true);
+      showAppSnack('文件已被删除或移动');
       return;
     }
     final song = downloadedSongOf(task);
     await PlayerController.instance.playQueue([song], startIndex: 0);
     if (!mounted) return;
-    _snack('正在播放: ${song.name}');
-  }
-
-  void _snack(String msg, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg, style: const TextStyle(fontSize: 13)),
-      backgroundColor: isError ? AppColors.danger : AppColors.cyan,
-      duration: const Duration(seconds: 2),
-    ));
+    showAppSnack('正在播放: ${song.name}');
   }
 
   Future<void> _deleteFile(DownloadTask task) async {
@@ -165,7 +162,7 @@ class _DownloadPageState extends State<DownloadPage> {
       final f = File(task.filePath);
       if (await f.exists()) await f.delete();
     } catch (e) {
-      _snack('删除失败: $e', isError: true);
+      showAppSnack('删除失败: $e');
     }
     // 顺带删掉同名的歌词/封面外挂文件
     final stem = task.filePath.contains('.')
@@ -183,7 +180,7 @@ class _DownloadPageState extends State<DownloadPage> {
   }
 
   Future<void> _retry(DownloadTask task) async {
-    _snack('重新下载: ${task.song.name}');
+    showAppSnack('重新下载: ${task.song.name}');
     unawaited(runManagedDownload(
       task.song,
       qqQuality: DownloadManager.instance.qqQuality,
@@ -191,26 +188,12 @@ class _DownloadPageState extends State<DownloadPage> {
     ));
   }
 
-  Future<void> _clearAll() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.bg2,
-        title: const Text('清空下载', style: TextStyle(fontSize: 16)),
-        content: const Text('确定删除所有已下载的歌曲文件？', style: TextStyle(fontSize: 13)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: AppColors.textTertiary)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('清空', style: TextStyle(color: AppColors.danger)),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
+  void _openClearAll() {
+    setState(() => _showClearAllDialog = true);
+  }
+
+  Future<void> _confirmClearAll() async {
+    setState(() => _showClearAllDialog = false);
 
     for (final t in DownloadTaskRegistry.instance.tasks) {
       if (t.state.isActive) continue;
@@ -247,32 +230,36 @@ class _DownloadPageState extends State<DownloadPage> {
     final active = _tasks.where((t) => t.state.isActive).toList();
     final finished = _tasks.where((t) => t.state.isTerminal).toList();
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('下载管理'),
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
+      topBar: MiuixTopAppBar(
+        title: '下载管理',
+        navigationIcon: MiuixIconButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Icon(Icons.arrow_back_rounded,
+              color: AppColors.textPrimary),
+        ),
         actions: [
           if (finished.isNotEmpty)
-            IconButton(
-              tooltip: '清除已完成记录（保留文件）',
+            MiuixIconButton(
               onPressed: () {
                 final n = DownloadTaskRegistry.instance.clearFinished();
                 setState(() => _tasks = DownloadTaskRegistry.instance.tasks);
-                _snack('已清除 $n 条记录（文件保留）');
+                showAppSnack('已清除 $n 条记录（文件保留）');
               },
-              icon: const Icon(Icons.playlist_remove_rounded, color: AppColors.textSecondary),
+              child: const Icon(Icons.playlist_remove_rounded,
+                  color: AppColors.textSecondary),
             ),
           if (finished.isNotEmpty)
-            IconButton(
-              tooltip: '清空下载（删文件）',
-              onPressed: _clearAll,
-              icon: const Icon(Icons.delete_sweep_rounded, color: AppColors.danger),
+            MiuixIconButton(
+              onPressed: _openClearAll,
+              child: const Icon(Icons.delete_sweep_rounded,
+                  color: AppColors.danger),
             ),
         ],
       ),
-      body: _tasks.isEmpty
+      content: (padding) => _tasks.isEmpty
           ? const Center(
               child: Text(
                 '暂无下载\n搜索歌曲后长按可下载',
@@ -286,16 +273,20 @@ class _DownloadPageState extends State<DownloadPage> {
               itemBuilder: (ctx, i) {
                 final t = _tasks[i];
                 // 分组标题：进行中 / 已完成
-                final showHeader = i == 0 || _tasks[i - 1].state.isActive != t.state.isActive;
+                final showHeader = i == 0 ||
+                    _tasks[i - 1].state.isActive != t.state.isActive;
                 final header = showHeader
-                    ? (t.state.isActive ? '进行中（${active.length}）' : '已完成（${finished.length}）')
+                    ? (t.state.isActive
+                        ? '进行中（${active.length}）'
+                        : '已完成（${finished.length}）')
                     : null;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (header != null)
                       Padding(
-                        padding: EdgeInsets.only(top: i == 0 ? 0 : 14, bottom: 8, left: 4),
+                        padding: EdgeInsets.only(
+                            top: i == 0 ? 0 : 14, bottom: 8, left: 4),
                         child: Text(
                           header,
                           style: const TextStyle(
@@ -310,6 +301,7 @@ class _DownloadPageState extends State<DownloadPage> {
                 );
               },
             ),
+      bottomBar: _buildDialogs(),
     );
   }
 
@@ -320,109 +312,119 @@ class _DownloadPageState extends State<DownloadPage> {
 
     return GlassCard(
       margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            gradient: failed
-                ? const LinearGradient(colors: [AppColors.danger, Colors.transparent])
-                : const LinearGradient(colors: AppColors.neonGradient),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(
-            done
-                ? Icons.check_rounded
-                : failed
-                    ? Icons.error_outline_rounded
-                    : Icons.music_note_rounded,
-            color: Colors.white,
-            size: 22,
-          ),
-        ),
-        title: Text(
-          t.song.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: failed ? AppColors.danger : null,
-          ),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              t.song.singer.isEmpty ? '未知艺术家' : t.song.singer,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-            ),
-            const SizedBox(height: 4),
-            // 进度条：只有进行中任务需要
-            if (t.state.isActive)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(3),
-                          child: LinearProgressIndicator(
-                            value: ratio,
-                            minHeight: 4,
-                            backgroundColor: AppColors.surfaceGlass,
-                            valueColor:
-                                const AlwaysStoppedAnimation<Color>(AppColors.cyan),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        ratio == null
-                            ? t.state.label
-                            : '${(ratio * 100).toStringAsFixed(0)}%',
-                        style: const TextStyle(
-                            fontSize: 10, color: AppColors.textTertiary),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    [
-                      if (t.received > 0)
-                        '${_fmtBytes(t.received)}${t.total > 0 ? ' / ${_fmtBytes(t.total)}' : ''}',
-                      if (_fmtSpeed(t.bytesPerSecond).isNotEmpty)
-                        _fmtSpeed(t.bytesPerSecond),
-                    ].join(' · '),
-                    style: const TextStyle(
-                        fontSize: 10, color: AppColors.textTertiary),
-                  ),
-                ],
-              )
-            else
-              Text(
-                [
-                  t.state.label,
-                  if (t.qualityLabel.isNotEmpty) t.qualityLabel,
-                  if (t.total > 0) _fmtBytes(t.total),
-                  if (t.extras.isNotEmpty) t.extras,
-                  if (failed && t.error.isNotEmpty) t.error,
-                ].join(' · '),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: failed ? AppColors.danger : AppColors.textTertiary,
+      child: MiuixPressable(
+        onPressed: done ? () => _play(t) : null,
+        borderRadius: BorderRadius.circular(22),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  gradient: failed
+                      ? const LinearGradient(
+                          colors: [AppColors.danger, Colors.transparent])
+                      : const LinearGradient(colors: AppColors.neonGradient),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  done
+                      ? Icons.check_rounded
+                      : failed
+                          ? Icons.error_outline_rounded
+                          : Icons.music_note_rounded,
+                  color: Colors.white,
+                  size: 22,
                 ),
               ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      t.song.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: failed ? AppColors.danger : AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      t.song.singer.isEmpty ? '未知艺术家' : t.song.singer,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12, color: AppColors.textTertiary),
+                    ),
+                    const SizedBox(height: 4),
+                    // 进度条：只有进行中任务需要
+                    if (t.state.isActive)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: MiuixLinearProgressIndicator(
+                                  progress: ratio,
+                                  height: 4,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                ratio == null
+                                    ? t.state.label
+                                    : '${(ratio * 100).toStringAsFixed(0)}%',
+                                style: const TextStyle(
+                                    fontSize: 10, color: AppColors.textTertiary),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            [
+                              if (t.received > 0)
+                                '${_fmtBytes(t.received)}${t.total > 0 ? ' / ${_fmtBytes(t.total)}' : ''}',
+                              if (_fmtSpeed(t.bytesPerSecond).isNotEmpty)
+                                _fmtSpeed(t.bytesPerSecond),
+                            ].join(' · '),
+                            style: const TextStyle(
+                                fontSize: 10, color: AppColors.textTertiary),
+                          ),
+                        ],
+                      )
+                    else
+                      Text(
+                        [
+                          t.state.label,
+                          if (t.qualityLabel.isNotEmpty) t.qualityLabel,
+                          if (t.total > 0) _fmtBytes(t.total),
+                          if (t.extras.isNotEmpty) t.extras,
+                          if (failed && t.error.isNotEmpty) t.error,
+                        ].join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color:
+                              failed ? AppColors.danger : AppColors.textTertiary,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              _trailing(t),
+            ],
+          ),
         ),
-        isThreeLine: t.state.isActive,
-        trailing: _trailing(t),
-        onTap: done ? () => _play(t) : null,
       ),
     );
   }
@@ -430,30 +432,26 @@ class _DownloadPageState extends State<DownloadPage> {
   Widget _trailing(DownloadTask t) {
     if (t.state.isActive) {
       return const Padding(
-        padding: EdgeInsets.only(right: 8),
-        child: SizedBox(
-          width: 20,
-          height: 20,
-          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.cyan),
-        ),
+        padding: EdgeInsets.only(right: 8, top: 12),
+        child: MiuixCircularProgressIndicator(strokeWidth: 2, size: 20),
       );
     }
     if (t.state == DownloadTaskState.failed) {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            tooltip: '重试',
+          MiuixIconButton(
             onPressed: () => _retry(t),
-            icon: const Icon(Icons.refresh_rounded, color: AppColors.cyan, size: 20),
+            child: const Icon(Icons.refresh_rounded,
+                color: AppColors.cyan, size: 20),
           ),
-          IconButton(
-            tooltip: '删除记录',
+          MiuixIconButton(
             onPressed: () {
               DownloadTaskRegistry.instance.remove(t.id);
               setState(() => _tasks = DownloadTaskRegistry.instance.tasks);
             },
-            icon: const Icon(Icons.close_rounded, color: AppColors.textTertiary, size: 18),
+            child: const Icon(Icons.close_rounded,
+                color: AppColors.textTertiary, size: 18),
           ),
         ],
       );
@@ -461,15 +459,59 @@ class _DownloadPageState extends State<DownloadPage> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        IconButton(
-          tooltip: '播放',
+        MiuixIconButton(
           onPressed: () => _play(t),
-          icon: const Icon(Icons.play_circle_fill_rounded, color: AppColors.cyan, size: 26),
+          child: const Icon(Icons.play_circle_fill_rounded,
+              color: AppColors.cyan, size: 26),
         ),
-        IconButton(
-          tooltip: '删除文件',
+        MiuixIconButton(
           onPressed: () => _deleteFile(t),
-          icon: const Icon(Icons.delete_outline, color: AppColors.danger, size: 20),
+          child: const Icon(Icons.delete_outline,
+              color: AppColors.danger, size: 20),
+        ),
+      ],
+    );
+  }
+
+  /// 「清空下载（删文件）」确认弹窗。
+  Widget _buildDialogs() {
+    return Stack(
+      children: [
+        MiuixOverlayDialog(
+          show: _showClearAllDialog,
+          title: '清空下载',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () => setState(() => _showClearAllDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              MiuixText(
+                '确定删除所有已下载的歌曲文件？',
+                color: AppColors.textSecondary,
+                fontSize: 13,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton(
+                    '取消',
+                    onPressed: () =>
+                        setState(() => _showClearAllDialog = false),
+                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(width: 8),
+                  MiuixTextButton(
+                    '清空',
+                    onPressed: _confirmClearAll,
+                    textStyle: const TextStyle(
+                        color: AppColors.danger, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ],
     );

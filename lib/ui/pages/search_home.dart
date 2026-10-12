@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_logger.dart';
 import '../../data/history_store.dart';
@@ -9,6 +10,7 @@ import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
 
@@ -46,6 +48,10 @@ class _SearchHomeState extends State<SearchHome> {
 
   /// 请求代次：每次发起全新搜索就 +1，用来作废还在飞的旧分页请求。
   int _requestGen = 0;
+
+  /// 歌曲操作弹层（收藏 / 下载 / 播放）显隐与目标歌曲。
+  bool _showActionSheet = false;
+  Song? _actionSong;
 
   /// 能否继续往后翻：前面还有已缓存的页，或当前页之后仍可能有内容。
   bool get _hasMore => _page < _maxPage || _lastPageFull;
@@ -232,74 +238,31 @@ class _SearchHomeState extends State<SearchHome> {
   }
 
   void _showSongActions(Song song) {
-    final isFav = HistoryStore.isFavorite(song.mid);
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 30),
-        decoration: const BoxDecoration(
-          color: AppColors.bg2,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              song.name,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${song.singer} · ${song.album}',
-              style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: Icon(isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                  color: isFav ? AppColors.magenta : AppColors.cyan, size: 22),
-              title: Text(isFav ? '取消收藏' : '收藏', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              onTap: () {
-                HistoryStore.toggleFavorite(song);
-                Navigator.pop(ctx);
-                _showSnack(isFav ? '已取消收藏' : '已收藏', isError: false);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.download_rounded, color: AppColors.cyan, size: 22),
-              title: const Text('下载', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _downloadSong(song);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.play_circle_outline_rounded, color: AppColors.cyan, size: 22),
-              title: const Text('播放', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _playSong(song);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
+    setState(() {
+      _actionSong = song;
+      _showActionSheet = true;
+    });
+  }
+
+  /// 执行歌曲操作弹层里的某一项。
+  void _runSongAction(String action) {
+    final song = _actionSong;
+    setState(() => _showActionSheet = false);
+    if (song == null) return;
+    switch (action) {
+      case 'fav':
+        final isFav = HistoryStore.isFavorite(song.mid);
+        HistoryStore.toggleFavorite(song);
+        showAppSnack(isFav ? '已取消收藏' : '已收藏');
+      case 'download':
+        _downloadSong(song);
+      case 'play':
+        _playSong(song);
+    }
   }
 
   void _showSnack(String msg, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg, style: const TextStyle(fontSize: 13)),
-        backgroundColor: isError ? AppColors.danger : AppColors.cyan,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    showAppSnack(msg);
   }
 
   /// 下载单曲。进度与结果统一交给全局任务队列，本页只弹提示；
@@ -322,75 +285,123 @@ class _SearchHomeState extends State<SearchHome> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 26, 20, 6),
-            child: Row(
-              children: [
-                const NeonText(
-                  '搜索',
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1,
-                  ),
+    final sourceColor =
+        _source == Source.qq ? AppColors.cyan : AppColors.magenta;
+    return Stack(
+      children: [
+        SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 26, 20, 6),
+                child: Row(
+                  children: [
+                    const NeonText(
+                      '搜索',
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    const Spacer(),
+                    // 音源切换按钮
+                    _SourceSwitch(
+                      current: _source,
+                      onSwitch: _switchSource,
+                    ),
+                  ],
                 ),
-                const Spacer(),
-                // 音源切换按钮
-                _SourceSwitch(
-                  current: _source,
-                  onSwitch: _switchSource,
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: GlassCard(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              radius: 18,
-              glowColor: _source == Source.qq ? AppColors.cyan : AppColors.magenta,
-              child: TextField(
-                controller: _controller,
-                textInputAction: TextInputAction.search,
-                onSubmitted: _search,
-                onChanged: (v) {
-                  if (v.trim().isEmpty && _keyword.isNotEmpty) {
-                    _clear();
-                  }
-                  setState(() {});
-                },
-                style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
-                cursorColor: _source == Source.qq ? AppColors.cyan : AppColors.magenta,
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  hintText: _source == Source.qq
+              ),
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: MiuixTextField(
+                  controller: _controller,
+                  label: _source == Source.qq
                       ? '搜索 QQ 音乐曲库…'
                       : '搜索网易云音乐曲库…',
-                  hintStyle: const TextStyle(color: AppColors.textTertiary),
-                  icon: Icon(
-                    Icons.search_rounded,
-                    color: _source == Source.qq ? AppColors.cyan : AppColors.magenta,
-                    size: 22,
-                  ),
-                  suffixIcon: _controller.text.isEmpty
+                  useLabelAsPlaceholder: true,
+                  singleLine: true,
+                  autofocus: false,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: _search,
+                  onChanged: (v) {
+                    if (v.trim().isEmpty && _keyword.isNotEmpty) {
+                      _clear();
+                    }
+                    setState(() {});
+                  },
+                  cursorColor: sourceColor,
+                  textStyle: const TextStyle(
+                      color: AppColors.textPrimary, fontSize: 15),
+                  leadingIcon: Icon(Icons.search_rounded,
+                      color: sourceColor, size: 22),
+                  trailingIcon: _controller.text.isEmpty
                       ? null
-                      : IconButton(
+                      : MiuixIconButton(
                           onPressed: _clear,
-                          icon: const Icon(Icons.close_rounded,
+                          child: const Icon(Icons.close_rounded,
                               color: AppColors.textTertiary, size: 18),
                         ),
                 ),
               ),
+              Expanded(
+                child: _keyword.isEmpty
+                    ? _buildDefault()
+                    : (_loading ? _buildLoading() : _buildResult()),
+              ),
+            ],
+          ),
+        ),
+        _buildActionSheet(),
+      ],
+    );
+  }
+
+  /// 歌曲操作弹层（收藏 / 下载 / 播放）。
+  Widget _buildActionSheet() {
+    final song = _actionSong;
+    final isFav =
+        song == null ? false : HistoryStore.isFavorite(song.mid);
+    return MiuixOverlayBottomSheet(
+      show: _showActionSheet && song != null,
+      title: song?.name ?? '',
+      backgroundColor: AppColors.bg2,
+      onDismissRequest: () => setState(() => _showActionSheet = false),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (song != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                '${song.singer} · ${song.album}',
+                style: const TextStyle(
+                    fontSize: 12, color: AppColors.textTertiary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
+          _SheetActionRow(
+            icon: isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+            label: isFav ? '取消收藏' : '收藏',
+            color: isFav ? AppColors.magenta : AppColors.cyan,
+            onTap: () => _runSongAction('fav'),
           ),
-          Expanded(
-            child: _keyword.isEmpty
-                ? _buildDefault()
-                : (_loading ? _buildLoading() : _buildResult()),
+          _SheetActionRow(
+            icon: Icons.download_rounded,
+            label: '下载',
+            color: AppColors.cyan,
+            onTap: () => _runSongAction('download'),
           ),
+          _SheetActionRow(
+            icon: Icons.play_circle_outline_rounded,
+            label: '播放',
+            color: AppColors.cyan,
+            onTap: () => _runSongAction('play'),
+          ),
+          const SizedBox(height: 12),
         ],
       ),
     );
@@ -442,11 +453,12 @@ class _SearchHomeState extends State<SearchHome> {
             runSpacing: 10,
             children: [
               for (var i = 0; i < _hotTags.length; i++)
-                GestureDetector(
-                  onTap: () {
+                MiuixPressable(
+                  onPressed: () {
                     _controller.text = _hotTags[i];
                     _search(_hotTags[i]);
                   },
+                  borderRadius: BorderRadius.circular(14),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
                     decoration: BoxDecoration(
@@ -489,14 +501,19 @@ class _SearchHomeState extends State<SearchHome> {
             title: '搜索历史',
             trailing: _history.isEmpty
                 ? null
-                : GestureDetector(
-                    onTap: () {
+                : MiuixPressable(
+                    onPressed: () {
                       HistoryStore.clearSearch();
                       setState(() => _history = []);
                     },
-                    child: const Text(
-                      '清空',
-                      style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                    borderRadius: BorderRadius.circular(8),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      child: Text(
+                        '清空',
+                        style: TextStyle(
+                            fontSize: 12, color: AppColors.textTertiary),
+                      ),
                     ),
                   ),
           ),
@@ -511,11 +528,12 @@ class _SearchHomeState extends State<SearchHome> {
               runSpacing: 10,
               children: [
                 for (final h in _history)
-                  GestureDetector(
-                    onTap: () {
+                  MiuixPressable(
+                    onPressed: () {
                       _controller.text = h;
                       _search(h);
                     },
+                    borderRadius: BorderRadius.circular(12),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                       decoration: BoxDecoration(
@@ -590,8 +608,9 @@ class _SearchHomeState extends State<SearchHome> {
                 ),
               ),
               const SizedBox(width: 8),
-              GestureDetector(
-                onTap: () => _playAll(_results),
+              MiuixPressable(
+                onPressed: () => _playAll(_results),
+                borderRadius: BorderRadius.circular(8),
                 child: const Row(
                   children: [
                     Icon(Icons.play_circle_fill_rounded,
@@ -633,12 +652,7 @@ class _SearchHomeState extends State<SearchHome> {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 22),
         child: Center(
-          child: SizedBox(
-            width: 22,
-            height: 22,
-            child:
-                CircularProgressIndicator(strokeWidth: 2, color: AppColors.cyan),
-          ),
+          child: MiuixCircularProgressIndicator(size: 22),
         ),
       );
     }
@@ -767,8 +781,9 @@ class _SourceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(18),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -812,9 +827,10 @@ class _SongTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final current = PlayerController.instance.currentSong;
     final isCurrent = current?.mid == song.mid;
-    return GestureDetector(
-      onTap: onTap,
+    return MiuixPressable(
+      onPressed: onTap,
       onLongPress: onLongPress,
+      borderRadius: BorderRadius.circular(18),
       child: Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: GlassCard(
@@ -869,6 +885,45 @@ class _SongTile extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 歌曲操作弹层里的一行（收藏 / 下载 / 播放）。
+class _SheetActionRow extends StatelessWidget {
+  const _SheetActionRow({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 13),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: color),
+            const SizedBox(width: 14),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 15,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ],
         ),
       ),
     );

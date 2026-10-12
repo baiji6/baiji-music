@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../data/history_store.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
 
@@ -21,24 +23,30 @@ class _FavoritePageState extends State<FavoritePage> {
   @override
   Widget build(BuildContext context) {
     final favs = HistoryStore.favorites();
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('我的收藏'),
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
+      topBar: MiuixTopAppBar(
+        title: '我的收藏',
+        color: Colors.transparent,
+        navigationIcon: MiuixIconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: AppColors.textPrimary, size: 20),
+        ),
         actions: [
           if (favs.isNotEmpty)
-            TextButton(
+            MiuixTextButton(
+              '清空',
               onPressed: () {
                 HistoryStore.clearFavorites();
                 _refresh();
               },
-              child: const Text('清空', style: TextStyle(color: AppColors.danger, fontSize: 13)),
+              textStyle: const TextStyle(color: AppColors.danger, fontSize: 13),
             ),
         ],
       ),
-      body: favs.isEmpty
+      content: (padding) => favs.isEmpty
           ? const Center(
               child: Text(
                 '还没有收藏的歌曲\n在搜索结果长按或点击收藏按钮试试',
@@ -49,59 +57,73 @@ class _FavoritePageState extends State<FavoritePage> {
           : ListView.builder(
               padding: const EdgeInsets.all(16),
               itemCount: favs.length,
-              itemBuilder: (ctx, i) => GlassCard(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  leading: CoverImage(song: favs[i], size: 44, radius: 10),
-                  title: Text(
-                    favs[i].name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: PlayerController.instance.currentSong?.mid == favs[i].mid
-                          ? AppColors.cyan
-                          : null,
+              itemBuilder: (ctx, i) {
+                final song = favs[i];
+                final isCurrent =
+                    PlayerController.instance.currentSong?.mid == song.mid;
+                return GlassCard(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  child: MiuixPressable(
+                    onPressed: () {
+                      PlayerController.instance.playQueue(favs, startIndex: i);
+                      _refresh();
+                    },
+                    borderRadius: BorderRadius.circular(18),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      child: Row(
+                        children: [
+                          CoverImage(song: song, size: 44, radius: 10),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  song.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: isCurrent
+                                        ? AppColors.cyan
+                                        : AppColors.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  song.singer,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: AppColors.textTertiary),
+                                ),
+                              ],
+                            ),
+                          ),
+                          TagBadge(
+                            song.isNetease ? '网易云' : 'QQ',
+                            color: song.isNetease
+                                ? AppColors.magenta
+                                : AppColors.cyan,
+                          ),
+                          const SizedBox(width: 4),
+                          MiuixIconButton(
+                            onPressed: () {
+                              HistoryStore.toggleFavorite(song);
+                              _refresh();
+                              showAppSnack('已取消收藏');
+                            },
+                            child: const Icon(Icons.favorite_rounded,
+                                color: AppColors.aqua, size: 22),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  subtitle: Text(
-                    favs[i].singer,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TagBadge(
-                        favs[i].isNetease ? '网易云' : 'QQ',
-                        color: favs[i].isNetease ? AppColors.magenta : AppColors.cyan,
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        icon: const Icon(Icons.favorite_rounded,
-                            color: AppColors.aqua, size: 22),
-                        tooltip: '取消收藏',
-                        onPressed: () {
-                          HistoryStore.toggleFavorite(favs[i]);
-                          _refresh();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('已取消收藏'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                  onTap: () {
-                    PlayerController.instance.playQueue(favs, startIndex: i);
-                    _refresh();
-                  },
-                ),
-              ),
+                );
+              },
             ),
     );
   }

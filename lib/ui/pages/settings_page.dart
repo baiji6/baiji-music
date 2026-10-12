@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_logger.dart';
@@ -42,12 +43,34 @@ class _SettingsPageState extends State<SettingsPage> {
   LyricDownloadMode _lyricMode = LyricDownloadMode.line;
   bool _saveCover = true;
 
+  /// Miuix Snackbar 宿主状态（脚手架 snackbarHost 槽位）。
+  final _snackbarHostState = MiuixSnackbarHostState();
+
+  // ===== 各类弹层 / 对话框的显隐（Miuix 弹窗是声明式的）=====
+  bool _showProxyDialog = false;
+  bool _showClearCacheDialog = false;
+  bool _showUpdateDialog = false;
+  bool _showLyricModeSheet = false;
+  bool _showLyricStyleSheet = false;
+  bool _showQQQualitySheet = false;
+  bool _showNeteaseQualitySheet = false;
+  bool _showCacheLimitSheet = false;
+  final _proxyController = TextEditingController();
+  UpdateInfo? _updateInfo;
+  List<CacheEntry> _cacheEntries = const [];
+
   LyricSettings get _lyricStyle => LyricSettings.instance;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+  }
+
+  @override
+  void dispose() {
+    _proxyController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadSettings() async {
@@ -78,17 +101,12 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // ===== 下载附加项（歌词 / 封面） =====
 
-  Future<void> _selectLyricMode() async {
-    final picked = await showModalBottomSheet<LyricDownloadMode>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => _LyricModeSheet(current: _lyricMode),
-    );
-    if (picked == null || !mounted) return;
-    await DownloadExtras.setLyricMode(picked);
-    if (!mounted) return;
-    setState(() => _lyricMode = picked);
+  void _selectLyricMode(LyricDownloadMode picked) {
+    setState(() => _showLyricModeSheet = false);
+    DownloadExtras.setLyricMode(picked).then((_) {
+      if (!mounted) return;
+      setState(() => _lyricMode = picked);
+    });
   }
 
   Future<void> _toggleSaveCover(bool v) async {
@@ -108,55 +126,14 @@ class _SettingsPageState extends State<SettingsPage> {
         : '已关闭：恢复严格证书校验');
   }
 
-  Future<void> _editProxy() async {
-    final controller = TextEditingController(text: _captureProxy);
-    final input = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.bg2,
-        title: const Text('抓包代理', style: TextStyle(fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('格式 host:port，例如 127.0.0.1:8888',
-                style: TextStyle(fontSize: 11, color: AppColors.textTertiary)),
-            const SizedBox(height: 10),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              style: const TextStyle(fontSize: 14),
-              decoration: InputDecoration(
-                hintText: '留空 = 不强制代理',
-                hintStyle: const TextStyle(
-                    fontSize: 13, color: AppColors.textTertiary),
-                filled: true,
-                fillColor: AppColors.surfaceGlass,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, ''),
-            child: const Text('清空',
-                style: TextStyle(color: AppColors.textTertiary)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('保存',
-                style: TextStyle(color: AppColors.cyan)),
-          ),
-        ],
-      ),
-    );
-    if (input == null) return;
-    await CaptureTrust.setProxy(input);
-    if (!mounted) return;
+  void _editProxy() {
+    _proxyController.text = _captureProxy;
+    setState(() => _showProxyDialog = true);
+  }
+
+  Future<void> _saveProxy() async {
+    setState(() => _showProxyDialog = false);
+    await CaptureTrust.setProxy(_proxyController.text);
     if (!mounted) return;
     setState(() => _captureProxy = CaptureTrust.proxy);
     _showSnack(CaptureTrust.proxyEnabled
@@ -212,153 +189,28 @@ class _SettingsPageState extends State<SettingsPage> {
     _refreshCacheSize();
   }
 
-  Future<void> _selectCacheMemoryLimit() async {
-    const presets = [32, 64, 100, 200, 400, 800];
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => _QualitySheet(
-        title: '内存图片缓存上限',
-        options: presets,
-        current: _cacheMemoryMb,
-        label: (v) => '$v MB',
-        onSelect: (v) async {
-          // Navigator / SnackBar 都得用 sheet 的 ctx，先在 await 之前取好
-          final nav = Navigator.of(ctx);
-          await CacheManager.setMemoryLimitMb(v);
-          CacheManager.applyMemoryLimit();
-          if (!mounted) return;
-          setState(() => _cacheMemoryMb = v);
-          nav.pop();
-          _showSnack('内存图片缓存上限设为 $v MB');
-        },
-      ),
-    );
+  void _selectCacheMemoryLimit(int v) {
+    setState(() => _showCacheLimitSheet = false);
+    CacheManager.setMemoryLimitMb(v).then((_) {
+      CacheManager.applyMemoryLimit();
+      if (!mounted) return;
+      setState(() => _cacheMemoryMb = v);
+      _showSnack('内存图片缓存上限设为 $v MB');
+    });
   }
 
-  Future<void> _clearCache() async {
-    final entries = await CacheManager.breakdown();
-    if (!mounted) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.bg2,
-        title: const Text('清理缓存', style: TextStyle(fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (final e in entries) ...[
-              Text(
-                '${e.label} · ${e.readable}',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              ),
-              if (e.detail.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2, bottom: 6),
-                  child: Text(
-                    e.detail,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
-                  ),
-                ),
-            ],
-            const SizedBox(height: 4),
-            Text(
-              '会清空：内存里的封面缓存，以及缓存目录下的'
-              '${CacheManager.managedDirNames.join(' / ')}'
-              '（含日志导出与解密时的文件副本）。\n'
-              '下载的歌曲、播放历史、歌单与本地音乐库都不受影响。',
-              style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: AppColors.textTertiary)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('清理', style: TextStyle(color: AppColors.cyan)),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    // 删不掉的条目要如实上报：静默吞掉异常会让「权限不足 / 文件占用」
-    // 表现为「点了没反应」，比报错更让人困惑。
-    final issues = <String>[];
-    final freed = await CacheManager.clear(
-        onIssue: (path, reason) => issues.add(path));
-    // 本地歌曲封面另有一份独立内存缓存，在 ui 层，这里一并清掉
-    LocalCoverCache.clear();
-    if (!mounted) return;
-    if (issues.isNotEmpty) {
-      _showSnack(
-        '已释放 ${CacheManager.formatBytes(freed)}，'
-        '但有 ${issues.length} 个文件删不掉（可能正被占用）',
-        isError: true,
-      );
-    } else {
-      _showSnack(freed <= 0
-          ? '缓存已清理'
-          : '缓存已清理，释放 ${CacheManager.formatBytes(freed)}');
-    }
-    _refreshCacheSize();
+  void _selectQQQuality(Quality q) {
+    setState(() => _showQQQualitySheet = false);
+    PlayerController.instance.saveDefaultQuality(q);
+    setState(() => _qqQuality = q);
+    _showSnack('QQ 音质已设为 ${q.label}');
   }
 
-  void _showSnack(String msg, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg, style: const TextStyle(fontSize: 13)),
-        backgroundColor: isError ? AppColors.danger : AppColors.cyan,
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
-
-  void _selectQQQuality() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => _QualitySheet(
-        title: 'QQ 音乐播放音质',
-        options: Quality.playbackOptions,
-        current: _qqQuality,
-        label: (q) => q.label,
-        onSelect: (q) {
-          PlayerController.instance.saveDefaultQuality(q);
-          setState(() => _qqQuality = q);
-          Navigator.pop(ctx);
-          _showSnack('QQ 音质已设为 ${q.label}');
-        },
-      ),
-    );
-  }
-
-  void _selectNeteaseQuality() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => _QualitySheet(
-        title: '网易云音乐播放音质',
-        options: NeteaseQuality.playbackOptions,
-        current: _neQuality,
-        label: (q) => q.label,
-        onSelect: (q) {
-          PlayerController.instance.saveNeteaseQuality(q);
-          setState(() => _neQuality = q);
-          Navigator.pop(ctx);
-          _showSnack('网易云音质已设为 ${q.label}');
-        },
-      ),
-    );
+  void _selectNeteaseQuality(NeteaseQuality q) {
+    setState(() => _showNeteaseQualitySheet = false);
+    PlayerController.instance.saveNeteaseQuality(q);
+    setState(() => _neQuality = q);
+    _showSnack('网易云音质已设为 ${q.label}');
   }
 
   Future<void> _resetDownloadDir() async {
@@ -377,7 +229,10 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!mounted) return;
       switch (outcome.state) {
         case UpdateState.available:
-          _showUpdateDialog(outcome.info!);
+          setState(() {
+            _updateInfo = outcome.info;
+            _showUpdateDialog = true;
+          });
         case UpdateState.upToDate:
           _showSnack('当前已是最新版本');
         case UpdateState.failed:
@@ -390,124 +245,54 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  /// 更新弹窗：完整渲染 Release 的更新日志（Markdown），可上下滚动。
-  ///
-  /// 以前这里直接 `Text(info.summary(200))` —— 既只有前 200 字，
-  /// 又把 `##` `**` `-` 这类标记原样显示出来。
-  void _showUpdateDialog(UpdateInfo info) {
-    final media = MediaQuery.of(context);
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Dialog(
-        backgroundColor: AppColors.bg2,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: 560,
-            // 留出上下按钮的高度，日志区自己滚
-            maxHeight: media.size.height * 0.72,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.system_update_rounded,
-                        color: AppColors.cyan, size: 20),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        info.name.isNotEmpty
-                            ? '${info.name}（${info.tag}）'
-                            : info.tag,
-                        style: const TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w700),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1, color: AppColors.strokeGlass),
-              Flexible(
-                child: Container(
-                  width: double.infinity,
-                  alignment: Alignment.topLeft,
-                  padding: const EdgeInsets.fromLTRB(20, 14, 14, 8),
-                  child: SingleChildScrollView(
-                    child: info.body.trim().isEmpty
-                        ? const Text('该版本没有提供更新说明。',
-                            style: TextStyle(
-                                fontSize: 12, color: AppColors.textTertiary))
-                        : MarkdownBody(
-                            data: info.body,
-                            selectable: true,
-                            styleSheet: _changelogSheet,
-                            // 更新日志里的图片多是 badge，加载不出来时别把布局撑破。
-                            // 宽度不能写死：Dialog 在窄屏上可用宽度只有 280 出头，
-                            // 写死 320 会直接 RenderFlex 溢出。
-                            imageBuilder: (uri, title, alt) => ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 260),
-                              child: Image.network(
-                                uri.toString(),
-                                fit: BoxFit.contain,
-                                errorBuilder: (context, error, stack) => Text(
-                                  alt?.isNotEmpty == true ? alt! : '[图片]',
-                                  style: const TextStyle(
-                                      fontSize: 11, color: AppColors.textTertiary),
-                                ),
-                              ),
-                            ),
-                            onTapLink: (text, href, title) {
-                              final uri = Uri.tryParse(href ?? '');
-                              if (uri != null && uri.hasScheme) {
-                                launchUrl(uri,
-                                    mode: LaunchMode.externalApplication);
-                              }
-                            },
-                          ),
-                  ),
-                ),
-              ),
-              const Divider(height: 1, color: AppColors.strokeGlass),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () async {
-                        await UpdateChecker.instance.ignore(info.tag);
-                        if (ctx.mounted) Navigator.pop(ctx);
-                      },
-                      child: const Text('忽略此版本',
-                          style: TextStyle(color: AppColors.textTertiary)),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('稍后',
-                          style: TextStyle(color: AppColors.textTertiary)),
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        UpdateChecker.instance.openRelease(info.url);
-                      },
-                      child: const Text('前往更新',
-                          style: TextStyle(color: AppColors.cyan)),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  Future<void> _ignoreUpdate() async {
+    final info = _updateInfo;
+    if (info == null) return;
+    setState(() => _showUpdateDialog = false);
+    await UpdateChecker.instance.ignore(info.tag);
+  }
+
+  void _openRelease() {
+    final info = _updateInfo;
+    setState(() => _showUpdateDialog = false);
+    if (info != null) UpdateChecker.instance.openRelease(info.url);
+  }
+
+  void _showSnack(String msg, {bool isError = false}) {
+    _snackbarHostState.showSnackbar(msg);
+  }
+
+  Future<void> _confirmClearCache() async {
+    setState(() => _showClearCacheDialog = false);
+
+    // 删不掉的条目要如实上报：静默吞掉异常会让「权限不足 / 文件占用」
+    // 表现为「点了没反应」，比报错更让人困惑。
+    final issues = <String>[];
+    final freed = await CacheManager.clear(
+        onIssue: (path, reason) => issues.add(path));
+    // 本地歌曲封面另有一份独立内存缓存，在 ui 层，这里一并清掉
+    LocalCoverCache.clear();
+    if (!mounted) return;
+    if (issues.isNotEmpty) {
+      _showSnack(
+        '已释放 ${CacheManager.formatBytes(freed)}，'
+        '但有 ${issues.length} 个文件删不掉（可能正被占用）',
+      );
+    } else {
+      _showSnack(freed <= 0
+          ? '缓存已清理'
+          : '缓存已清理，释放 ${CacheManager.formatBytes(freed)}');
+    }
+    _refreshCacheSize();
+  }
+
+  Future<void> _prepareClearCache() async {
+    final entries = await CacheManager.breakdown();
+    if (!mounted) return;
+    setState(() {
+      _cacheEntries = entries;
+      _showClearCacheDialog = true;
+    });
   }
 
   /// 更新日志的排版：字号压到 12~13，整体偏灰，和 App 暗色玻璃主题一致。
@@ -565,403 +350,561 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('设置'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: AppColors.textPrimary),
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      snackbarHost: MiuixSnackbarHost(state: _snackbarHostState),
+      topBar: MiuixTopAppBar(
+        title: '设置',
+        navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.pop(context),
+          child: const Icon(Icons.arrow_back_rounded,
+              color: AppColors.textPrimary),
         ),
       ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SectionHeader(title: '音质设置'),
-              GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: const Icon(Icons.equalizer_rounded, color: AppColors.cyan, size: 22),
-                      title: const Text('QQ 音乐播放音质', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(_qqQuality.label, style: const TextStyle(fontSize: 12, color: AppColors.textTertiary)),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _selectQQQuality,
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.equalizer_rounded, color: AppColors.magenta, size: 22),
-                      title: const Text('网易云音乐播放音质', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(_neQuality.label, style: const TextStyle(fontSize: 12, color: AppColors.textTertiary)),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _selectNeteaseQuality,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-              const SectionHeader(title: '下载设置'),
-              GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: const Icon(Icons.folder_rounded, color: AppColors.violet, size: 22),
-                      title: const Text('下载目录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        _downloadPath.isEmpty ? '默认目录' : _downloadPath,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _pickDownloadDir,
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.restore_rounded, color: AppColors.textTertiary, size: 22),
-                      title: const Text('恢复默认目录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _resetDownloadDir,
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.lyrics_rounded, color: AppColors.magenta, size: 22),
-                      title: const Text('下载歌词', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        '${_lyricMode.label} · ${_lyricMode.description}',
-                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _selectLyricMode,
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    SwitchListTile(
-                      secondary: const Icon(Icons.image_rounded, color: AppColors.cyan, size: 22),
-                      title: const Text('下载封面', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: const Text(
-                        '取最高分辨率原图，写入音频文件内嵌标签',
-                        style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      activeThumbColor: AppColors.cyan,
-                      value: _saveCover,
-                      onChanged: _toggleSaveCover,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 6),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: Text(
-                  '歌词与封面的保存方式：优先写入音频文件内部（MP3 → ID3v2 USLT/APIC，'
-                  'FLAC → Vorbis Comment LYRICS + PICTURE，M4A → ilst ©lyr/covr，'
-                  'OGG → Vorbis Comment LYRICS）；'
-                  '遇到不支持内嵌的格式时自动退回同名外挂 .lrc / .jpg 文件。'
-                  '写入过程不会改动音频数据本身。',
-                  style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
-                ),
-              ),
-              const SizedBox(height: 24),
-              const SectionHeader(title: '缓存管理'),
-              GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: const Icon(Icons.cleaning_services_rounded, color: AppColors.cyan, size: 22),
-                      title: const Text('清理缓存', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        '当前占用 $_cacheSize',
-                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _clearCache,
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.sd_storage_rounded, color: AppColors.violet, size: 22),
-                      title: const Text('缓存目录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        _cachePath,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _pickCacheDir,
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.restore_rounded, color: AppColors.textTertiary, size: 22),
-                      title: const Text('恢复默认缓存目录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _resetCacheDir,
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.memory_rounded, color: AppColors.magenta, size: 22),
-                      title: const Text('内存图片缓存上限', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        '$_cacheMemoryMb MB',
-                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _selectCacheMemoryLimit,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 6),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: Text(
-                  '封面在 App 内是通过内存缓存加载的（不落盘），所以「清理缓存」清的是'
-                  '内存里的封面、日志导出文件与临时文件。'
-                  '缓存目录被手动删除后会自动回落到系统默认目录，不会导致缓存读写失败。',
-                  style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
-                ),
-              ),
-              const SizedBox(height: 24),
-              const SectionHeader(title: '歌词显示'),
-              GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: const Icon(Icons.format_size_rounded, color: AppColors.cyan, size: 22),
-                      title: const Text('歌词字号与对齐', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: AnimatedBuilder(
-                        animation: _lyricStyle,
-                        builder: (ctx, _) => Text(
-                          '${_lyricStyle.fontSize.toStringAsFixed(0)} px · '
-                          '${_lyricStyle.alignLeft ? '左对齐' : '居中'}',
-                          style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                        ),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: () => showLyricStyleSheet(context),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-              const SectionHeader(title: '账号'),
-              GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: Icon(
-                        AppServices.instance.qq.isLoggedIn() ? Icons.verified_rounded : Icons.person_outline,
-                        color: AppServices.instance.qq.isLoggedIn() ? AppColors.cyan : AppColors.textTertiary,
-                        size: 22,
-                      ),
-                      title: const Text('QQ 音乐', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        AppServices.instance.qq.isLoggedIn()
-                            ? '已登录: ${AppServices.instance.qq.credential.strMusicid}'
-                            : '未登录 · 点击登录',
-                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: () => Navigator.push<void>(
-                        context,
-                        MaterialPageRoute(builder: (_) => const QQLoginPage()),
-                      ),
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: Icon(
-                        AppServices.instance.netease.isLoggedIn() ? Icons.verified_rounded : Icons.person_outline,
-                        color: AppServices.instance.netease.isLoggedIn() ? AppColors.magenta : AppColors.textTertiary,
-                        size: 22,
-                      ),
-                      title: const Text('网易云音乐', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        AppServices.instance.netease.isLoggedIn() ? '已登录' : '未登录 · 点击登录',
-                        style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: () => Navigator.push<void>(
-                        context,
-                        MaterialPageRoute(builder: (_) => const NeteaseLoginPage()),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-              const SectionHeader(title: '抓包调试'),
-              GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    SwitchListTile(
-                      secondary: Icon(
-                        Icons.bug_report_rounded,
-                        color: _captureEnabled
-                            ? AppColors.warning
-                            : AppColors.textTertiary,
-                        size: 22,
-                      ),
-                      title: const Text('允许抓包调试',
-                          style: TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: const Text(
-                        '放行中间人证书，供 Reqable / Charles 解密 HTTPS（正式版同样可开）',
-                        style:
-                            TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      activeThumbColor: AppColors.cyan,
-                      value: _captureEnabled,
-                      onChanged: _toggleCapture,
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.router_rounded,
-                          color: AppColors.violet, size: 22),
-                      title: const Text('抓包代理',
-                          style: TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        _captureProxy.isEmpty ? '未设置（走系统/环境变量代理）' : _captureProxy,
-                        style: const TextStyle(
-                            fontSize: 12, color: AppColors.textTertiary),
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded,
-                          color: AppColors.textTertiary),
-                      onTap: _editProxy,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 6),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: Text(
-                  'Android 端还需在手机上装好抓包工具的 CA（设置 → 安全 → 凭据），'
-                  'App 已在 network_security_config 中放行用户证书；'
-                  'Dart 层的证书校验由上面的开关控制，两者都要开才能抓全。'
-                  '桌面端若抓不到，可在这里填 Reqable 的代理地址（本机一般 127.0.0.1:8888）。',
-                  style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
-                ),
-              ),
-              const SizedBox(height: 24),
-              const SectionHeader(title: '关于'),
-              GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: const Icon(Icons.system_update_rounded, color: AppColors.violet, size: 22),
-                      title: const Text('检查更新', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: const Text('手动检查最新版本', style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
-                      trailing: _checkingUpdate
-                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.cyan))
-                          : const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: _checkingUpdate ? null : _checkUpdate,
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.gavel_rounded, color: AppColors.warning, size: 22),
-                      title: const Text('免责声明', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: const Text('点击查看全文', style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: () => showAgreementReader(
-                        context,
-                        initial: AgreementTab.disclaimer,
-                      ),
-                    ),
-                    const Divider(height: 1, color: AppColors.strokeGlass, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.article_rounded, color: AppColors.magenta, size: 22),
-                      title: const Text('使用协议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                      subtitle: const Text('点击查看全文', style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
-                      onTap: () => showAgreementReader(
-                        context,
-                        initial: AgreementTab.terms,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 下载歌词的粒度选择（不下载 / 逐行 / 逐字）。
-class _LyricModeSheet extends StatelessWidget {
-  const _LyricModeSheet({required this.current});
-
-  final LyricDownloadMode current;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.bg2,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: SafeArea(
-        top: false,
+      content: (padding) => SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 10, bottom: 4),
-              child: Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.strokeGlass,
-                    borderRadius: BorderRadius.circular(2),
+            const SectionHeader(title: '音质设置'),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                children: [
+                  MiuixArrowPreference(
+                    title: 'QQ 音乐播放音质',
+                    summary: _qqQuality.label,
+                    startAction: const Icon(Icons.equalizer_rounded,
+                        color: AppColors.cyan, size: 22),
+                    onClick: () =>
+                        setState(() => _showQQQualitySheet = true),
                   ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '网易云音乐播放音质',
+                    summary: _neQuality.label,
+                    startAction: const Icon(Icons.equalizer_rounded,
+                        color: AppColors.magenta, size: 22),
+                    onClick: () =>
+                        setState(() => _showNeteaseQualitySheet = true),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SectionHeader(title: '下载设置'),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                children: [
+                  MiuixArrowPreference(
+                    title: '下载目录',
+                    summary: _downloadPath.isEmpty ? '默认目录' : _downloadPath,
+                    startAction: const Icon(Icons.folder_rounded,
+                        color: AppColors.violet, size: 22),
+                    onClick: _pickDownloadDir,
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '恢复默认目录',
+                    startAction: const Icon(Icons.restore_rounded,
+                        color: AppColors.textTertiary, size: 22),
+                    onClick: _resetDownloadDir,
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '下载歌词',
+                    summary: '${_lyricMode.label} · ${_lyricMode.description}',
+                    startAction: const Icon(Icons.lyrics_rounded,
+                        color: AppColors.magenta, size: 22),
+                    onClick: () =>
+                        setState(() => _showLyricModeSheet = true),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixSwitchPreference(
+                    title: '下载封面',
+                    summary: '取最高分辨率原图，写入音频文件内嵌标签',
+                    startAction: const Icon(Icons.image_rounded,
+                        color: AppColors.cyan, size: 22),
+                    value: _saveCover,
+                    onChanged: _toggleSaveCover,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                '歌词与封面的保存方式：优先写入音频文件内部（MP3 → ID3v2 USLT/APIC，'
+                'FLAC → Vorbis Comment LYRICS + PICTURE，M4A → ilst ©lyr/covr，'
+                'OGG → Vorbis Comment LYRICS）；'
+                '遇到不支持内嵌的格式时自动退回同名外挂 .lrc / .jpg 文件。'
+                '写入过程不会改动音频数据本身。',
+                style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SectionHeader(title: '缓存管理'),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                children: [
+                  MiuixArrowPreference(
+                    title: '清理缓存',
+                    summary: '当前占用 $_cacheSize',
+                    startAction: const Icon(Icons.cleaning_services_rounded,
+                        color: AppColors.cyan, size: 22),
+                    onClick: _prepareClearCache,
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '缓存目录',
+                    summary: _cachePath,
+                    startAction: const Icon(Icons.sd_storage_rounded,
+                        color: AppColors.violet, size: 22),
+                    onClick: _pickCacheDir,
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '恢复默认缓存目录',
+                    startAction: const Icon(Icons.restore_rounded,
+                        color: AppColors.textTertiary, size: 22),
+                    onClick: _resetCacheDir,
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '内存图片缓存上限',
+                    summary: '$_cacheMemoryMb MB',
+                    startAction: const Icon(Icons.memory_rounded,
+                        color: AppColors.magenta, size: 22),
+                    onClick: () =>
+                        setState(() => _showCacheLimitSheet = true),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                '封面在 App 内是通过内存缓存加载的（不落盘），所以「清理缓存」清的是'
+                '内存里的封面、日志导出文件与临时文件。'
+                '缓存目录被手动删除后会自动回落到系统默认目录，不会导致缓存读写失败。',
+                style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SectionHeader(title: '歌词显示'),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              // 歌词偏好是 ChangeNotifier，用 AnimatedBuilder 局部重建本行，
+              // 避免整个设置页随字号调整重建。
+              child: AnimatedBuilder(
+                animation: _lyricStyle,
+                builder: (ctx, _) => MiuixArrowPreference(
+                  title: '歌词样式',
+                  summary:
+                      '${_lyricStyle.fontSize.toStringAsFixed(0)} px · '
+                      '${_lyricStyle.alignLeft ? '左对齐' : '居中'}',
+                  startAction: const Icon(Icons.format_size_rounded,
+                      color: AppColors.cyan, size: 22),
+                  onClick: () =>
+                      setState(() => _showLyricStyleSheet = true),
                 ),
               ),
             ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 6, 20, 12),
-              child: Text(
-                '下载歌词',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-              ),
-            ),
-            const Divider(height: 1, color: AppColors.strokeGlass),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 20),
+            const SizedBox(height: 24),
+            const SectionHeader(title: '账号'),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
                 children: [
-                  for (final m in LyricDownloadMode.values)
-                    _LyricModeTile(
-                      mode: m,
-                      selected: m == current,
-                      onTap: () => Navigator.pop(context, m),
+                  MiuixArrowPreference(
+                    title: 'QQ 音乐',
+                    summary: AppServices.instance.qq.isLoggedIn()
+                        ? '已登录: ${AppServices.instance.qq.credential.strMusicid}'
+                        : '未登录 · 点击登录',
+                    startAction: Icon(
+                      AppServices.instance.qq.isLoggedIn()
+                          ? Icons.verified_rounded
+                          : Icons.person_outline,
+                      color: AppServices.instance.qq.isLoggedIn()
+                          ? AppColors.cyan
+                          : AppColors.textTertiary,
+                      size: 22,
                     ),
+                    onClick: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(builder: (_) => const QQLoginPage()),
+                    ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '网易云音乐',
+                    summary: AppServices.instance.netease.isLoggedIn()
+                        ? '已登录'
+                        : '未登录 · 点击登录',
+                    startAction: Icon(
+                      AppServices.instance.netease.isLoggedIn()
+                          ? Icons.verified_rounded
+                          : Icons.person_outline,
+                      color: AppServices.instance.netease.isLoggedIn()
+                          ? AppColors.magenta
+                          : AppColors.textTertiary,
+                      size: 22,
+                    ),
+                    onClick: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const NeteaseLoginPage()),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SectionHeader(title: '抓包调试'),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                children: [
+                  MiuixSwitchPreference(
+                    title: '允许抓包调试',
+                    summary: '放行中间人证书，供 Reqable / Charles 解密 HTTPS（正式版同样可开）',
+                    startAction: Icon(
+                      Icons.bug_report_rounded,
+                      color: _captureEnabled
+                          ? AppColors.warning
+                          : AppColors.textTertiary,
+                      size: 22,
+                    ),
+                    value: _captureEnabled,
+                    onChanged: _toggleCapture,
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '抓包代理',
+                    summary: _captureProxy.isEmpty
+                        ? '未设置（走系统/环境变量代理）'
+                        : _captureProxy,
+                    startAction: const Icon(Icons.router_rounded,
+                        color: AppColors.violet, size: 22),
+                    onClick: _editProxy,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                'Android 端还需在手机上装好抓包工具的 CA（设置 → 安全 → 凭据），'
+                'App 已在 network_security_config 中放行用户证书；'
+                'Dart 层的证书校验由上面的开关控制，两者都要开才能抓全。'
+                '桌面端若抓不到，可在这里填 Reqable 的代理地址（本机一般 127.0.0.1:8888）。',
+                style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SectionHeader(title: '关于'),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                children: [
+                  MiuixArrowPreference(
+                    title: '检查更新',
+                    summary: '手动检查最新版本',
+                    startAction: const Icon(Icons.system_update_rounded,
+                        color: AppColors.violet, size: 22),
+                    endActions: [
+                      if (_checkingUpdate)
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: MiuixCircularProgressIndicator(
+                            strokeWidth: 2,
+                            size: 18,
+                          ),
+                        ),
+                    ],
+                    onClick: _checkingUpdate ? null : _checkUpdate,
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '免责声明',
+                    summary: '点击查看全文',
+                    startAction: const Icon(Icons.gavel_rounded,
+                        color: AppColors.warning, size: 22),
+                    onClick: () => showAgreementReader(
+                      context,
+                      initial: AgreementTab.disclaimer,
+                    ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '使用协议',
+                    summary: '点击查看全文',
+                    startAction: const Icon(Icons.article_rounded,
+                        color: AppColors.magenta, size: 22),
+                    onClick: () => showAgreementReader(
+                      context,
+                      initial: AgreementTab.terms,
+                    ),
+                  ),
                 ],
               ),
             ),
           ],
         ),
       ),
+      // ===== 弹层 / 对话框（Miuix 声明式，随 Scaffold 渲染）=====
+      floatingActionButton: null,
+      // MiuixScaffold 没有「弹窗栈」之外的挂点，弹窗统一借助 root popup host：
+      // 这里把各弹层作为 body 之上的 Stack 子节点插入。
+      bottomBar: _buildDialogs(),
+    );
+  }
+
+  /// 所有声明式弹层的挂载点。
+  ///
+  /// Miuix 的 OverlayDialog / OverlayBottomSheet 会自己注册到 root popup
+  /// 注册表并由 PopupHost 渲染，挂载位置只要在 MiuixPopupScope 内即可，
+  /// 放 bottomBar 槽位只是图个集中。
+  Widget _buildDialogs() {
+    return Stack(
+      children: [
+        // 抓包代理输入
+        MiuixOverlayDialog(
+          show: _showProxyDialog,
+          title: '抓包代理',
+          summary: '格式 host:port，例如 127.0.0.1:8888；留空 = 不强制代理',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showProxyDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              MiuixTextField(
+                controller: _proxyController,
+                autofocus: true,
+                label: 'host:port',
+                singleLine: true,
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton('清空', onPressed: () {
+                    _proxyController.text = '';
+                  }),
+                  const SizedBox(width: 8),
+                  MiuixTextButton('保存', onPressed: _saveProxy),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // 清理缓存确认（列出各项占用）
+        MiuixOverlayDialog(
+          show: _showClearCacheDialog,
+          title: '清理缓存',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showClearCacheDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final e in _cacheEntries) ...[
+                Text(
+                  '${e.label} · ${e.readable}',
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                if (e.detail.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2, bottom: 6),
+                    child: Text(
+                      e.detail,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppColors.textTertiary),
+                    ),
+                  ),
+              ],
+              const SizedBox(height: 4),
+              const Text(
+                '会清空：内存里的封面缓存，以及缓存目录下的'
+                'audio_cache / http_cache / logs / decrypt'
+                '（含日志导出与解密时的文件副本）。\n'
+                '下载的歌曲、播放历史、歌单与本地音乐库都不受影响。',
+                style: TextStyle(
+                    fontSize: 11, color: AppColors.textTertiary),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton('取消', onPressed: () {
+                    setState(() => _showClearCacheDialog = false);
+                  }),
+                  const SizedBox(width: 8),
+                  MiuixTextButton('清理', onPressed: _confirmClearCache),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // 更新日志（Markdown 全文 + 滚动）
+        MiuixOverlayDialog(
+          show: _showUpdateDialog,
+          title: _updateInfo == null
+              ? '发现新版本'
+              : (_updateInfo!.name.isNotEmpty
+                  ? '${_updateInfo!.name}（${_updateInfo!.tag}）'
+                  : _updateInfo!.tag),
+          backgroundColor: AppColors.bg2,
+          maxWidth: 560,
+          onDismissRequest: () =>
+              setState(() => _showUpdateDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * 0.5,
+                ),
+                child: SingleChildScrollView(
+                  child: _updateInfo == null ||
+                          _updateInfo!.body.trim().isEmpty
+                      ? const Text('该版本没有提供更新说明。',
+                          style: TextStyle(
+                              fontSize: 12, color: AppColors.textTertiary))
+                      : MarkdownBody(
+                          data: _updateInfo!.body,
+                          selectable: true,
+                          styleSheet: _changelogSheet,
+                          // 更新日志里的图片多是 badge，加载不出来时别把布局撑破。
+                          imageBuilder: (uri, title, alt) => ConstrainedBox(
+                            constraints:
+                                const BoxConstraints(maxWidth: 260),
+                            child: Image.network(
+                              uri.toString(),
+                              fit: BoxFit.contain,
+                              errorBuilder: (context, error, stack) => Text(
+                                alt?.isNotEmpty == true ? alt! : '[图片]',
+                                style: const TextStyle(
+                                    fontSize: 11,
+                                    color: AppColors.textTertiary),
+                              ),
+                            ),
+                          ),
+                          onTapLink: (text, href, title) {
+                            final uri = Uri.tryParse(href ?? '');
+                            if (uri != null && uri.hasScheme) {
+                              launchUrl(uri,
+                                  mode: LaunchMode.externalApplication);
+                            }
+                          },
+                        ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton('忽略此版本', onPressed: _ignoreUpdate),
+                  const SizedBox(width: 8),
+                  MiuixTextButton('稍后', onPressed: () {
+                    setState(() => _showUpdateDialog = false);
+                  }),
+                  const SizedBox(width: 8),
+                  MiuixTextButton('前往更新', onPressed: _openRelease),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // 下载歌词粒度
+        MiuixOverlayBottomSheet(
+          show: _showLyricModeSheet,
+          title: '下载歌词',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showLyricModeSheet = false),
+          content: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final m in LyricDownloadMode.values)
+                  _LyricModeTile(
+                    mode: m,
+                    selected: m == _lyricMode,
+                    onTap: () => _selectLyricMode(m),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        // 歌词样式（字号 / 对齐 / 放大 / 字重 / 圆角 / 三色）
+        showLyricStyleSheet(
+          show: _showLyricStyleSheet,
+          onDismiss: () => setState(() => _showLyricStyleSheet = false),
+        ),
+        // QQ 音质
+        MiuixOverlayBottomSheet(
+          show: _showQQQualitySheet,
+          title: 'QQ 音乐播放音质',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showQQQualitySheet = false),
+          content: _QualitySheet<Quality>(
+            options: Quality.playbackOptions,
+            current: _qqQuality,
+            label: (q) => q.label,
+            onSelect: _selectQQQuality,
+          ),
+        ),
+        // 网易云音质
+        MiuixOverlayBottomSheet(
+          show: _showNeteaseQualitySheet,
+          title: '网易云音乐播放音质',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showNeteaseQualitySheet = false),
+          content: _QualitySheet<NeteaseQuality>(
+            options: NeteaseQuality.playbackOptions,
+            current: _neQuality,
+            label: (q) => q.label,
+            onSelect: _selectNeteaseQuality,
+          ),
+        ),
+        // 内存缓存上限
+        MiuixOverlayBottomSheet(
+          show: _showCacheLimitSheet,
+          title: '内存图片缓存上限',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showCacheLimitSheet = false),
+          content: _QualitySheet<int>(
+            options: const [32, 64, 100, 200, 400, 800],
+            current: _cacheMemoryMb,
+            label: (v) => '$v MB',
+            onSelect: _selectCacheMemoryLimit,
+          ),
+        ),
+      ],
     );
   }
 }
 
+/// 下载歌词的粒度选择（不下载 / 逐行 / 逐字）。
 class _LyricModeTile extends StatelessWidget {
   const _LyricModeTile({
     required this.mode,
@@ -975,55 +918,52 @@ class _LyricModeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-          decoration: BoxDecoration(
-            color: selected
-                ? AppColors.cyan.withValues(alpha: 0.12)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                selected
-                    ? Icons.radio_button_checked_rounded
-                    : Icons.radio_button_unchecked_rounded,
-                size: 18,
-                color: selected ? AppColors.cyan : AppColors.textTertiary,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      mode.label,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight:
-                            selected ? FontWeight.w700 : FontWeight.w500,
-                        color: selected
-                            ? AppColors.cyan
-                            : AppColors.textPrimary,
-                      ),
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.cyan.withValues(alpha: 0.12)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              selected
+                  ? Icons.radio_button_checked_rounded
+                  : Icons.radio_button_unchecked_rounded,
+              size: 18,
+              color: selected ? AppColors.cyan : AppColors.textTertiary,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    mode.label,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight:
+                          selected ? FontWeight.w700 : FontWeight.w500,
+                      color: selected
+                          ? AppColors.cyan
+                          : AppColors.textPrimary,
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      mode.description,
-                      style: const TextStyle(
-                          fontSize: 11, color: AppColors.textTertiary),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    mode.description,
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.textTertiary),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -1033,14 +973,12 @@ class _LyricModeTile extends StatelessWidget {
 /// 音质选择底部弹层（泛型支持 QQ 和网易云）。
 class _QualitySheet<T> extends StatelessWidget {
   const _QualitySheet({
-    required this.title,
     required this.options,
     required this.current,
     required this.label,
     required this.onSelect,
   });
 
-  final String title;
   final List<T> options;
   final T current;
   final String Function(T) label;
@@ -1051,97 +989,59 @@ class _QualitySheet<T> extends StatelessWidget {
     // 固定 72% 屏高 + ListView + 常驻滚动条：
     // QQ 音乐有 17 档（末档 AAC 48），旧的 55% 高度 + SingleChildScrollView
     // 会把末档裁在可视区之外且没有滚动提示。
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.72,
-      decoration: const BoxDecoration(
-        color: AppColors.bg2,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 10, bottom: 4),
-              child: Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.strokeGlass,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.6,
+      child: Scrollbar(
+        thumbVisibility: true,
+        child: ListView.builder(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 18),
+          itemCount: options.length,
+          itemBuilder: (ctx, i) {
+            final q = options[i];
+            final selected = q == current;
+            return MiuixPressable(
+              onPressed: () => onSelect(q),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? AppColors.cyan.withValues(alpha: 0.12)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 6, 20, 12),
-              child: Text(
-                title,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-              ),
-            ),
-            const Divider(height: 1, color: AppColors.strokeGlass),
-            Expanded(
-              child: Scrollbar(
-                thumbVisibility: true,
-                child: ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 18),
-                  itemCount: options.length,
-                  itemBuilder: (ctx, i) {
-                    final q = options[i];
-                    final selected = q == current;
-                    return Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () => onSelect(q),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 12),
-                          decoration: BoxDecoration(
-                            color: selected
-                                ? AppColors.cyan.withValues(alpha: 0.12)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                selected
-                                    ? Icons.check_circle_rounded
-                                    : Icons.audiotrack_rounded,
-                                size: 18,
-                                color: selected
-                                    ? AppColors.cyan
-                                    : AppColors.textTertiary,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Text(
-                                  label(q),
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: selected
-                                        ? FontWeight.w700
-                                        : FontWeight.w500,
-                                    color: selected
-                                        ? AppColors.cyan
-                                        : AppColors.textPrimary,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
+                child: Row(
+                  children: [
+                    Icon(
+                      selected
+                          ? Icons.check_circle_rounded
+                          : Icons.audiotrack_rounded,
+                      size: 18,
+                      color: selected
+                          ? AppColors.cyan
+                          : AppColors.textTertiary,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        label(q),
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: selected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                          color: selected
+                              ? AppColors.cyan
+                              : AppColors.textPrimary,
                         ),
                       ),
-                    );
-                  },
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
+            );
+          },
         ),
       ),
     );

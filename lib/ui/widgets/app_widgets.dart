@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../theme/app_theme.dart';
 
@@ -66,8 +67,10 @@ class GlassCard extends StatelessWidget {
     );
 
     if (onTap == null) return body;
-    return GestureDetector(
-      onTap: onTap,
+    // 按压反馈走 MiuixPressable（下沉 + 回弹），不再用 GestureDetector 裸接。
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(radius),
       child: body,
     );
   }
@@ -115,49 +118,37 @@ class NeonButton extends StatelessWidget {
       ],
     );
 
-    final shape = RoundedRectangleBorder(
+    // 品牌霓虹按钮：渐变底 / 玻璃描边底，按压反馈走 MiuixPressable
+    // （Miuix 的下沉 + 回弹动效），不再依赖 Material 的 InkWell。
+    final decoration = BoxDecoration(
+      gradient: LinearGradient(
+        colors: filled
+            ? (enabled ? gradient : [AppColors.bg2, AppColors.bg2])
+            : [AppColors.surfaceGlass, AppColors.surfaceGlass],
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+      ),
       borderRadius: BorderRadius.circular(radius),
-      side: filled
-          ? BorderSide.none
-          : const BorderSide(color: AppColors.strokeGlass),
+      border: filled ? null : Border.all(color: AppColors.strokeGlass),
+      boxShadow: filled && enabled
+          ? [
+              BoxShadow(
+                color: gradient.first.withValues(alpha: 0.45),
+                blurRadius: 22,
+                offset: const Offset(0, 6),
+              ),
+            ]
+          : null,
     );
 
-    if (!filled) {
-      return OutlinedButton(
-        onPressed: onPressed,
-        style: OutlinedButton.styleFrom(
-          padding: padding,
-          shape: shape,
-          backgroundColor: AppColors.surfaceGlass,
-          side: const BorderSide(color: AppColors.strokeGlass),
-        ),
-        child: child,
-      );
-    }
-
-    return Material(
-      color: Colors.transparent,
-      child: Ink(
-        decoration: ShapeDecoration(
-          gradient: LinearGradient(
-            colors: enabled ? gradient : [AppColors.bg2, AppColors.bg2],
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-          ),
-          shape: shape,
-          shadows: enabled
-              ? [
-                  BoxShadow(
-                    color: gradient.first.withValues(alpha: 0.45),
-                    blurRadius: 22,
-                    offset: const Offset(0, 6),
-                  ),
-                ]
-              : null,
-        ),
-        child: InkWell(
-          onTap: enabled ? onPressed : null,
-          borderRadius: BorderRadius.circular(radius),
+    return MiuixPressable(
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(radius),
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 160),
+        opacity: enabled ? 1 : 0.55,
+        child: DecoratedBox(
+          decoration: decoration,
           child: Padding(padding: padding, child: child),
         ),
       ),
@@ -184,9 +175,11 @@ class NeonIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: Ink(
+    // 圆形霓虹图标按钮：按压反馈走 MiuixPressable
+    return MiuixPressable(
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(size / 2),
+      child: Container(
         width: size,
         height: size,
         decoration: ShapeDecoration(
@@ -203,11 +196,7 @@ class NeonIconButton extends StatelessWidget {
             ),
           ],
         ),
-        child: InkWell(
-          onTap: onPressed,
-          customBorder: const CircleBorder(),
-          child: Icon(icon, size: iconSize, color: Colors.white),
-        ),
+        child: Icon(icon, size: iconSize, color: Colors.white),
       ),
     );
   }
@@ -430,11 +419,8 @@ class FrostedImage extends StatelessWidget {
                 loadingBuilder: (context, child, progress) {
                   if (progress == null) return child;
                   return const Center(
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
+                    child: MiuixCircularProgressIndicator(
+                        size: 20, strokeWidth: 2),
                   );
                 },
               ),

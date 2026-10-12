@@ -42,8 +42,8 @@ void main() {
       expect(stops.first, 0.0);
     });
 
-    test('正在唱的字：填充前沿把字切成左绿右白', () {
-      // 第 1 个字 [0, 20]，唱到一半
+    test('正在唱的字：填充前沿把字切成左已唱右未唱（硬切模式）', () {
+      // 第 1 个字 [0, 20]，唱到一半；blendRatio=0 回到硬切，锁定原始契约
       final built = KaraokeFill.build(
         wordSpans: const [
           [0.0, 20.0],
@@ -52,10 +52,11 @@ void main() {
         width: 40.0,
         sung: _sung,
         unsung: _unsung,
+        blendRatio: 0,
       );
       expect(built, isNotNull);
       final (stops, colors) = built!;
-      // 0 -> sung, 0.5(=10/40) -> sung, 0.5(=20/40) -> unsung
+      // 0 -> sung, 0.25(=10/40) -> sung, 0.5(=20/40) -> unsung
       expect(stops, [0.0, 0.25, 0.5]);
       expect(colors, [_sung, _sung, _unsung]);
       // 渐变可直接构造（stops 严格单调）
@@ -67,8 +68,61 @@ void main() {
           ), returnsNormally);
     });
 
+    test('默认带过渡带：前沿附近插入插值色，两端仍是纯色', () {
+      // 字 [0, 20] 唱到一半。过渡带宽 = 20×0.12 = 2.4 → [8.8, 11.2]
+      final built = KaraokeFill.build(
+        wordSpans: const [
+          [0.0, 20.0],
+        ],
+        ratios: const [0.5],
+        width: 40.0,
+        sung: _sung,
+        unsung: _unsung,
+      );
+      expect(built, isNotNull);
+      final (stops, colors) = built!;
+      // 0=sung；0.22(=8.8/40)=sung(过渡带左端)；中间 3 个插值色；
+      // 0.28(=11.2/40)=第 4 个插值(接近 unsung)；0.5(=20/40)=unsung
+      expect(stops.first, 0.0);
+      expect(colors.first, _sung);
+      expect(colors.last, _unsung);
+      expect(stops.last, 0.5);
+      // 过渡带内出现了 sung/unsung 之外的插值色
+      final mid = colors.sublist(1, colors.length - 1);
+      expect(mid.length, 4);
+      expect(mid[0], _sung);
+      expect(mid.any((c) => c != _sung && c != _unsung), isTrue);
+      // 单调
+      for (var i = 1; i < stops.length; i++) {
+        expect(stops[i], greaterThan(stops[i - 1]));
+      }
+    });
+
+    test('过渡带在极窄字内自动收窄，不会越界到相邻字', () {
+      // 字宽 2px，进度 0.5：blend 钳到 2，front=back=中点 → 走 else 分支
+      final built = KaraokeFill.build(
+        wordSpans: const [
+          [0.0, 2.0],
+          [2.0, 40.0],
+        ],
+        ratios: const [0.5, 0.0],
+        width: 40.0,
+        sung: _sung,
+        unsung: _unsung,
+        blendRatio: 1.0,
+      );
+      expect(built, isNotNull);
+      final (stops, colors) = built!;
+      expect(colors.first, _sung);
+      // 第 2 个字未唱，整体为白
+      expect(colors.last, _unsung);
+      for (var i = 1; i < stops.length; i++) {
+        expect(stops[i], greaterThan(stops[i - 1]));
+      }
+    });
+
     test('前字唱完、后字未唱、第三字进行中：组合状态', () {
-      // [0,10] 唱完；[10,20] 未唱；[20,40] 唱到 1/4
+      // [0,10] 唱完；[10,20] 未唱；[20,40] 唱到 1/4（硬切模式）
       final built = KaraokeFill.build(
         wordSpans: const [
           [0.0, 10.0],
@@ -79,6 +133,7 @@ void main() {
         width: 40.0,
         sung: _sung,
         unsung: _unsung,
+        blendRatio: 0,
       );
       expect(built, isNotNull);
       final (stops, colors) = built!;
@@ -97,6 +152,7 @@ void main() {
         width: 40.0,
         sung: _sung,
         unsung: _unsung,
+        blendRatio: 0,
       );
       expect(built, isNotNull);
       final (stops, colors) = built!;

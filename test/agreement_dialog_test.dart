@@ -8,6 +8,7 @@ import 'package:baiji_music/core/agreement_text.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/ui/widgets/agreement_dialog.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 把弹窗挂到一棵最小可用树上，返回一个可读取结果的容器。
@@ -34,17 +35,26 @@ Future<bool?> Function() pumpDialog(WidgetTester tester) {
 }
 
 /// 找到「同意并继续」按钮对应的 NeonButton 是否处于可点状态。
+///
+/// Miuix 化之后 NeonButton 的按压反馈走 [MiuixPressable]（onPressed 为 null
+/// 即禁用），子层级为 AnimatedOpacity → DecoratedBox → Padding → Row。
 bool agreeEnabled(WidgetTester tester) {
-  final inkwells = tester.widgetList<InkWell>(find.byType(InkWell));
-  // NeonButton 内部用的是 InkWell，onTap 为 null 即禁用
-  for (final w in inkwells) {
-    final label = w.child;
-    if (label is Padding) {
-      final row = label.child;
-      if (row is Row && _hasAgreeText(row)) return w.onTap != null;
-    }
+  final pressables =
+      tester.widgetList<MiuixPressable>(find.byType(MiuixPressable));
+  for (final w in pressables) {
+    final row = _rowInside(w.child);
+    if (row != null && _hasAgreeText(row)) return w.onPressed != null;
   }
   return false;
+}
+
+/// 沿包装层级向下找到承载按钮文字的 Row。
+Row? _rowInside(Widget? w) {
+  if (w is AnimatedOpacity) return _rowInside(w.child);
+  if (w is DecoratedBox) return _rowInside(w.child);
+  if (w is Padding) return _rowInside(w.child);
+  if (w is Row) return w;
+  return null;
 }
 
 bool _hasAgreeText(Row row) {

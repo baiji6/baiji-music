@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_logger.dart';
 import '../../core/kv_store.dart';
@@ -12,6 +13,7 @@ import '../../local/local_song_query.dart';
 import '../../models/models.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
 
@@ -47,6 +49,10 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   LocalSortKey _sortKey = LocalSortKey.title;
   bool _sortDesc = false;
   bool _searchOpen = false;
+
+  // ---- 弹层显隐（Miuix 弹窗是声明式的）----
+  bool _showSortSheet = false;
+  bool _showClearAllDialog = false;
 
   @override
   void initState() {
@@ -226,30 +232,12 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     await _scan(force: true);
   }
 
-  Future<void> _clearAll() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.bg2,
-        title: const Text('清空本地音乐', style: TextStyle(fontSize: 16)),
-        content: const Text(
-          '将删除已保存的本地歌曲清单。文件本身不会被删除，重新扫描即可恢复。',
-          style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: AppColors.textTertiary)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('清空', style: TextStyle(color: AppColors.magenta)),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
+  void _openClearAll() {
+    setState(() => _showClearAllDialog = true);
+  }
 
+  Future<void> _confirmClearAll() async {
+    setState(() => _showClearAllDialog = false);
     LocalCoverCache.clear();
     await LocalMusicStore.clear();
     _load();
@@ -266,6 +254,22 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     setState(() {});
   }
 
+  /// 排序 / 目录管理 / 重扫 / 清空（旧 PopupMenuButton 的 Miuix 底部弹层版）。
+  void _onSortAction(String v) {
+    setState(() => _showSortSheet = false);
+    if (v.startsWith('k:')) {
+      final key = LocalSortKey.fromId(v.substring(2));
+      // 同一项再点一次就翻转升降序
+      _setSort(key, desc: key == _sortKey ? !_sortDesc : false);
+    } else if (v == 'dirs') {
+      setState(() => _showDirs = !_showDirs);
+    } else if (v == 'force') {
+      _scan(force: true);
+    } else if (v == 'clear') {
+      _openClearAll();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final current = PlayerController.instance.currentSong;
@@ -278,151 +282,100 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
         if (didPop) return;
         Navigator.of(context).pop(true);
       },
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('本地音乐'),
-        actions: [
-          IconButton(
-            tooltip: _searchOpen ? '关闭搜索' : '搜索本地歌曲',
-            icon: Icon(
-              _searchOpen ? Icons.search_off_rounded : Icons.search_rounded,
-              color: _searchOpen ? AppColors.cyan : null,
-            ),
-            onPressed: () {
-              if (_searchOpen) {
-                _searchCtrl.clear();
-                setState(() {
-                  _searchOpen = false;
-                  _query = '';
-                });
-              } else {
-                setState(() => _searchOpen = true);
-              }
-            },
+      child: MiuixScaffold(
+        containerColor: Colors.transparent,
+        snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
+        topBar: MiuixTopAppBar(
+          title: '本地音乐',
+          navigationIcon: MiuixIconButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Icon(Icons.arrow_back_rounded,
+                color: AppColors.textPrimary),
           ),
-          PopupMenuButton<String>(
-            tooltip: '排序：$_sortLabel',
-            icon: const Icon(Icons.swap_vert_rounded),
-            color: AppColors.bg2,
-            onSelected: (v) {
-              if (v.startsWith('k:')) {
-                final key = LocalSortKey.fromId(v.substring(2));
-                // 同一项再点一次就翻转升降序
-                _setSort(key, desc: key == _sortKey ? !_sortDesc : false);
-              } else if (v == 'dirs') {
-                setState(() => _showDirs = !_showDirs);
-              } else if (v == 'force') {
-                _scan(force: true);
-              } else if (v == 'clear') {
-                _clearAll();
-              }
-            },
-            itemBuilder: (_) => [
-              for (final k in LocalSortKey.values)
-                PopupMenuItem<String>(
-                  value: 'k:${k.id}',
-                  child: Row(
-                    children: [
-                      Icon(
-                        k == _sortKey
-                            ? Icons.radio_button_checked_rounded
-                            : Icons.radio_button_unchecked_rounded,
-                        size: 17,
-                        color: k == _sortKey
-                            ? AppColors.cyan
-                            : AppColors.textSecondary,
-                      ),
-                      const SizedBox(width: 10),
-                      Text(k.label, style: const TextStyle(fontSize: 13)),
-                      if (k == _sortKey) ...[
-                        const Spacer(),
-                        Icon(
-                          _sortDesc
-                              ? Icons.arrow_downward_rounded
-                              : Icons.arrow_upward_rounded,
-                          size: 15,
-                          color: AppColors.cyan,
-                        ),
-                      ],
-                    ],
+          actions: [
+            MiuixIconButton(
+              onPressed: () {
+                if (_searchOpen) {
+                  _searchCtrl.clear();
+                  setState(() {
+                    _searchOpen = false;
+                    _query = '';
+                  });
+                } else {
+                  setState(() => _searchOpen = true);
+                }
+              },
+              child: Icon(
+                _searchOpen ? Icons.search_off_rounded : Icons.search_rounded,
+                color: _searchOpen ? AppColors.cyan : AppColors.textPrimary,
+              ),
+            ),
+            MiuixIconButton(
+              onPressed: () => setState(() => _showSortSheet = true),
+              child: const Icon(Icons.swap_vert_rounded,
+                  color: AppColors.textPrimary),
+            ),
+            MiuixIconButton(
+              onPressed: _scanning ? null : () => _scan(),
+              child: const Icon(Icons.refresh_rounded, color: AppColors.cyan),
+            ),
+          ],
+        ),
+        content: (padding) => Column(
+          children: [
+            // 扫描进度条
+            if (_scanning)
+              MiuixLinearProgressIndicator(
+                progress: _progress?.total == 0 ? null : _progress?.ratio,
+                height: 2,
+              ),
+
+            // 搜索框
+            if (_searchOpen) _buildSearchBar(),
+
+            // 目录管理
+            if (_showDirs) _buildDirPanel(),
+
+            // 提示行 / 计数行
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: Row(
+                children: [
+                  Icon(
+                    _hint.isNotEmpty && _hint.contains('失败')
+                        ? Icons.error_outline_rounded
+                        : _scanning
+                            ? Icons.info_outline_rounded
+                            : Icons.library_music_outlined,
+                    size: 14,
+                    color: _hintWarn
+                        ? AppColors.magenta
+                        : AppColors.textTertiary,
                   ),
-                ),
-              const PopupMenuDivider(),
-              PopUpItem(
-                _showDirs ? '隐藏目录管理' : '显示目录管理',
-                'dirs',
-                Icons.folder_open_rounded,
-              ).item,
-              PopUpItem('全量重扫', 'force', Icons.restart_alt_rounded).item,
-              PopUpItem('清空列表', 'clear', Icons.delete_outline_rounded).item,
-            ],
-          ),
-          IconButton(
-            tooltip: '重新扫描（增量）',
-            icon: const Icon(Icons.refresh_rounded, color: AppColors.cyan),
-            onPressed: _scanning ? null : () => _scan(),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // 扫描进度条
-          if (_scanning)
-            LinearProgressIndicator(
-              value: _progress?.total == 0 ? null : _progress?.ratio,
-              minHeight: 2,
-              backgroundColor: AppColors.surfaceGlass,
-              valueColor: const AlwaysStoppedAnimation<Color>(AppColors.cyan),
-            ),
-
-          // 搜索框
-          if (_searchOpen) _buildSearchBar(),
-
-          // 目录管理
-          if (_showDirs) _buildDirPanel(),
-
-          // 提示行 / 计数行
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-            child: Row(
-              children: [
-                Icon(
-                  _hint.isNotEmpty && _hint.contains('失败')
-                      ? Icons.error_outline_rounded
-                      : _scanning
-                          ? Icons.info_outline_rounded
-                          : Icons.library_music_outlined,
-                  size: 14,
-                  color: _hintWarn
-                      ? AppColors.magenta
-                      : AppColors.textTertiary,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    _scanning
-                        ? '正在扫描 ${_progress?.done ?? 0}/${_progress?.total ?? 0}…'
-                        : _hint.isNotEmpty
-                            ? _hint
-                            : _countLine(),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textTertiary,
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _scanning
+                          ? '正在扫描 ${_progress?.done ?? 0}/${_progress?.total ?? 0}…'
+                          : _hint.isNotEmpty
+                              ? _hint
+                              : _countLine(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textTertiary,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
 
-          Expanded(child: _buildBody(current)),
-        ],
-      ),
+            Expanded(child: _buildBody(current)),
+          ],
+        ),
+        bottomBar: _buildSheets(),
       ),
     );
   }
@@ -430,41 +383,26 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   Widget _buildSearchBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
-      child: GlassCard(
-        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-        child: Row(
-          children: [
-            const Icon(Icons.search_rounded, size: 18, color: AppColors.textTertiary),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: _searchCtrl,
-                autofocus: true,
-                style: const TextStyle(fontSize: 13),
-                cursorColor: AppColors.cyan,
-                textInputAction: TextInputAction.search,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  border: InputBorder.none,
-                  hintText: '搜索歌名 / 歌手 / 专辑',
-                  hintStyle: TextStyle(fontSize: 13, color: AppColors.textTertiary),
-                ),
-                onChanged: (v) => setState(() => _query = v),
-              ),
-            ),
-            if (_query.isNotEmpty)
-              IconButton(
-                icon: const Icon(Icons.close_rounded, size: 16),
-                color: AppColors.textTertiary,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
+      child: MiuixTextField(
+        controller: _searchCtrl,
+        autofocus: true,
+        label: '搜索歌名 / 歌手 / 专辑',
+        useLabelAsPlaceholder: true,
+        singleLine: true,
+        textInputAction: TextInputAction.search,
+        cursorColor: AppColors.cyan,
+        textStyle: const TextStyle(fontSize: 13),
+        trailingIcon: _query.isNotEmpty
+            ? MiuixIconButton(
                 onPressed: () {
                   _searchCtrl.clear();
                   setState(() => _query = '');
                 },
-              ),
-          ],
-        ),
+                child: const Icon(Icons.close_rounded,
+                    size: 16, color: AppColors.textTertiary),
+              )
+            : null,
+        onChanged: (v) => setState(() => _query = v),
       ),
     );
   }
@@ -484,14 +422,11 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
                 ),
                 const Spacer(),
-                TextButton.icon(
+                MiuixTextButton(
+                  '添加目录',
                   onPressed: _pickDir,
-                  icon: const Icon(Icons.create_new_folder_outlined, size: 16),
-                  label: const Text('添加目录'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.cyan,
-                    textStyle: const TextStyle(fontSize: 12),
-                  ),
+                  textStyle: const TextStyle(
+                      fontSize: 12, color: AppColors.cyan),
                 ),
               ],
             ),
@@ -523,12 +458,10 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                           ),
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded, size: 16),
-                        color: AppColors.textTertiary,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
+                      MiuixIconButton(
                         onPressed: () => _removeDir(d),
+                        child: const Icon(Icons.close_rounded,
+                            size: 16, color: AppColors.textTertiary),
                       ),
                     ],
                   ),
@@ -545,7 +478,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(color: AppColors.cyan),
+            MiuixCircularProgressIndicator(),
             SizedBox(height: 16),
             Text(
               '正在扫描本地音乐…',
@@ -586,12 +519,11 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
               ),
               if (!Platform.isAndroid && !Platform.isIOS) ...[
                 const SizedBox(height: 12),
-                TextButton(
+                MiuixTextButton(
+                  '扫描系统音乐目录',
                   onPressed: () => _scan(force: true),
-                  child: const Text(
-                    '扫描系统音乐目录',
-                    style: TextStyle(fontSize: 12, color: AppColors.cyan),
-                  ),
+                  textStyle: const TextStyle(
+                      fontSize: 12, color: AppColors.cyan),
                 ),
               ],
             ],
@@ -619,13 +551,14 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                   style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
                 ),
                 const SizedBox(height: 12),
-                TextButton(
+                MiuixTextButton(
+                  '清空搜索',
                   onPressed: () {
                     _searchCtrl.clear();
                     setState(() => _query = '');
                   },
-                  child: const Text('清空搜索',
-                      style: TextStyle(fontSize: 12, color: AppColors.cyan)),
+                  textStyle: const TextStyle(
+                      fontSize: 12, color: AppColors.cyan),
                 ),
               ],
             ),
@@ -642,42 +575,59 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
         final playing = current?.mid == s.mid;
         return GlassCard(
           margin: const EdgeInsets.only(bottom: 8),
-          child: ListTile(
-            leading: CoverImage(song: s, size: 44, radius: 10),
-            title: Text(
-              s.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: playing ? AppColors.cyan : null,
+          child: MiuixPressable(
+            onPressed: () => _play(s, i),
+            borderRadius: BorderRadius.circular(22),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Row(
+                children: [
+                  CoverImage(song: s, size: 44, radius: 10),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          s.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color:
+                                playing ? AppColors.cyan : AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          s.singer.isEmpty ? '未知艺术家' : s.singer,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.textTertiary),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  TagBadge(
+                    s.format.isEmpty ? '本地' : s.format.toUpperCase(),
+                    color: AppColors.violet,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _fmtDuration(s.duration),
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(Icons.play_arrow_rounded,
+                      color: AppColors.cyan, size: 24),
+                ],
               ),
             ),
-            subtitle: Text(
-              s.singer.isEmpty ? '未知艺术家' : s.singer,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TagBadge(
-                  s.format.isEmpty ? '本地' : s.format.toUpperCase(),
-                  color: AppColors.violet,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  _fmtDuration(s.duration),
-                  style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
-                ),
-                const SizedBox(width: 8),
-                const Icon(Icons.play_arrow_rounded,
-                    color: AppColors.cyan, size: 24),
-              ],
-            ),
-            onTap: () => _play(s, i),
           ),
         );
       },
@@ -691,24 +641,167 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     final sec = total % 60;
     return '${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
   }
+
+  /// 集中挂载本页的 Miuix 声明式弹层。
+  Widget _buildSheets() {
+    return Stack(
+      children: [
+        // ---- 清空确认 ----
+        MiuixOverlayDialog(
+          show: _showClearAllDialog,
+          title: '清空本地音乐',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () => setState(() => _showClearAllDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              MiuixText(
+                '将删除已保存的本地歌曲清单。文件本身不会被删除，重新扫描即可恢复。',
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                height: 1.6,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton(
+                    '取消',
+                    onPressed: () =>
+                        setState(() => _showClearAllDialog = false),
+                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(width: 8),
+                  MiuixTextButton(
+                    '清空',
+                    onPressed: _confirmClearAll,
+                    textStyle: const TextStyle(
+                        color: AppColors.magenta, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // ---- 排序 / 目录 / 重扫 / 清空 ----
+        MiuixOverlayBottomSheet(
+          show: _showSortSheet,
+          title: '排序：$_sortLabel',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () => setState(() => _showSortSheet = false),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final k in LocalSortKey.values)
+                  MiuixPressable(
+                    onPressed: () => _onSortAction('k:${k.id}'),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: k == _sortKey
+                            ? AppColors.cyan.withValues(alpha: 0.12)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            k == _sortKey
+                                ? Icons.radio_button_checked_rounded
+                                : Icons.radio_button_unchecked_rounded,
+                            size: 17,
+                            color: k == _sortKey
+                                ? AppColors.cyan
+                                : AppColors.textSecondary,
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            k.label,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: k == _sortKey
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: k == _sortKey
+                                  ? AppColors.cyan
+                                  : AppColors.textPrimary,
+                            ),
+                          ),
+                          if (k == _sortKey) ...[
+                            const Spacer(),
+                            Icon(
+                              _sortDesc
+                                  ? Icons.arrow_downward_rounded
+                                  : Icons.arrow_upward_rounded,
+                              size: 15,
+                              color: AppColors.cyan,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                const MiuixHorizontalDivider(),
+                _SheetAction(
+                  icon: Icons.folder_open_rounded,
+                  label: _showDirs ? '隐藏目录管理' : '显示目录管理',
+                  onTap: () => _onSortAction('dirs'),
+                ),
+                _SheetAction(
+                  icon: Icons.restart_alt_rounded,
+                  label: '全量重扫',
+                  onTap: () => _onSortAction('force'),
+                ),
+                _SheetAction(
+                  icon: Icons.delete_outline_rounded,
+                  label: '清空列表',
+                  danger: true,
+                  onTap: () => _onSortAction('clear'),
+                ),
+                const SizedBox(height: 12),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
-/// PopupMenu 条目（只是为了让 itemBuilder 里少些重复代码）。
-class PopUpItem {
-  const PopUpItem(this.label, this.value, this.icon);
+/// 排序底部弹层里的普通操作行。
+class _SheetAction extends StatelessWidget {
+  const _SheetAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.danger = false,
+  });
 
-  final String label;
-  final String value;
   final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool danger;
 
-  PopupMenuItem<String> get item => PopupMenuItem<String>(
-        value: value,
+  @override
+  Widget build(BuildContext context) {
+    final color = danger ? AppColors.magenta : AppColors.textPrimary;
+    return MiuixPressable(
+      onPressed: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
         child: Row(
           children: [
-            Icon(icon, size: 18, color: AppColors.textSecondary),
+            Icon(icon, size: 18, color: color),
             const SizedBox(width: 10),
-            Text(label, style: const TextStyle(fontSize: 13)),
+            Text(label, style: TextStyle(fontSize: 13, color: color)),
           ],
         ),
-      );
+      ),
+    );
+  }
 }
