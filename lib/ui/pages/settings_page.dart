@@ -7,8 +7,10 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/app_logger.dart';
 import '../../core/cache_manager.dart';
 import '../../core/capture_trust.dart';
+import '../../core/dev_mode.dart';
 import '../../core/lyric_settings.dart';
 import '../../core/theme_controller.dart';
+import '../../core/ui_settings.dart';
 import '../../core/update_checker.dart';
 import '../../download/download_extras.dart';
 import '../../download/download_manager.dart';
@@ -16,12 +18,14 @@ import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
-import '../widgets/agreement_dialog.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
 import '../widgets/lyric_style_sheet.dart';
 import 'qq_login_page.dart';
 import 'netease_login_page.dart';
+
+/// 歌词字重档位名（300~900，步进 100）。
+const List<String> _lyricWeightNames = ['细', '常规', '中等', '半粗', '粗', '特粗', '黑'];
 
 /// 设置页面：音质偏好、下载目录、缓存管理、账号信息。
 class SettingsPage extends StatefulWidget {
@@ -66,6 +70,8 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _loadSettings();
+    // 开发者模式是进程级单例；这里兜底 load 一次（main 里也会 load，幂等）
+    DevMode.instance.load();
   }
 
   @override
@@ -369,35 +375,56 @@ class _SettingsPageState extends State<SettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SectionHeader(title: '外观'),
+            const SectionHeader(title: '账号', icon: Icons.account_circle_outlined),
             GlassCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
-              // 主题偏好是 ChangeNotifier，只重建这一行，不波及整个设置页
-              child: AnimatedBuilder(
-                animation: ThemeController.instance,
-                builder: (ctx, _) => MiuixSwitchPreference(
-                  title: '莫奈取色',
-                  summary: '开启后主题色跟随系统壁纸取色'
-                      '（Android 支持；其他平台回退品牌紫）',
-                  startAction: const Icon(Icons.palette_rounded,
-                      color: AppColors.violet, size: 22),
-                  value: ThemeController.instance.monet,
-                  onChanged: (v) => ThemeController.instance.setMonet(v),
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 4),
-              child: Text(
-                '整体界面默认跟随系统自动切换深色 / 浅色；标题文字为天蓝色。'
-                '莫奈取色只影响主题强调色（按钮 / 开关 / 选中态），'
-                '玻璃底、背景光晕与标题天蓝保持不变。',
-                style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+              child: Column(
+                children: [
+                  MiuixArrowPreference(
+                    title: 'QQ 音乐',
+                    summary: AppServices.instance.qq.isLoggedIn()
+                        ? '已登录: ${AppServices.instance.qq.credential.strMusicid}'
+                        : '未登录 · 点击登录',
+                    startAction: Icon(
+                      AppServices.instance.qq.isLoggedIn()
+                          ? Icons.verified_rounded
+                          : Icons.person_outline,
+                      color: AppServices.instance.qq.isLoggedIn()
+                          ? AppColors.accent
+                          : AppColors.textTertiary,
+                      size: 22,
+                    ),
+                    onClick: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(builder: (_) => const QQLoginPage()),
+                    ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '网易云音乐',
+                    summary: AppServices.instance.netease.isLoggedIn()
+                        ? '已登录'
+                        : '未登录 · 点击登录',
+                    startAction: Icon(
+                      AppServices.instance.netease.isLoggedIn()
+                          ? Icons.verified_rounded
+                          : Icons.person_outline,
+                      color: AppServices.instance.netease.isLoggedIn()
+                          ? AppColors.accentAlt
+                          : AppColors.textTertiary,
+                      size: 22,
+                    ),
+                    onClick: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const NeteaseLoginPage()),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 24),
-            const SectionHeader(title: '音质设置'),
+            const SectionHeader(title: '播放与音质', icon: Icons.equalizer_rounded),
             GlassCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
@@ -423,7 +450,71 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             const SizedBox(height: 24),
-            const SectionHeader(title: '下载设置'),
+            const SectionHeader(title: '歌词与显示', icon: Icons.music_note_outlined),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              // 歌词偏好是 ChangeNotifier，用 AnimatedBuilder 局部重建本行，
+              // 避免整个设置页随字号调整重建。
+              child: Column(
+                children: [
+                  AnimatedBuilder(
+                    animation: _lyricStyle,
+                    builder: (ctx, _) => MiuixArrowPreference(
+                      title: '歌词样式',
+                      summary:
+                          '${_lyricStyle.fontSize.toStringAsFixed(0)} px · '
+                          '${_lyricStyle.alignLeft ? '左对齐' : '居中'} · '
+                          '字重 ${_lyricStyle.weight}',
+                      startAction: Icon(Icons.format_size_rounded,
+                          color: AppColors.accent, size: 22),
+                      onClick: () =>
+                          setState(() => _showLyricStyleSheet = true),
+                    ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  // 歌词字重（当前行）：300~900 直接在这里调，不必进样式面板
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.format_bold_rounded,
+                            color: AppColors.violet, size: 20),
+                        const SizedBox(width: 10),
+                        Text('歌词字重',
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary)),
+                        const Spacer(),
+                        AnimatedBuilder(
+                          animation: _lyricStyle,
+                          builder: (ctx, _) => Text(
+                            '${_lyricStyle.weight} · '
+                            '${_lyricWeightNames[((_lyricStyle.weight - LyricSettings.minWeight) / 100).round().clamp(0, _lyricWeightNames.length - 1)]}',
+                            style: TextStyle(
+                                fontSize: 12, color: AppColors.accent),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  AnimatedBuilder(
+                    animation: _lyricStyle,
+                    builder: (ctx, _) => MiuixSlider(
+                      value: _lyricStyle.weight.toDouble(),
+                      min: LyricSettings.minWeight.toDouble(),
+                      max: LyricSettings.maxWeight.toDouble(),
+                      steps: (LyricSettings.maxWeight -
+                              LyricSettings.minWeight) ~/
+                          100,
+                      onValueChanged: (v) => _lyricStyle.setWeight(v.round()),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SectionHeader(title: '下载与存储', icon: Icons.folder_outlined),
             GlassCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
@@ -476,7 +567,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             const SizedBox(height: 24),
-            const SectionHeader(title: '缓存管理'),
+            const SizedBox(height: 6),
             GlassCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
@@ -525,125 +616,63 @@ class _SettingsPageState extends State<SettingsPage> {
                 style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
               ),
             ),
-            const SizedBox(height: 24),
-            const SectionHeader(title: '歌词显示'),
-            GlassCard(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              // 歌词偏好是 ChangeNotifier，用 AnimatedBuilder 局部重建本行，
-              // 避免整个设置页随字号调整重建。
-              child: AnimatedBuilder(
-                animation: _lyricStyle,
-                builder: (ctx, _) => MiuixArrowPreference(
-                  title: '歌词样式',
-                  summary:
-                      '${_lyricStyle.fontSize.toStringAsFixed(0)} px · '
-                      '${_lyricStyle.alignLeft ? '左对齐' : '居中'}',
-                  startAction: Icon(Icons.format_size_rounded,
-                      color: AppColors.accent, size: 22),
-                  onClick: () =>
-                      setState(() => _showLyricStyleSheet = true),
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            const SectionHeader(title: '账号'),
+            const SectionHeader(title: '通用', icon: Icons.tune_rounded),
             GlassCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
                 children: [
-                  MiuixArrowPreference(
-                    title: 'QQ 音乐',
-                    summary: AppServices.instance.qq.isLoggedIn()
-                        ? '已登录: ${AppServices.instance.qq.credential.strMusicid}'
-                        : '未登录 · 点击登录',
-                    startAction: Icon(
-                      AppServices.instance.qq.isLoggedIn()
-                          ? Icons.verified_rounded
-                          : Icons.person_outline,
-                      color: AppServices.instance.qq.isLoggedIn()
-                          ? AppColors.accent
-                          : AppColors.textTertiary,
-                      size: 22,
-                    ),
-                    onClick: () => Navigator.push<void>(
-                      context,
-                      MaterialPageRoute(builder: (_) => const QQLoginPage()),
+                  // 主题偏好是 ChangeNotifier，只重建这一行，不波及整个设置页
+                  AnimatedBuilder(
+                    animation: ThemeController.instance,
+                    builder: (ctx, _) => MiuixSwitchPreference(
+                      title: '莫奈取色',
+                      summary: '开启后主题色跟随系统壁纸取色'
+                          '（Android 支持；其他平台回退品牌紫）',
+                      startAction: const Icon(Icons.palette_rounded,
+                          color: AppColors.violet, size: 22),
+                      value: ThemeController.instance.monet,
+                      onChanged: (v) => ThemeController.instance.setMonet(v),
                     ),
                   ),
                   const MiuixHorizontalDivider(),
-                  MiuixArrowPreference(
-                    title: '网易云音乐',
-                    summary: AppServices.instance.netease.isLoggedIn()
-                        ? '已登录'
-                        : '未登录 · 点击登录',
-                    startAction: Icon(
-                      AppServices.instance.netease.isLoggedIn()
-                          ? Icons.verified_rounded
-                          : Icons.person_outline,
-                      color: AppServices.instance.netease.isLoggedIn()
-                          ? AppColors.accentAlt
-                          : AppColors.textTertiary,
-                      size: 22,
-                    ),
-                    onClick: () => Navigator.push<void>(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const NeteaseLoginPage()),
+                  // 界面圆角（全局）：作用于 App 内自绘卡片（玻璃卡等）
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.rounded_corner_rounded,
+                            color: AppColors.aqua, size: 20),
+                        const SizedBox(width: 10),
+                        Text('界面圆角',
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary)),
+                        const Spacer(),
+                        AnimatedBuilder(
+                          animation: UiSettings.instance,
+                          builder: (ctx, _) => Text(
+                            '${UiSettings.instance.cornerRadius.toStringAsFixed(0)} px',
+                            style: TextStyle(
+                                fontSize: 12, color: AppColors.accent),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            const SectionHeader(title: '抓包调试'),
-            GlassCard(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Column(
-                children: [
-                  MiuixSwitchPreference(
-                    title: '允许抓包调试',
-                    summary: '放行中间人证书，供 Reqable / Charles 解密 HTTPS（正式版同样可开）',
-                    startAction: Icon(
-                      Icons.bug_report_rounded,
-                      color: _captureEnabled
-                          ? AppColors.warning
-                          : AppColors.textTertiary,
-                      size: 22,
+                  AnimatedBuilder(
+                    animation: UiSettings.instance,
+                    builder: (ctx, _) => MiuixSlider(
+                      value: UiSettings.instance.cornerRadius,
+                      min: UiSettings.minCorner,
+                      max: UiSettings.maxCorner,
+                      steps: (UiSettings.maxCorner - UiSettings.minCorner).round(),
+                      onValueChanged: (v) =>
+                          UiSettings.instance.setCornerRadius(v),
                     ),
-                    value: _captureEnabled,
-                    onChanged: _toggleCapture,
                   ),
                   const MiuixHorizontalDivider(),
-                  MiuixArrowPreference(
-                    title: '抓包代理',
-                    summary: _captureProxy.isEmpty
-                        ? '未设置（走系统/环境变量代理）'
-                        : _captureProxy,
-                    startAction: const Icon(Icons.router_rounded,
-                        color: AppColors.violet, size: 22),
-                    onClick: _editProxy,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 4),
-              child: Text(
-                'Android 端还需在手机上装好抓包工具的 CA（设置 → 安全 → 凭据），'
-                'App 已在 network_security_config 中放行用户证书；'
-                'Dart 层的证书校验由上面的开关控制，两者都要开才能抓全。'
-                '桌面端若抓不到，可在这里填 Reqable 的代理地址（本机一般 127.0.0.1:8888）。',
-                style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
-              ),
-            ),
-            const SizedBox(height: 24),
-            const SectionHeader(title: '关于'),
-            GlassCard(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Column(
-                children: [
-                  MiuixArrowPreference(
+MiuixArrowPreference(
                     title: '检查更新',
                     summary: '手动检查最新版本',
                     startAction: const Icon(Icons.system_update_rounded,
@@ -661,30 +690,90 @@ class _SettingsPageState extends State<SettingsPage> {
                     ],
                     onClick: _checkingUpdate ? null : _checkUpdate,
                   ),
-                  const MiuixHorizontalDivider(),
-                  MiuixArrowPreference(
-                    title: '免责声明',
-                    summary: '点击查看全文',
-                    startAction: Icon(Icons.gavel_rounded,
-                        color: AppColors.warning, size: 22),
-                    onClick: () => showAgreementReader(
-                      context,
-                      initial: AgreementTab.disclaimer,
-                    ),
-                  ),
-                  const MiuixHorizontalDivider(),
-                  MiuixArrowPreference(
-                    title: '使用协议',
-                    summary: '点击查看全文',
-                    startAction: Icon(Icons.article_rounded,
-                        color: AppColors.accentAlt, size: 22),
-                    onClick: () => showAgreementReader(
-                      context,
-                      initial: AgreementTab.terms,
-                    ),
-                  ),
                 ],
               ),
+            ),
+            const SizedBox(height: 6),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                '整体界面默认跟随系统自动切换深色 / 浅色；标题文字为天蓝色。'
+                '莫奈取色只影响主题强调色（按钮 / 开关 / 选中态），'
+                '玻璃底、背景光晕与标题天蓝保持不变。',
+                style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+              ),
+            ),
+            const SizedBox(height: 24),
+            // 开发者模式：默认隐藏，在「关于」页连点版本号 10 次输密码开启。
+            // 抓包调试这类会影响网络安全的开关收在这里，避免普通用户误触。
+            AnimatedBuilder(
+              animation: DevMode.instance,
+              builder: (context, _) {
+                if (!DevMode.instance.enabled) return const SizedBox.shrink();
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SectionHeader(title: '开发者模式', icon: Icons.developer_mode_rounded),
+                    GlassCard(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Column(
+                        children: [
+                          MiuixSwitchPreference(
+                            title: '允许抓包调试',
+                            summary: '放行中间人证书，供 Reqable / Charles 解密 HTTPS（正式版同样可开）',
+                            startAction: Icon(
+                              Icons.bug_report_rounded,
+                              color: _captureEnabled
+                                  ? AppColors.warning
+                                  : AppColors.textTertiary,
+                              size: 22,
+                            ),
+                            value: _captureEnabled,
+                            onChanged: _toggleCapture,
+                          ),
+                          const MiuixHorizontalDivider(),
+                          MiuixArrowPreference(
+                            title: '抓包代理',
+                            summary: _captureProxy.isEmpty
+                                ? '未设置（走系统/环境变量代理）'
+                                : _captureProxy,
+                            startAction: const Icon(Icons.router_rounded,
+                                color: AppColors.violet, size: 22),
+                            onClick: _editProxy,
+                          ),
+                          const MiuixHorizontalDivider(),
+                          MiuixSwitchPreference(
+                            title: '开发者模式',
+                            summary: '关闭后设置页重新隐藏本分区（可在关于页再次开启）',
+                            startAction: Icon(Icons.developer_mode_rounded,
+                                color: AppColors.accent, size: 22),
+                            value: true,
+                            onChanged: (v) {
+                              if (v) return;
+                              DevMode.instance.setEnabled(false).then((_) {
+                                if (!mounted) return;
+                                _showSnack('开发者模式已关闭');
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        'Android 端还需在手机上装好抓包工具的 CA（设置 → 安全 → 凭据），'
+                        'App 已在 network_security_config 中放行用户证书；'
+                        'Dart 层的证书校验由上面的开关控制，两者都要开才能抓全。'
+                        '桌面端若抓不到，可在这里填 Reqable 的代理地址（本机一般 127.0.0.1:8888）。',
+                        style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                );
+              },
             ),
           ],
         ),

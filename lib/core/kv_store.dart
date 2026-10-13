@@ -38,6 +38,11 @@ class KvStore {
 
   Future<void> setBool(String key, bool value) => _prefs.setBool(key, value);
 
+  double? getDouble(String key) => _prefs.getDouble(key);
+
+  Future<void> setDouble(String key, double value) =>
+      _prefs.setDouble(key, value);
+
   Future<void> remove(String key) => _prefs.remove(key);
 
   Future<void> clear() => _prefs.clear();

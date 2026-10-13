@@ -224,6 +224,10 @@ class PlayerController {
   Future<void> seek(Duration position) async {
     _ensurePlayer();
     await _player!.seek(position);
+    // 暂停时 libmpv 不会持续推送 position，靠 seek 事件补一次主动广播，
+    // 否则「暂停时点击歌词跳转」后进度条 / 歌词视图停在旧位置不动。
+    // 播放时底层自己也会推，重复推送对订阅方是幂等的（只更新基准）。
+    _positionStream.add(_player!.state.position);
   }
 
   void notifyState() {

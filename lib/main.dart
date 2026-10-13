@@ -1,15 +1,20 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'core/agreement_store.dart';
+import 'core/app_logger.dart';
 import 'core/cache_manager.dart';
 import 'core/capture_trust.dart';
+import 'core/dev_mode.dart';
 import 'core/kv_store.dart';
 import 'core/lyric_settings.dart';
 import 'core/theme_controller.dart';
+import 'core/ui_settings.dart';
 import 'core/update_checker.dart';
 import 'player/player_controller.dart';
 import 'theme/app_theme.dart';
@@ -31,9 +36,42 @@ Future<void> main() async {
   await LyricSettings.instance.load();
   // 主题偏好（莫奈取色开关 + 壁纸种子）也要在首帧前就位
   await ThemeController.instance.load();
+  // 开发者模式偏好：决定设置页是否显示「开发者模式」分区
+  await DevMode.instance.load();
+  // 全局界面偏好（圆角等）：卡片在首帧就要用上正确圆角
+  await UiSettings.instance.load();
   // 内存图片缓存上限走KvStore，每次启动都要重新应用一次（进程级设置）
   CacheManager.applyMemoryLimit();
-  runApp(const BaijiMusicApp());
+  // 日志落盘 + 回读当天历史：v2.2.6 起日志不再"每次打开软件就清空"，
+  // 闪退后打开日志页能看到崩之前发生了什么。
+  await AppLog.instance.initFileSink();
+  AppLog.i('App', '白姬音乐启动');
+  _installCrashGuards();
+  // 异步未捕获异常的最后一层兜底：zone 内 runApp，崩前同步刷盘。
+  runZonedGuarded(() {
+    runApp(const BaijiMusicApp());
+  }, _onUncaughtZoneError);
+}
+
+/// 框架错误 / 平台错误 → 写 FATAL 日志并同步刷盘，再交还原有处理。
+void _installCrashGuards() {
+  final originalOnError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    AppLog.f('FlutterError', details.exceptionAsString(), details.stack);
+    AppLog.instance.flushSync();
+    originalOnError?.call(details);
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    AppLog.f('Platform', '未捕获的平台错误', error);
+    AppLog.instance.flushSync();
+    return true;
+  };
+}
+
+/// zone 级未捕获异常（Future / 微任务里漏掉的错误）。
+void _onUncaughtZoneError(Object error, StackTrace stack) {
+  AppLog.f('Uncaught', '未捕获异常', error);
+  AppLog.instance.flushSync();
 }
 
 class BaijiMusicApp extends StatefulWidget {

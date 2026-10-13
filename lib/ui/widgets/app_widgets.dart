@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
+import '../../core/ui_settings.dart';
 import '../../theme/app_theme.dart';
 
 /// 玻璃拟态卡片：半透明填充 + 细描边 + 辉光投影。
@@ -10,7 +11,7 @@ class GlassCard extends StatelessWidget {
     required this.child,
     this.padding = const EdgeInsets.all(18),
     this.margin,
-    this.radius = 22,
+    this.radius,
     this.glowColor,
     this.onTap,
     this.width,
@@ -20,7 +21,9 @@ class GlassCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry? margin;
-  final double radius;
+
+  /// 卡片圆角。null = 跟随全局「界面圆角」设置（UiSettings）。
+  final double? radius;
   final Color? glowColor;
   final VoidCallback? onTap;
   final double? width;
@@ -28,9 +31,10 @@ class GlassCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final r = radius ?? UiSettings.instance.cornerRadius;
     BoxDecoration decoration() => BoxDecoration(
           color: AppColors.surfaceGlass,
-          borderRadius: BorderRadius.circular(radius),
+          borderRadius: BorderRadius.circular(r),
           border: Border.all(color: AppColors.strokeGlass),
           boxShadow: glowColor != null
               ? [
@@ -72,7 +76,7 @@ class GlassCard extends StatelessWidget {
     // 按压反馈走 MiuixPressable（下沉 + 回弹），不再用 GestureDetector 裸接。
     return MiuixPressable(
       onPressed: onTap,
-      borderRadius: BorderRadius.circular(radius),
+      borderRadius: BorderRadius.circular(r),
       child: body,
     );
   }
@@ -205,17 +209,24 @@ class NeonIconButton extends StatelessWidget {
 }
 
 /// 分区标题。
+///
+/// v2.2.6 起支持 [icon]：给每个分区一个彩色图标锚点，设置页 / 工具箱页
+/// 分区多的时候靠图标快速定位，减轻"一屏八张卡"的割裂感。
 class SectionHeader extends StatelessWidget {
   const SectionHeader({
     super.key,
     required this.title,
     this.trailing,
     this.subtitle,
+    this.icon,
+    this.iconColor,
   });
 
   final String title;
   final String? subtitle;
   final Widget? trailing;
+  final IconData? icon;
+  final Color? iconColor;
 
   @override
   Widget build(BuildContext context) {
@@ -223,6 +234,10 @@ class SectionHeader extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 14),
       child: Row(
         children: [
+          if (icon != null) ...[
+            Icon(icon, size: 16, color: iconColor ?? AppColors.accent),
+            const SizedBox(width: 8),
+          ],
           Container(
             width: 4,
             height: 18,

@@ -1,9 +1,13 @@
 import 'package:flutter/foundation.dart';
 
+import 'log_store.dart';
+
 /// 应用内日志记录器。
 ///
 /// 在桌面/移动端将日志同时输出到控制台与内存环形缓冲（供「日志查看」页读取），
-/// 支持六档级别与按档位开关。移植自原 Android 实现的 AppLog。
+/// 支持六档级别与按档位开关。v2.2.6 起额外落盘（[LogStore]）：按天写文件、
+/// 保留 7 天、启动回读当天——日志不再"每次打开软件就清空"。
+/// 移植自原 Android 实现的 AppLog。
 class AppLog {
   static const String trace = 'TRACE';
   static const String debug = 'DEBUG';
@@ -49,6 +53,28 @@ class AppLog {
   static bool isAtLeast(String level, String minLevel) =>
       levelIndex(level) >= levelIndex(minLevel);
 
+  /// 挂上文件 sink，并把当天已有日志回读进内存（启动时调用一次）。
+  ///
+  /// 之后所有日志都会追加到当天文件；「清空」按钮会同时清掉文件。
+  /// 平台拿不到目录时静默降级为纯内存日志。
+  Future<void> initFileSink() async {
+    await LogStore.instance.init();
+    final history = await LogStore.instance.readToday();
+    if (history.isEmpty) return;
+    for (final line in history) {
+      _entries.add((level: _levelOfLine(line), line: line));
+    }
+    while (_entries.length > maxLines) {
+      _entries.removeAt(0);
+    }
+  }
+
+  /// 从日志行文本提取级别（回读历史时用）。格式: "MM-DD HH:MM:SS.mmm LEVEL/tag ..."。
+  static String _levelOfLine(String line) {
+    final m = RegExp(r'\d{2}:\d{2}:\d{2}\.\d{3}\s+([A-Z]+)/').firstMatch(line);
+    return m?.group(1) ?? info;
+  }
+
   void log(String level, String tag, String message, [Object? error]) {
     if (!isEnabled(level)) return;
     final line = error == null
@@ -70,6 +96,8 @@ class AppLog {
     for (final l in _listeners) {
       l(level, text);
     }
+    // 落盘（异步批量；暂停/降级时静默跳过）
+    LogStore.instance.write(text);
     // 控制台输出
     if (kDebugMode) {
       debugPrint(text);
@@ -94,7 +122,14 @@ class AppLog {
 
   List<String> dump() => _entries.map((e) => e.line).toList();
 
-  void clear() => _entries.clear();
+  /// 清空内存日志，同时清掉当天落盘文件（否则重启又回读回来了）。
+  void clear() {
+    _entries.clear();
+    LogStore.instance.clearToday();
+  }
+
+  /// 同步刷盘——闪退路径专用（没有事件循环可等）。
+  void flushSync() => LogStore.instance.flushSync();
 
   String _ts() {
     final now = DateTime.now();

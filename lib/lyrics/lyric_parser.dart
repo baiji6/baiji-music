@@ -68,7 +68,7 @@ class LyricParser {
 
     if ((translatedLines == null || translatedLines.isEmpty) &&
         (romaLines == null || romaLines.isEmpty)) {
-      return parsed;
+      return _splitPauses(parsed);
     }
 
     final merged = <LyricLine>[];
@@ -84,12 +84,121 @@ class LyricParser {
       ));
     }
 
-    return Lyrics(
+    return _splitPauses(Lyrics(
       lines: merged,
       hasWordTiming: parsed.hasWordTiming,
       hasTranslation: translatedLines != null && translatedLines.isNotEmpty,
       hasRomanization: romaLines != null && romaLines.isNotEmpty,
+    ));
+  }
+
+  // ==================== 分句拆行 ====================
+
+  /// 绝对停顿阈值（毫秒）：字间隔 ≥ 此值视为分句气口。
+  static const int _pauseAbsMs = 800;
+
+  /// 相对停顿下限与倍数：间隔 ≥ 此值**且** ≥ 行内中位间隔的 N 倍，也算分句
+  /// （兼容慢歌 / 语速慢的行，其绝对间隔达不到 [_pauseAbsMs] 但相对明显）。
+  static const int _pauseRelMs = 500;
+  static const int _pauseRelFactor = 5;
+
+  /// 拆出的每段至少几个字，避免把一行锯成碎屑。
+  static const int _minSegmentChars = 2;
+
+  /// 一行最多拆成几段（防脏数据把一行锯成几十段）。
+  static const int _maxSegments = 3;
+
+  /// 把「一句歌词占了两个显示行」的长行按演唱停顿拆成多行。
+  ///
+  /// 部分音源（典型如 QQ 的 QRC）会把两个分句放进同一行、同一个时间片，
+  /// 渲染时整行同步染色——视觉上就是「两句当成一句处理」：第一显示行
+  /// 唱完，第二显示行没有任何独立的高亮状态。
+  ///
+  /// 主流播放器（网易云等）的分行来自歌词制作时的人工分行，这里用
+  /// **行内字间显著停顿**复刻同一效果：停顿处即分句处。
+  ///
+  /// 只有带逐字时间的行能拆——普通 LRC 整行一个时间片，无从得知句中停顿。
+  /// 译文 / 罗马音跟随第一段（没有按段对齐的数据，重复挂全文会显得冗余）。
+  static Lyrics _splitPauses(Lyrics lyrics) {
+    final out = <LyricLine>[];
+    var changed = false;
+    for (final line in lyrics.lines) {
+      final parts = _splitLineAtPauses(line);
+      if (parts.length > 1) changed = true;
+      out.addAll(parts);
+    }
+    if (!changed) return lyrics;
+    return Lyrics(
+      lines: out,
+      hasWordTiming: lyrics.hasWordTiming,
+      hasTranslation: lyrics.hasTranslation,
+      hasRomanization: lyrics.hasRomanization,
     );
+  }
+
+  /// 单行拆段；无可拆停顿时原样返回。
+  static List<LyricLine> _splitLineAtPauses(LyricLine line) {
+    final words = line.words;
+    if (words.length < _minSegmentChars * 2) return [line];
+
+    // 相邻字的间隔：下一字开始 - 上一字结束。脏数据可能为负，夹到 0。
+    final gaps = List<int>.filled(words.length - 1, 0);
+    for (var i = 1; i < words.length; i++) {
+      final g = words[i].startMs - words[i - 1].endMs;
+      gaps[i - 1] = g < 0 ? 0 : g;
+    }
+    final sorted = [...gaps]..sort();
+    final median = sorted[sorted.length ~/ 2];
+
+    // 收集切点（切点在字 i-1 与字 i 之间）。约束：
+    // - 绝对或相对阈值命中；
+    // - 切出的左右两段都不能少于 _minSegmentChars 个字；
+    // - 总数不超过 _maxSegments 段。
+    final cuts = <int>[];
+    var prevCut = 0;
+    for (var i = 1; i < words.length; i++) {
+      final gap = gaps[i - 1];
+      final big = gap >= _pauseAbsMs ||
+          (median > 0 &&
+              gap >= _pauseRelMs &&
+              gap >= median * _pauseRelFactor);
+      if (!big) continue;
+      if (i - prevCut < _minSegmentChars) continue;
+      if (words.length - i < _minSegmentChars) continue;
+      cuts.add(i);
+      prevCut = i;
+      if (cuts.length >= _maxSegments - 1) break;
+    }
+    if (cuts.isEmpty) return [line];
+
+    // 切段
+    final segments = <List<LyricWord>>[];
+    var prev = 0;
+    for (final c in cuts) {
+      segments.add(words.sublist(prev, c));
+      prev = c;
+    }
+    segments.add(words.sublist(prev));
+
+    final result = <LyricLine>[];
+    for (var s = 0; s < segments.length; s++) {
+      final seg = segments[s];
+      final startMs = seg.first.startMs;
+      final endMs = s < segments.length - 1
+          ? (segments[s + 1].first.startMs - 10)
+              .clamp(startMs + 1, line.endMs)
+              .toInt()
+          : line.endMs;
+      result.add(LyricLine(
+        startMs: startMs,
+        endMs: endMs,
+        text: seg.map((w) => w.text).join(),
+        words: seg,
+        translation: s == 0 ? line.translation : null,
+        romanization: s == 0 ? line.romanization : null,
+      ));
+    }
+    return result;
   }
 
   // ==================== 自动解密 / 解码 ====================

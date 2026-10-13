@@ -102,7 +102,7 @@ class _LogPageState extends State<LogPage> {
             '清空',
             onPressed: () {
               AppLog.instance.clear();
-              showAppSnack('日志已清空');
+              showAppSnack('日志已清空（含当天落盘文件）');
               setState(() {});
             },
             textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
@@ -174,6 +174,27 @@ class _LogPageState extends State<LogPage> {
                 Text(
                   '当前过滤: ≥ $_filterLevel',
                   style: TextStyle(fontSize: 11, color: _levelColor(_filterLevel)),
+                ),
+              ],
+            ),
+          ),
+          // 落盘说明：日志按天保存在本地（保留 7 天），重启不丢失
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+            child: Row(
+              children: [
+                Icon(Icons.save_rounded,
+                    size: 12, color: AppColors.textTertiary.withValues(alpha: 0.7)),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    '日志按天保存在本地（保留 7 天），重启不会丢失；'
+                    '发生闪退后重新打开此页即可查看崩前记录',
+                    style: TextStyle(
+                        fontSize: 10,
+                        height: 1.4,
+                        color: AppColors.textTertiary.withValues(alpha: 0.7)),
+                  ),
                 ),
               ],
             ),

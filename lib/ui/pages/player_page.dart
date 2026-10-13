@@ -1417,6 +1417,9 @@ class _LyricViewState extends State<_LyricView>
   void _setAnchor(Duration d) {
     _anchorMs = d.inMilliseconds;
     _anchorAt = DateTime.now();
+    // 暂停时 Ticker 不跑，逐字染色的播放头不会自己前进。seek（点击歌词）
+    // 后必须在这里补齐，否则高亮行对了、行内填充边界还停在旧位置。
+    if (_head.value != _anchorMs) _head.value = _anchorMs;
     _syncActive();
   }
 
@@ -1478,7 +1481,8 @@ class _LyricViewState extends State<_LyricView>
   void _onUserScroll() {
     _userDragging = true;
     _resumeTimer?.cancel();
-    _resumeTimer = Timer(const Duration(seconds: 4), () {
+    // 用户停止滑动 5 秒后，歌词自动滚回当前播放位置（需求：5s 自动定位）。
+    _resumeTimer = Timer(const Duration(seconds: 5), () {
       if (!mounted) return;
       _userDragging = false;
       _scrollToActive();
