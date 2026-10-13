@@ -104,28 +104,50 @@ class PlayerController {
     if (_player != null) return;
     _player = Player();
 
+    // native 边界回调统一包 try-catch：media_kit 在 release 下回调里抛出的
+    // 异常（典型为 null check）会冒泡成 FATAL 闪退，这里降级为 ERROR 日志。
     _player!.stream.playing.listen((playing) {
-      _playState.add(playing);
+      try {
+        _playState.add(playing);
+      } catch (e, s) {
+        AppLog.e('PlayerController', 'playing 回调异常: $e\n$s');
+      }
     });
 
     _player!.stream.completed.listen((completed) {
-      if (completed) {
-        _onTrackCompleted();
+      try {
+        if (completed) {
+          _onTrackCompleted();
+        }
+      } catch (e, s) {
+        AppLog.e('PlayerController', 'completed 回调异常: $e\n$s');
       }
     });
 
     _player!.stream.position.listen((position) {
-      _positionStream.add(position);
+      try {
+        _positionStream.add(position);
+      } catch (e, s) {
+        AppLog.e('PlayerController', 'position 回调异常: $e\n$s');
+      }
     });
 
     _player!.stream.duration.listen((duration) {
-      _durationStream.add(duration);
+      try {
+        _durationStream.add(duration);
+      } catch (e, s) {
+        AppLog.e('PlayerController', 'duration 回调异常: $e\n$s');
+      }
     });
 
     _player!.stream.error.listen((error) {
-      AppLog.e('PlayerController', 'media_kit 错误: $error');
-      _errorStream.add('播放错误: $error');
-      _playState.add(false);
+      try {
+        AppLog.e('PlayerController', 'media_kit 错误: $error');
+        _errorStream.add('播放错误: $error');
+        _playState.add(false);
+      } catch (e, s) {
+        AppLog.e('PlayerController', 'error 回调异常: $e\n$s');
+      }
     });
   }
 
@@ -147,6 +169,12 @@ class PlayerController {
 
   Future<void> _playUrlInternal(String url) async {
     _ensurePlayer();
+    if (url.trim().isEmpty) {
+      AppLog.w('PlayerController', '播放链接为空，已跳过 open');
+      _errorStream.add('播放链接为空');
+      _playState.add(false);
+      return;
+    }
     try {
       await _player!.open(Media(url));
       await _player!.play();

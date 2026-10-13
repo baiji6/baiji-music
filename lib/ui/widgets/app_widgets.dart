@@ -1,8 +1,64 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/ui_settings.dart';
 import '../../theme/app_theme.dart';
+
+/// 更新日志的 Markdown 排版：字号压到 12~13，整体偏灰，和 App 暗色玻璃
+/// 主题一致。设置页更新日志与 main.dart 全局更新弹窗共用这一份，
+/// 保证两处视觉统一。
+MarkdownStyleSheet get changelogSheet => MarkdownStyleSheet(
+      p: TextStyle(
+          fontSize: 12.5, height: 1.5, color: AppColors.textSecondary),
+      listBullet: TextStyle(color: AppColors.textTertiary),
+      h1: TextStyle(
+          fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+      h2: TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textPrimary),
+      h3: TextStyle(
+          fontSize: 13.5,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary),
+      h4: TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary),
+      h5: TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary),
+      h6: TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary),
+      code: TextStyle(
+          fontSize: 12,
+          color: AppColors.accent,
+          backgroundColor: AppColors.surfaceGlass),
+      codeblockDecoration: BoxDecoration(
+        color: AppColors.surfaceGlass,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.strokeGlass),
+      ),
+      codeblockPadding: const EdgeInsets.all(12),
+      blockquoteDecoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(color: AppColors.accent.withValues(alpha: 0.7), width: 3),
+        ),
+      ),
+      blockquotePadding: const EdgeInsets.only(left: 12),
+      horizontalRuleDecoration: BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.strokeGlass)),
+      ),
+      a: TextStyle(
+          color: AppColors.accent, decoration: TextDecoration.underline),
+      tableBorder: TableBorder.all(color: AppColors.strokeGlass),
+      tableHead: const TextStyle(fontWeight: FontWeight.w600),
+      tableBody: const TextStyle(fontSize: 12),
+    );
 
 /// 玻璃拟态卡片：半透明填充 + 细描边 + 辉光投影。
 class GlassCard extends StatelessWidget {

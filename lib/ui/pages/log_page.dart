@@ -10,6 +10,9 @@ import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 
 /// 日志与调试页：展示应用运行日志，支持六级分级过滤与导出。
+///
+/// v2.2.7 重新设计：每条日志一张「条目卡」（级别色条 + 时间 + 徽章 + tag +
+/// 消息），长 stack dump 默认折叠，错误不再刷屏；视觉与设置页统一。
 class LogPage extends StatefulWidget {
   const LogPage({super.key});
 
@@ -21,6 +24,9 @@ class _LogPageState extends State<LogPage> {
   bool _exporting = false;
   String _filterLevel = AppLog.info;
   final List<String> _levels = [AppLog.trace, AppLog.debug, AppLog.info, AppLog.warn, AppLog.error, AppLog.fatal];
+
+  /// 单条日志超过这个长度就把 stack dump 折叠起来（release 下 VM dump 极长）。
+  static const int _collapseAt = 140;
 
   Future<void> _exportLogs() async {
     setState(() => _exporting = true);
@@ -74,6 +80,24 @@ class _LogPageState extends State<LogPage> {
     return match?.group(1) ?? AppLog.info;
   }
 
+  /// 从日志行提取时间部分 "MM-DD HH:MM:SS.mmm"（截到秒，卡片上好读）。
+  String _extractTime(String line) {
+    final match = RegExp(r'(\d{2}-\d{2} \d{2}:\d{2}:\d{2})').firstMatch(line);
+    return match?.group(1) ?? '';
+  }
+
+  /// 从日志行提取 tag（LEVEL/ 之后、空格之前）。
+  String _extractTag(String line) {
+    final match = RegExp(r'\d{2}:\d{2}:\d{2}\.\d{3}\s+[A-Z]+/(\S+)').firstMatch(line);
+    return match?.group(1) ?? '';
+  }
+
+  /// 消息正文（去掉时间戳与 LEVEL/tag 前缀）。
+  String _extractMessage(String line) {
+    final match = RegExp(r'^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s+[A-Z]+/\S+\s*').firstMatch(line);
+    return match == null ? line : line.substring(match.end);
+  }
+
   int _levelIndex(String level) => _levels.indexOf(level);
 
   @override
@@ -89,7 +113,7 @@ class _LogPageState extends State<LogPage> {
       containerColor: Colors.transparent,
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
-        title: '日志与调试',
+        title: '运行日志',
         titleColor: AppColors.skyBlue,
         color: Colors.transparent,
         navigationIcon: MiuixIconButton(
@@ -200,7 +224,7 @@ class _LogPageState extends State<LogPage> {
             ),
           ),
           MiuixHorizontalDivider(thickness: 1, color: AppColors.strokeGlass),
-          // 日志列表
+          // 日志列表（条目卡）
           Expanded(
             child: logs.isEmpty
                 ? Center(
@@ -210,23 +234,172 @@ class _LogPageState extends State<LogPage> {
                     ),
                   )
                 : ListView.builder(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                     reverse: true,
                     itemCount: logs.length,
                     itemBuilder: (ctx, i) {
                       final entry = logs[logs.length - 1 - i];
-                      final color = _levelColor(_extractLevel(entry));
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: SelectableText(
-                          entry,
-                          style: TextStyle(fontSize: 11, color: color, fontFamily: 'monospace', height: 1.4),
-                        ),
+                      return _LogEntryCard(
+                        entry: entry,
+                        level: _extractLevel(entry),
+                        time: _extractTime(entry),
+                        tag: _extractTag(entry),
+                        message: _extractMessage(entry),
+                        color: _levelColor(_extractLevel(entry)),
+                        collapseAt: _collapseAt,
                       );
                     },
                   ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 单条日志卡片：左侧级别色条 + 时间/徽章行 + 消息正文。
+///
+/// release 下 VM isolate dump 极长（`*** *** ***` + 几百个 `#NN abs …`），
+/// 默认折叠，点「展开」才看全文——否则一屏全是十六进制地址。
+class _LogEntryCard extends StatefulWidget {
+  const _LogEntryCard({
+    required this.entry,
+    required this.level,
+    required this.time,
+    required this.tag,
+    required this.message,
+    required this.color,
+    required this.collapseAt,
+  });
+
+  final String entry;
+  final String level;
+  final String time;
+  final String tag;
+  final String message;
+  final Color color;
+  final int collapseAt;
+
+  @override
+  State<_LogEntryCard> createState() => _LogEntryCardState();
+}
+
+class _LogEntryCardState extends State<_LogEntryCard> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final long = widget.message.length > widget.collapseAt;
+    final shown = (long && !_expanded)
+        ? '${widget.message.substring(0, widget.collapseAt).trimRight()}…'
+        : widget.message;
+    final isSevere = widget.level == AppLog.error || widget.level == AppLog.fatal;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surfaceGlass,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSevere
+                ? widget.color.withValues(alpha: 0.45)
+                : AppColors.strokeGlass,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 级别色条
+            Container(
+              width: 3,
+              decoration: BoxDecoration(
+                color: widget.color,
+                borderRadius: const BorderRadius.horizontal(left: Radius.circular(11)),
+              ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 12, 9),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        if (widget.time.isNotEmpty)
+                          Text(
+                            widget.time,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: AppColors.textTertiary,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        const SizedBox(width: 6),
+                        // 级别徽章
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: widget.color.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: Text(
+                            widget.level,
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              color: widget.color,
+                            ),
+                          ),
+                        ),
+                        if (widget.tag.isNotEmpty) ...[
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              widget.tag,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      shown,
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.45,
+                        color: isSevere ? widget.color : AppColors.textSecondary,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                    if (long)
+                      GestureDetector(
+                        onTap: () => setState(() => _expanded = !_expanded),
+                        behavior: HitTestBehavior.opaque,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            _expanded ? '收起' : '展开全文',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.accent,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

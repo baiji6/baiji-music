@@ -29,6 +29,9 @@ class _AboutPageState extends State<AboutPage> {
   /// 密码输入弹层显隐（Miuix 声明式）。
   bool _showPasswordDialog = false;
 
+  /// 密码是否错误（仅用于输入框红框提示，不拦截提交）。
+  bool _passwordError = false;
+
   final _passwordController = TextEditingController();
 
   @override
@@ -57,12 +60,16 @@ class _AboutPageState extends State<AboutPage> {
       return;
     }
     _passwordController.clear();
-    setState(() => _showPasswordDialog = true);
+    setState(() {
+      _passwordError = false;
+      _showPasswordDialog = true;
+    });
   }
 
   void _submitPassword() {
     final input = _passwordController.text;
     if (!DevMode.checkPassword(input)) {
+      setState(() => _passwordError = true);
       showAppSnack('密码不正确');
       return;
     }
@@ -136,7 +143,9 @@ class _AboutPageState extends State<AboutPage> {
               ),
             ),
             const SizedBox(height: 24),
+            const SectionHeader(title: '应用信息', icon: Icons.info_outline_rounded),
             GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
               child: Column(
                 children: [
                   _infoTile('平台支持', 'iOS / macOS / Windows / Linux / Android'),
@@ -148,7 +157,7 @@ class _AboutPageState extends State<AboutPage> {
                   _infoTile('技术栈', 'Flutter 3.47 · Dart · 纯 Dart 加密'),
                   MiuixHorizontalDivider(
                       thickness: 1, color: AppColors.strokeGlass),
-                  _infoTile('构建加固', 'R8 / UPX / Dart Obfuscate / Strip'),
+                  _infoTile('构建加固', 'R8 · UPX · Dart 混淆'),
                   MiuixHorizontalDivider(
                       thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('作者', '白姬9527'),
@@ -157,7 +166,8 @@ class _AboutPageState extends State<AboutPage> {
             ),
             const SizedBox(height: 24),
             // 法律信息（从设置页移来：与「关于」语义一致，设置页不再重复）
-            const SectionHeader(title: '法律信息'),
+            const SectionHeader(
+                title: '法律信息', icon: Icons.gavel_rounded),
             GlassCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
@@ -206,13 +216,68 @@ class _AboutPageState extends State<AboutPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            MiuixTextField(
-              controller: _passwordController,
-              autofocus: true,
-              obscureText: true,
-              label: '密码',
-              singleLine: true,
-              onSubmitted: (_) => _submitPassword(),
+            // 密码输入：玻璃容器 + 无边框 TextField。
+            // 不用 MiuixTextField——它在弹窗 content 里会把输入区撑到
+            // 满高（label 浮顶 + 巨大灰块），且与全 App 弹窗语言不统一。
+            // TextField 需要 MaterialLocalizations：本弹层挂在 MaterialApp
+            // 之外的 popup host 上，用 Localizations.override 补齐（否则
+            // 直接抛 "No MaterialLocalizations found"）。
+            Localizations.override(
+              context: context,
+              delegates: const [DefaultMaterialLocalizations.delegate],
+              child: Material(
+                type: MaterialType.transparency,
+                // MiuixOverlayDialog 手机布局 maxHeight 是 infinity，
+                // TextField 在无高度约束的 Column 里会把面板撑爆
+                // （真机上就是截图里那个占满弹窗的灰色大块）——定高解决。
+                child: SizedBox(
+                  height: 52,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceGlass,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _passwordError
+                            ? AppColors.danger
+                            : AppColors.strokeGlass,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.lock_outline_rounded,
+                            size: 18, color: AppColors.textTertiary),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: _passwordController,
+                            autofocus: true,
+                            obscureText: true,
+                            cursorColor: AppColors.accent,
+                            style: TextStyle(
+                              fontSize: 15,
+                              letterSpacing: 2,
+                              color: AppColors.textPrimary,
+                            ),
+                            decoration: InputDecoration(
+                              border: InputBorder.none,
+                              isDense: true,
+                              hintText: '请输入密码',
+                              hintStyle: TextStyle(
+                                fontSize: 13,
+                                letterSpacing: 1,
+                                color: AppColors.textTertiary,
+                              ),
+                            ),
+                            onSubmitted: (_) => _submitPassword(),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
             const SizedBox(height: 18),
             Row(
@@ -231,14 +296,31 @@ class _AboutPageState extends State<AboutPage> {
     );
   }
 
+  /// 应用信息行。value 列必须可收缩：长值（平台列表 / 构建链）会把
+  /// Row 撑爆——v2.2.6 真机日志里的 RenderFlex overflow 就是这里。
   Widget _infoTile(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-          const Spacer(),
-          Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(label,
+              style:
+                  TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ),
         ],
       ),
     );

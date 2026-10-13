@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:media_kit/media_kit.dart';
 
@@ -24,6 +25,7 @@ import 'ui/pages/search_home.dart';
 import 'ui/shell.dart';
 import 'ui/widgets/agreement_dialog.dart';
 import 'ui/widgets/app_snackbar.dart';
+import 'ui/widgets/app_widgets.dart' show changelogSheet;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -275,18 +277,36 @@ class _BaijiMusicAppState extends State<BaijiMusicApp> with WidgetsBindingObserv
             ),
           ),
         if (info.body.trim().isNotEmpty)
+          // 更新日志按 Markdown 渲染（标题/列表/代码块/链接），与设置页的
+          // 「更新日志」卡片同一份排版样式，不再把 `**加粗**`、`-` 列表
+          // 这些原始符号直接怼到 Text 上。
           ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 260),
+            constraints: const BoxConstraints(maxHeight: 280),
             child: SingleChildScrollView(
-              child: Text(
-                info.summary(200),
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.6,
-                  color: AppColors.textSecondary,
+              child: MarkdownBody(
+                data: info.body,
+                selectable: true,
+                styleSheet: changelogSheet,
+                // 更新日志里的图片多是 badge，加载不出来时别把布局撑破。
+                imageBuilder: (uri, title, alt) => ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 260),
+                  child: Image.network(
+                    uri.toString(),
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stack) => Text(
+                      alt?.isNotEmpty == true ? alt! : '[图片]',
+                      style: TextStyle(
+                          fontSize: 11, color: AppColors.textTertiary),
+                    ),
+                  ),
                 ),
               ),
             ),
+          )
+        else
+          Text(
+            '该版本没有提供更新说明。',
+            style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
           ),
         const SizedBox(height: 18),
         Row(

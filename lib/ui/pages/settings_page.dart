@@ -60,6 +60,10 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _showQQQualitySheet = false;
   bool _showNeteaseQualitySheet = false;
   bool _showCacheLimitSheet = false;
+
+  /// v2.2.7：歌词字重 / 界面圆角改为弹窗调节（带实时预览）。
+  bool _showWeightDialog = false;
+  bool _showCornerDialog = false;
   final _proxyController = TextEditingController();
   UpdateInfo? _updateInfo;
   List<CacheEntry> _cacheEntries = const [];
@@ -302,58 +306,6 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
-  /// 更新日志的排版：字号压到 12~13，整体偏灰，和 App 暗色玻璃主题一致。
-  MarkdownStyleSheet get _changelogSheet => MarkdownStyleSheet(
-        p: TextStyle(
-            fontSize: 12.5, height: 1.5, color: AppColors.textSecondary),
-        listBullet: TextStyle(color: AppColors.textTertiary),
-        h1: TextStyle(
-            fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
-        h2: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-            color: AppColors.textPrimary),
-        h3: TextStyle(
-            fontSize: 13.5,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary),
-        h4: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary),
-        h5: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary),
-        h6: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary),
-        code: TextStyle(
-            fontSize: 12,
-            color: AppColors.accent,
-            backgroundColor: AppColors.surfaceGlass),
-        codeblockDecoration: BoxDecoration(
-          color: AppColors.surfaceGlass,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.strokeGlass),
-        ),
-        codeblockPadding: const EdgeInsets.all(12),
-        blockquoteDecoration: BoxDecoration(
-          border: Border(
-            left: BorderSide(color: AppColors.accent.withValues(alpha: 0.7), width: 3),
-          ),
-        ),
-        blockquotePadding: const EdgeInsets.only(left: 12),
-        horizontalRuleDecoration: BoxDecoration(
-          border: Border(top: BorderSide(color: AppColors.strokeGlass)),
-        ),
-        a: TextStyle(
-            color: AppColors.accent, decoration: TextDecoration.underline),
-        tableBorder: TableBorder.all(color: AppColors.strokeGlass),
-        tableHead: const TextStyle(fontWeight: FontWeight.w600),
-        tableBody: const TextStyle(fontSize: 12),
-      );
 
   @override
   Widget build(BuildContext context) {
@@ -472,42 +424,18 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                   const MiuixHorizontalDivider(),
-                  // 歌词字重（当前行）：300~900 直接在这里调，不必进样式面板
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.format_bold_rounded,
-                            color: AppColors.violet, size: 20),
-                        const SizedBox(width: 10),
-                        Text('歌词字重',
-                            style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary)),
-                        const Spacer(),
-                        AnimatedBuilder(
-                          animation: _lyricStyle,
-                          builder: (ctx, _) => Text(
-                            '${_lyricStyle.weight} · '
-                            '${_lyricWeightNames[((_lyricStyle.weight - LyricSettings.minWeight) / 100).round().clamp(0, _lyricWeightNames.length - 1)]}',
-                            style: TextStyle(
-                                fontSize: 12, color: AppColors.accent),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  // 歌词字重：点击弹出调节面板（v2.2.7 起不再行内嵌 slider，
+                  // 弹窗里带实时预览，调完一眼能看到效果）
                   AnimatedBuilder(
                     animation: _lyricStyle,
-                    builder: (ctx, _) => MiuixSlider(
-                      value: _lyricStyle.weight.toDouble(),
-                      min: LyricSettings.minWeight.toDouble(),
-                      max: LyricSettings.maxWeight.toDouble(),
-                      steps: (LyricSettings.maxWeight -
-                              LyricSettings.minWeight) ~/
-                          100,
-                      onValueChanged: (v) => _lyricStyle.setWeight(v.round()),
+                    builder: (ctx, _) => MiuixArrowPreference(
+                      title: '歌词字重',
+                      summary: '${_lyricStyle.weight} · '
+                          '${_lyricWeightNames[((_lyricStyle.weight - LyricSettings.minWeight) / 100).round().clamp(0, _lyricWeightNames.length - 1)]}',
+                      startAction: const Icon(Icons.format_bold_rounded,
+                          color: AppColors.violet, size: 22),
+                      onClick: () =>
+                          setState(() => _showWeightDialog = true),
                     ),
                   ),
                 ],
@@ -635,40 +563,17 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                   const MiuixHorizontalDivider(),
-                  // 界面圆角（全局）：作用于 App 内自绘卡片（玻璃卡等）
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.rounded_corner_rounded,
-                            color: AppColors.aqua, size: 20),
-                        const SizedBox(width: 10),
-                        Text('界面圆角',
-                            style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary)),
-                        const Spacer(),
-                        AnimatedBuilder(
-                          animation: UiSettings.instance,
-                          builder: (ctx, _) => Text(
-                            '${UiSettings.instance.cornerRadius.toStringAsFixed(0)} px',
-                            style: TextStyle(
-                                fontSize: 12, color: AppColors.accent),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  // 界面圆角（全局）：作用于 App 内自绘卡片（玻璃卡等）。
+                  // v2.2.7 起点击弹出调节面板，带实时预览。
                   AnimatedBuilder(
                     animation: UiSettings.instance,
-                    builder: (ctx, _) => MiuixSlider(
-                      value: UiSettings.instance.cornerRadius,
-                      min: UiSettings.minCorner,
-                      max: UiSettings.maxCorner,
-                      steps: (UiSettings.maxCorner - UiSettings.minCorner).round(),
-                      onValueChanged: (v) =>
-                          UiSettings.instance.setCornerRadius(v),
+                    builder: (ctx, _) => MiuixArrowPreference(
+                      title: '界面圆角',
+                      summary: '${UiSettings.instance.cornerRadius.toStringAsFixed(0)} px',
+                      startAction: const Icon(Icons.rounded_corner_rounded,
+                          color: AppColors.aqua, size: 22),
+                      onClick: () =>
+                          setState(() => _showCornerDialog = true),
                     ),
                   ),
                   const MiuixHorizontalDivider(),
@@ -794,6 +699,166 @@ MiuixArrowPreference(
   Widget _buildDialogs() {
     return Stack(
       children: [
+        // 歌词字重调节（实时预览：示例歌词按当前字重渲染）
+        MiuixOverlayDialog(
+          show: _showWeightDialog,
+          title: '歌词字重',
+          summary: '拖动调节，效果实时生效',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showWeightDialog = false),
+          content: AnimatedBuilder(
+            animation: _lyricStyle,
+            builder: (ctx, _) {
+              final w = _lyricStyle.weight;
+              final name = _lyricWeightNames[
+                  ((w - LyricSettings.minWeight) / 100)
+                      .round()
+                      .clamp(0, _lyricWeightNames.length - 1)];
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 当前值 + 预览歌词
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 18),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceGlass,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.strokeGlass),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          '$w · $name',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.accent,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          '而那些昨日依然缤纷着',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: _lyricStyle.activeWeight,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  MiuixSlider(
+                    value: w.toDouble(),
+                    min: LyricSettings.minWeight.toDouble(),
+                    max: LyricSettings.maxWeight.toDouble(),
+                    steps: (LyricSettings.maxWeight -
+                            LyricSettings.minWeight) ~/
+                        100,
+                    onValueChanged: (v) => _lyricStyle.setWeight(v.round()),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      MiuixTextButton('取消', onPressed: () {
+                        setState(() => _showWeightDialog = false);
+                      }),
+                      const SizedBox(width: 8),
+                      MiuixTextButton('完成', onPressed: () {
+                        setState(() => _showWeightDialog = false);
+                      }),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        // 界面圆角调节（实时预览：玻璃卡本身跟随全局圆角）
+        MiuixOverlayDialog(
+          show: _showCornerDialog,
+          title: '界面圆角',
+          summary: '拖动调节，效果实时生效',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showCornerDialog = false),
+          content: AnimatedBuilder(
+            animation: UiSettings.instance,
+            builder: (ctx, _) {
+              final r = UiSettings.instance.cornerRadius;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 预览卡：radius 传 null = 跟随全局，拖动时肉眼可见圆角变化
+                  GlassCard(
+                    radius: null,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 18),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: AppColors.accent.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(Icons.palette_rounded,
+                              color: AppColors.accent, size: 18),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            '卡片圆角实时预览',
+                            style: TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Text(
+                          '${r.toStringAsFixed(0)} px',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.accent,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  MiuixSlider(
+                    value: r,
+                    min: UiSettings.minCorner,
+                    max: UiSettings.maxCorner,
+                    steps:
+                        (UiSettings.maxCorner - UiSettings.minCorner).round(),
+                    onValueChanged: (v) =>
+                        UiSettings.instance.setCornerRadius(v),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      MiuixTextButton('恢复默认', onPressed: () {
+                        UiSettings.instance.resetCorner();
+                      }),
+                      const SizedBox(width: 8),
+                      MiuixTextButton('完成', onPressed: () {
+                        setState(() => _showCornerDialog = false);
+                      }),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
         // 抓包代理输入
         MiuixOverlayDialog(
           show: _showProxyDialog,
@@ -907,7 +972,7 @@ MiuixArrowPreference(
                       : MarkdownBody(
                           data: _updateInfo!.body,
                           selectable: true,
-                          styleSheet: _changelogSheet,
+                          styleSheet: changelogSheet,
                           // 更新日志里的图片多是 badge，加载不出来时别把布局撑破。
                           imageBuilder: (uri, title, alt) => ConstrainedBox(
                             constraints:

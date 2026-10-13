@@ -1,7 +1,8 @@
 /// 工具箱页面。
 ///
-/// 收录本地音频相关的实用工具。后续要加工具就在 [_tools] 里加一项，
-/// 页面结构不用动。
+/// 收录本地音频相关的实用工具。v2.2.7 起视觉与设置页统一：
+/// 分区头 + 一张玻璃卡 + 卡内多行（divider 分隔），不再是孤立大卡。
+/// 后续要加工具就往 [_musicTools] / [_diagTools] 里加一项。
 library;
 
 import 'package:flutter/material.dart';
@@ -33,34 +34,53 @@ class ToolboxPage extends StatelessWidget {
       content: (padding) => ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
         children: [
-          const SectionHeader(title: '音乐工具'),
-          _ToolCard(
-            icon: Icons.lock_open_rounded,
-            color: AppColors.accent,
-            title: '本地音乐解密',
-            subtitle: 'QQ 音乐 · 酷狗 · 酷我 · 网易云 · 咪咕',
-            description: '批量解密已下载的加密音频文件，支持导入密钥与手动填写，'
-                '可自定义保存位置。解密后的文件可直接在「本地音乐」里播放。',
-            page: const DecryptPage(),
+          const SectionHeader(
+              title: '音乐工具', icon: Icons.build_outlined),
+          GlassCard(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                _ToolRow(
+                  icon: Icons.lock_open_rounded,
+                  color: AppColors.accent,
+                  title: '本地音乐解密',
+                  tag: 'QQ 音乐 · 酷狗 · 酷我 · 网易云 · 咪咕',
+                  description: '批量解密已下载的加密音频文件，支持导入密钥与手动填写，'
+                      '可自定义保存位置。解密后的文件可直接在「本地音乐」里播放。',
+                  page: const DecryptPage(),
+                ),
+                MiuixHorizontalDivider(
+                    thickness: 1, color: AppColors.strokeGlass),
+                _ToolRow(
+                  icon: Icons.vpn_key_rounded,
+                  color: AppColors.skyBlue,
+                  title: '解密密钥管理',
+                  tag: 'ekey · 平台密钥',
+                  description: '按平台整理解密密钥，支持导入、编辑与删除。'
+                      '批量解密前可以先在这里把密钥准备好。',
+                  page: const DecryptKeysPage(),
+                ),
+              ],
+            ),
           ),
-          _ToolCard(
-            icon: Icons.vpn_key_rounded,
-            color: AppColors.skyBlue,
-            title: '解密密钥管理',
-            subtitle: 'ekey · 平台密钥',
-            description: '按平台整理解密密钥，支持导入、编辑与删除。'
-                '批量解密前可以先在这里把密钥准备好。',
-            page: const DecryptKeysPage(),
-          ),
-          const SectionHeader(title: '诊断工具'),
-          _ToolCard(
-            icon: Icons.article_outlined,
-            color: AppColors.success,
-            title: '运行日志',
-            subtitle: '抓包 · 崩溃 · 播放记录',
-            description: '实时查看应用运行日志，按级别筛选、导出分享。'
-                '遇到闪退或播放异常时，这里是定位问题的第一现场。',
-            page: const LogPage(),
+          const SizedBox(height: 24),
+          const SectionHeader(
+              title: '诊断工具', icon: Icons.bug_report_outlined),
+          GlassCard(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                _ToolRow(
+                  icon: Icons.article_outlined,
+                  color: AppColors.success,
+                  title: '运行日志',
+                  tag: '抓包 · 崩溃 · 播放记录',
+                  description: '实时查看应用运行日志，按级别筛选、导出分享。'
+                      '遇到闪退或播放异常时，这里是定位问题的第一现场。',
+                  page: const LogPage(),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -68,12 +88,14 @@ class ToolboxPage extends StatelessWidget {
   }
 }
 
-class _ToolCard extends StatelessWidget {
-  const _ToolCard({
+/// 工具箱列表行：与设置页的偏好行同一视觉语言
+/// （彩色图标容器 + 标题 + 标签 + 描述 + 箭头）。
+class _ToolRow extends StatelessWidget {
+  const _ToolRow({
     required this.icon,
     required this.color,
     required this.title,
-    required this.subtitle,
+    required this.tag,
     required this.description,
     required this.page,
   });
@@ -81,18 +103,19 @@ class _ToolCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final String title;
-  final String subtitle;
+  final String tag;
   final String description;
   final Widget page;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: GlassCard(
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => page),
-        ),
+    return MiuixPressable(
+      onPressed: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => page),
+      ),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -110,6 +133,7 @@ class _ToolCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // 标题 + 标签同行：标签可收缩，长标签不再把 Row 撑爆
                   Row(
                     children: [
                       Text(
@@ -121,26 +145,36 @@ class _ToolCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        subtitle,
-                        style: TextStyle(fontSize: 11, color: color),
+                      Flexible(
+                        child: Text(
+                          tag,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11, color: color),
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 5),
                   Text(
                     description,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 12,
-                      height: 1.5,
+                      height: 1.45,
                       color: AppColors.textTertiary,
                     ),
                   ),
                 ],
               ),
             ),
-            Icon(Icons.chevron_right_rounded,
-                color: AppColors.textTertiary),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 11),
+              child: Icon(Icons.chevron_right_rounded,
+                  color: AppColors.textTertiary),
+            ),
           ],
         ),
       ),
