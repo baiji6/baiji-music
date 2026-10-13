@@ -23,31 +23,22 @@ class _FavoritePageState extends State<FavoritePage> {
   @override
   Widget build(BuildContext context) {
     final favs = HistoryStore.favorites();
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: '我的收藏',
-        titleColor: AppColors.skyBlue,
-        color: Colors.transparent,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Icon(Icons.arrow_back_ios_new_rounded,
-              color: AppColors.textPrimary, size: 20),
-        ),
-        actions: [
-          if (favs.isNotEmpty)
-            MiuixTextButton(
-              '清空',
-              onPressed: () {
-                HistoryStore.clearFavorites();
-                _refresh();
-              },
-              textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
-            ),
-        ],
-      ),
-      content: (padding) => favs.isEmpty
+    return PageScaffold(
+      title: '我的收藏',
+      snackbarHost: appSnackbarHostState,
+      contentPadding: EdgeInsets.zero,
+      actions: [
+        if (favs.isNotEmpty)
+          MiuixTextButton(
+            '清空',
+            onPressed: () {
+              HistoryStore.clearFavorites();
+              _refresh();
+            },
+            textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
+          ),
+      ],
+      child: favs.isEmpty
           ? Center(
               child: Text(
                 '还没有收藏的歌曲\n在搜索结果长按或点击收藏按钮试试',

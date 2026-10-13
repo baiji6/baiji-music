@@ -235,149 +235,142 @@ class _QQLoginPageState extends State<QQLoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: 'QQ 音乐登录',
-        titleColor: AppColors.skyBlue,
-        color: Colors.transparent,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.pop(context),
-          child: Icon(Icons.arrow_back_rounded,
-              color: AppColors.textPrimary),
-        ),
-      ),
-      content: (padding) => SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Cookie 登录
-              GlassCard(
-                padding: const EdgeInsets.all(16),
-                glowColor: AppColors.cyan,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Cookie 登录',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '粘贴浏览器中 y.qq.com 的完整 Cookie，QQ 与微信登录都支持',
-                      style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                    ),
-                    const SizedBox(height: 12),
-                    MiuixTextField(
-                      controller: _cookieController,
-                      // 微信登录的 cookie 里没有 uin，账号 id 落在 wxuin 上，
-                      // 两个都要提示到，否则用户会以为贴错了。
-                      label: 'uin=xxx（微信为 wxuin=xxx）; qm_keyst=xxx; …',
-                      useLabelAsPlaceholder: true,
-                      minLines: 2,
-                      maxLines: 3,
-                      cursorColor: AppColors.accent,
-                      textStyle: TextStyle(
-                          fontSize: 12, color: AppColors.textPrimary),
-                    ),
-                    const SizedBox(height: 12),
-                    NeonButton(
-                      label: 'Cookie 登录',
-                      icon: Icons.login_rounded,
-                      onPressed: _busy ? null : _loginByCookie,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ],
+    final body = SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Cookie 登录
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            glowColor: AppColors.cyan,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Cookie 登录',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                 ),
-              ),
-              const SizedBox(height: 20),
-              // 二维码登录
-              GlassCard(
-                padding: const EdgeInsets.all(16),
-                glowColor: AppColors.magenta,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '扫码登录',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '使用 QQ 音乐 App 扫描二维码',
-                      style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
-                    ),
-                    const SizedBox(height: 16),
-                    if (_qrImage != null) ...[
-                      Center(
-                        child: Container(
-                          width: 200,
-                          height: 200,
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: Image.memory(_qrImage!, fit: BoxFit.contain),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    // 进度提示（中性色）与错误（警示色）分开显示：
-                    // 以前两者共用一个字段，等待扫码也会被渲染成红色报错。
-                    if (_qrStatus != null) ...[
-                      Center(
-                        child: Text(
-                          _qrStatus!,
-                          style: TextStyle(
-                              fontSize: 12, color: AppColors.textSecondary),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (_qrError != null) ...[
-                      Center(
-                        child: Text(
-                          _qrError!,
-                          style: TextStyle(fontSize: 12, color: AppColors.accentAlt),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (_busy && _qrImage != null) ...[
-                      const Center(
-                        child: MiuixCircularProgressIndicator(size: 24),
-                      ),
-                      const SizedBox(height: 12),
-                      NeonButton(
-                        label: '取消扫码',
-                        filled: false,
-                        onPressed: _cancelQr,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ] else
-                      NeonButton(
-                        label: _qrImage == null ? '获取二维码' : '重新获取',
-                        icon: Icons.qr_code_2_rounded,
-                        gradient: const [AppColors.magenta, AppColors.violet],
-                        onPressed: _busy ? null : _loginByQr,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                  ],
+                const SizedBox(height: 6),
+                Text(
+                  '粘贴浏览器中 y.qq.com 的完整 Cookie，QQ 与微信登录都支持',
+                  style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                AppTextField(
+                  controller: _cookieController,
+                  // 微信登录的 cookie 里没有 uin，账号 id 落在 wxuin 上，
+                  // 两个都要提示到，否则用户会以为贴错了。
+                  label: 'uin=xxx（微信为 wxuin=xxx）; qm_keyst=xxx; …',
+                  useLabelAsPlaceholder: true,
+                  minLines: 2,
+                  maxLines: 3,
+                  textStyle: TextStyle(
+                      fontSize: 12, color: AppColors.textPrimary),
+                  leadingIcon: Icon(Icons.cookie_outlined,
+                      size: 18, color: AppColors.textTertiary),
+                ),
+                const SizedBox(height: 12),
+                NeonButton(
+                  label: 'Cookie 登录',
+                  icon: Icons.login_rounded,
+                  onPressed: _busy ? null : _loginByCookie,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ],
+            ),
           ),
-        ),
+          const SizedBox(height: 20),
+          // 二维码登录
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            glowColor: AppColors.magenta,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '扫码登录',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '使用 QQ 音乐 App 扫描二维码',
+                  style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                ),
+                const SizedBox(height: 16),
+                if (_qrImage != null) ...[
+                  Center(
+                    child: Container(
+                      width: 200,
+                      height: 200,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Image.memory(_qrImage!, fit: BoxFit.contain),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                // 进度提示（中性色）与错误（警示色）分开显示：
+                // 以前两者共用一个字段，等待扫码也会被渲染成红色报错。
+                if (_qrStatus != null) ...[
+                  Center(
+                    child: Text(
+                      _qrStatus!,
+                      style: TextStyle(
+                          fontSize: 12, color: AppColors.textSecondary),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (_qrError != null) ...[
+                  Center(
+                    child: Text(
+                      _qrError!,
+                      style: TextStyle(fontSize: 12, color: AppColors.accentAlt),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (_busy && _qrImage != null) ...[
+                  const Center(
+                    child: MiuixCircularProgressIndicator(size: 24),
+                  ),
+                  const SizedBox(height: 12),
+                  NeonButton(
+                    label: '取消扫码',
+                    filled: false,
+                    onPressed: _cancelQr,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ] else
+                  NeonButton(
+                    label: _qrImage == null ? '获取二维码' : '重新获取',
+                    icon: Icons.qr_code_2_rounded,
+                    gradient: const [AppColors.magenta, AppColors.violet],
+                    onPressed: _busy ? null : _loginByQr,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
+    );
+
+    return PageScaffold(
+      title: 'QQ 音乐登录',
+      snackbarHost: appSnackbarHostState,
+      // 水平/底部留白由内部 SingleChildScrollView 自管，脚手架只补顶栏高度
+      contentPadding: EdgeInsets.zero,
+      child: body,
     );
   }
 }

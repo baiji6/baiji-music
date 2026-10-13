@@ -238,37 +238,41 @@ class NebulaBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = AppColors.palette;
-    final bg = DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: RadialGradient(
-          center: Alignment.topRight,
-          radius: 1.6,
-          colors: [p.bg1, p.bg0],
-          stops: const [0.0, 1.0],
+    // SizedBox.expand：Stack 只有 positioned 子节点时自身尺寸不确定
+    // （会缩到 0），包一层强制撑满父级，子页面骨架才能可靠拿到全屏底。
+    final bg = SizedBox.expand(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.topRight,
+            radius: 1.6,
+            colors: [p.bg1, p.bg0],
+            stops: const [0.0, 1.0],
+          ),
         ),
-      ),
-      child: Stack(
-        children: [
-          // 右上角青色光晕
-          Positioned(
-            top: -160,
-            right: -120,
-            child: _GlowOrb(size: 420, colors: p.glowCyan, blur: 90),
-          ),
-          // 左下角品红光晕
-          Positioned(
-            bottom: -180,
-            left: -140,
-            child: _GlowOrb(size: 480, colors: p.glowMagenta, blur: 100),
-          ),
-          // 中部偏右紫色光晕（弱）
-          Positioned(
-            top: 320,
-            right: -200,
-            child: _GlowOrb(size: 380, colors: p.glowViolet, blur: 80),
-          ),
-          Positioned.fill(child: child),
-        ],
+        child: Stack(
+          children: [
+            // 右上角青色光晕
+            Positioned(
+              top: -160,
+              right: -120,
+              child: _GlowOrb(size: 420, colors: p.glowCyan, blur: 90),
+            ),
+            // 左下角品红光晕
+            Positioned(
+              bottom: -180,
+              left: -140,
+              child: _GlowOrb(size: 480, colors: p.glowMagenta, blur: 100),
+            ),
+            // 中部偏右紫色光晕（弱）
+            Positioned(
+              top: 320,
+              right: -200,
+              child: _GlowOrb(size: 380, colors: p.glowViolet, blur: 80),
+            ),
+            Positioned.fill(child: child),
+          ],
+        ),
       ),
     );
 

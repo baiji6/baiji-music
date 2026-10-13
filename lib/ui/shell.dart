@@ -269,8 +269,6 @@ class MiniPlayerBar extends StatefulWidget {
 class _MiniPlayerBarState extends State<MiniPlayerBar> {
   Song? _song;
   bool _playing = false;
-  Duration _position = Duration.zero;
-  Duration _duration = Duration.zero;
   List<StreamSubscription<dynamic>> _subs = [];
 
   @override
@@ -279,6 +277,9 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
     final pc = PlayerController.instance;
     _song = pc.currentSong;
     _playing = pc.isPlaying;
+    // 只订阅「低频变化」：切歌与播放/暂停。进度/时长是高频流
+    // （media_kit 每秒多次），由 [_MiniTitle] 自己订阅——否则每次
+    // position emit 都会重建整条播放栏（含封面图）。
     _subs = [
       pc.onSongChanged.listen((s) {
         if (mounted) setState(() => _song = s);
@@ -286,16 +287,7 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
       pc.onPlayStateChanged.listen((p) {
         if (mounted) setState(() => _playing = p);
       }),
-      pc.onPositionChanged.listen((pos) {
-        if (!mounted) return;
-        setState(() => _position = pos);
-      }),
     ];
-    // 拉取当前曲目总时长（media_kit: Player.stream.duration）
-    pc.onDurationChanged.listen((d) {
-      if (!mounted) return;
-      setState(() => _duration = d);
-    });
   }
 
   @override
@@ -353,8 +345,6 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
                     child: _MiniTitle(
                       hasSong: hasSong,
                       song: song,
-                      position: _position,
-                      duration: _duration,
                       fmt: _fmt,
                     ),
                   ),
@@ -405,32 +395,62 @@ class _MiniCover extends StatelessWidget {
 /// 迷你播放条的标题区（歌名 + 细进度条 + 时间）。
 ///
 /// 独立成一个 widget，便于整体包进 MiuixPressable 打开完整播放页。
-class _MiniTitle extends StatelessWidget {
+/// 自行订阅进度/时长流（高频）：position emit 只重建本组件，
+/// 不波及外层的封面与按钮。
+class _MiniTitle extends StatefulWidget {
   const _MiniTitle({
     required this.hasSong,
     required this.song,
-    required this.position,
-    required this.duration,
     required this.fmt,
   });
 
   final bool hasSong;
   final Song? song;
-  final Duration position;
-  final Duration duration;
   final String Function(Duration) fmt;
 
   @override
+  State<_MiniTitle> createState() => _MiniTitleState();
+}
+
+class _MiniTitleState extends State<_MiniTitle> {
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+  StreamSubscription<dynamic>? _posSub;
+  StreamSubscription<dynamic>? _durSub;
+
+  @override
+  void initState() {
+    super.initState();
+    final pc = PlayerController.instance;
+    _position = pc.position;
+    _duration = pc.duration;
+    _posSub = pc.onPositionChanged.listen((pos) {
+      if (mounted) setState(() => _position = pos);
+    });
+    // 曲目总时长（media_kit: Player.stream.duration）
+    _durSub = pc.onDurationChanged.listen((d) {
+      if (mounted) setState(() => _duration = d);
+    });
+  }
+
+  @override
+  void dispose() {
+    _posSub?.cancel();
+    _durSub?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final total = duration.inMilliseconds;
+    final total = _duration.inMilliseconds;
     final progress =
-        total > 0 ? (position.inMilliseconds / total).clamp(0.0, 1.0) : 0.0;
+        total > 0 ? (_position.inMilliseconds / total).clamp(0.0, 1.0) : 0.0;
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          hasSong ? song!.name : '未在播放',
+          widget.hasSong ? widget.song!.name : '未在播放',
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.w600,
                 fontSize: 13,
@@ -449,7 +469,9 @@ class _MiniTitle extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Text(
-              hasSong ? '${fmt(position)} / ${fmt(duration)}' : '00:00',
+              widget.hasSong
+                  ? '${widget.fmt(_position)} / ${widget.fmt(_duration)}'
+                  : '00:00',
               style: TextStyle(color: AppColors.textTertiary, fontSize: 10),
             ),
           ],

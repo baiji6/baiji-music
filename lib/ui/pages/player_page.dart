@@ -15,6 +15,7 @@ import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/core/album_saver.dart';
 import 'package:baiji_music/ui/widgets/app_snackbar.dart';
+import 'package:baiji_music/ui/widgets/app_widgets.dart';
 import 'package:baiji_music/ui/widgets/cover_image.dart';
 import 'package:baiji_music/ui/widgets/lyric_style_sheet.dart';
 import 'package:flutter/material.dart';
@@ -295,10 +296,14 @@ class _PlayerPageState extends State<PlayerPage> {
     final landscape =
         MediaQuery.of(context).orientation == Orientation.landscape;
 
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      content: (_) => Container(
+    // 全出血页面：自绘顶栏 + 自带 SafeArea 与渐变底，不套 PageScaffold 的
+    // 顶栏和内容 Padding（否则窗口 inset 会双重叠加）。
+    return PageScaffold(
+      showTopBar: false,
+      snackbarHost: appSnackbarHostState,
+      // Miuix 弹层统一挂在脚手架的 popup 作用域内（Stack 本身不占布局）
+      bottomBar: _buildSheets(),
+      child: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
@@ -332,8 +337,6 @@ class _PlayerPageState extends State<PlayerPage> {
           ),
         ),
       ),
-      // Miuix 弹层统一挂在脚手架的 popup 作用域内（Stack 本身不占布局）
-      bottomBar: _buildSheets(),
     );
   }
 
@@ -548,10 +551,12 @@ class _PlayerPageState extends State<PlayerPage> {
             onToggle: _togglePlay,
             onPrev: () async {
               await _player.previous();
+              if (!mounted) return;
               setState(() => _playing = _player.isPlaying);
             },
             onNext: () async {
               await _player.next();
+              if (!mounted) return;
               setState(() => _playing = _player.isPlaying);
             },
             onMode: _switchPlayMode,
@@ -578,10 +583,12 @@ class _PlayerPageState extends State<PlayerPage> {
             onToggle: _togglePlay,
             onPrev: () async {
               await _player.previous();
+              if (!mounted) return;
               setState(() => _playing = _player.isPlaying);
             },
             onNext: () async {
               await _player.next();
+              if (!mounted) return;
               setState(() => _playing = _player.isPlaying);
             },
             onMode: _switchPlayMode,

@@ -309,24 +309,11 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: _snackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: '设置',
-        titleColor: AppColors.skyBlue,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.pop(context),
-          child: Icon(Icons.arrow_back_rounded,
-              color: AppColors.textPrimary),
-        ),
-      ),
-      content: (padding) => SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+    final body = SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
             const SectionHeader(title: '账号', icon: Icons.account_circle_outlined),
             GlassCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
@@ -682,12 +669,16 @@ MiuixArrowPreference(
             ),
           ],
         ),
-      ),
-      // ===== 弹层 / 对话框（Miuix 声明式，随 Scaffold 渲染）=====
-      floatingActionButton: null,
-      // MiuixScaffold 没有「弹窗栈」之外的挂点，弹窗统一借助 root popup host：
-      // 这里把各弹层作为 body 之上的 Stack 子节点插入。
+      );
+    // ===== 弹层 / 对话框（Miuix 声明式，随 Scaffold 渲染）=====
+    // MiuixScaffold 没有「弹窗栈」之外的挂点，弹窗统一借助 root popup host：
+    // 这里把各弹层作为 body 之上的 Stack 子节点插入。
+    return PageScaffold(
+      title: '设置',
+      snackbarHost: _snackbarHostState,
+      contentPadding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
       bottomBar: _buildDialogs(),
+      child: body,
     );
   }
 
@@ -871,11 +862,13 @@ MiuixArrowPreference(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              MiuixTextField(
+              AppTextField(
                 controller: _proxyController,
                 autofocus: true,
                 label: 'host:port',
                 singleLine: true,
+                leadingIcon: Icon(Icons.lan_outlined,
+                    size: 18, color: AppColors.textTertiary),
               ),
               const SizedBox(height: 18),
               Row(

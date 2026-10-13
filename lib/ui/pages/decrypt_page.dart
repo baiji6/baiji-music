@@ -117,6 +117,8 @@ class _DecryptPageState extends State<DecryptPage> {
         }
       }
       if (paths.isEmpty) return;
+      // 复制大文件可能耗时较久，期间用户可能已退出本页
+      if (!mounted) return;
 
       setState(() {
         for (final p in paths) {
@@ -205,6 +207,8 @@ class _DecryptPageState extends State<DecryptPage> {
       _toast('无法创建保存目录：$e');
       return;
     }
+    // 建目录的 await 期间用户可能已退出本页
+    if (!mounted) return;
 
     setState(() {
       _busy = true;
@@ -307,22 +311,9 @@ class _DecryptPageState extends State<DecryptPage> {
   @override
   Widget build(BuildContext context) {
     final total = _tasks.length;
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: '本地音乐解密',
-        titleColor: AppColors.skyBlue,
-        color: Colors.transparent,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Icon(Icons.arrow_back_ios_new_rounded,
-              color: AppColors.textPrimary, size: 20),
-        ),
-      ),
-      content: (padding) => ListView(
-        padding: EdgeInsets.fromLTRB(20, 8, 20, 120),
-        children: [
+    final body = ListView(
+      padding: EdgeInsets.fromLTRB(20, 8, 20, 120),
+      children: [
           // 说明
           GlassCard(
             child: Column(
@@ -520,7 +511,13 @@ class _DecryptPageState extends State<DecryptPage> {
             ),
           ),
         ],
-      ),
+      );
+
+    return PageScaffold(
+      title: '本地音乐解密',
+      snackbarHost: appSnackbarHostState,
+      // ListView 自带水平留白与 FAB 避让空间，脚手架只补顶栏高度
+      contentPadding: EdgeInsets.zero,
       floatingActionButton: _busy
           ? MiuixFloatingActionButton(
               onPressed: _cancel,
@@ -558,6 +555,7 @@ class _DecryptPageState extends State<DecryptPage> {
                 ),
               ),
             ),
+      child: body,
     );
   }
 }

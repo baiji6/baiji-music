@@ -156,8 +156,10 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   }
 
   void _runImportText() {
-    final count =
-        _keys!.importText(_importController.text, platform: _platform);
+    final count = _keys!.importText(
+      _importController.text,
+      platform: _platform,
+    );
     setState(() => _showImportTextDialog = false);
     _reload();
     _toast('已向${_platform.label}导入 $count 条');
@@ -166,25 +168,25 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   /// 导入文本的格式说明。**每种平台的分隔符含义都不同**——
   /// 逗号左边是那个平台的匹配键，不是通用的 mid。
   static String _importHint(DecryptPlatform p) => switch (p) {
-        DecryptPlatform.qqMusic =>
-          '每行一条，格式为 `原始文件名,ekey`（文件名也可只写 ekey）。\n'
-              '文件名要与 MusicEx footer 里的 mediaName 一致，否则匹配不上。\n'
-              '# 开头的行会被忽略',
-        DecryptPlatform.kugou =>
-          '每行一条，格式为 `audioHash,ekey`（也可只写 ekey）。\n'
-              'audioHash 是 KGM 文件头里的音频指纹。\n'
-              '# 开头的行会被忽略',
-        DecryptPlatform.kuwo =>
-          '每行一条，格式为 `资源ID-音质,ekey`（也可只写 ekey）。\n'
-              '例：12345678-128,UVFNdXNpYyBFbmNWMixLZXk6...\n'
-              '# 开头的行会被忽略',
-        DecryptPlatform.qingting =>
-          '每行一条 16 字节设备密钥（32 位十六进制）。蜻蜓 FM 用 AES-128-CTR，'
-              '长度必须正好 32 个字符，且所有 .qta 共用同一把。',
-        DecryptPlatform.netease || DecryptPlatform.migu =>
-          '这两个平台的密钥在文件头里，通常不需要导入。\n'
-              '每行一条 ekey，仅作备用记录。',
-      };
+    DecryptPlatform.qqMusic =>
+      '每行一条，格式为 `原始文件名,ekey`（文件名也可只写 ekey）。\n'
+          '文件名要与 MusicEx footer 里的 mediaName 一致，否则匹配不上。\n'
+          '# 开头的行会被忽略',
+    DecryptPlatform.kugou =>
+      '每行一条，格式为 `audioHash,ekey`（也可只写 ekey）。\n'
+          'audioHash 是 KGM 文件头里的音频指纹。\n'
+          '# 开头的行会被忽略',
+    DecryptPlatform.kuwo =>
+      '每行一条，格式为 `资源ID-音质,ekey`（也可只写 ekey）。\n'
+          '例：12345678-128,UVFNdXNpYyBFbmNWMixLZXk6...\n'
+          '# 开头的行会被忽略',
+    DecryptPlatform.qingting =>
+      '每行一条 16 字节设备密钥（32 位十六进制）。蜻蜓 FM 用 AES-128-CTR，'
+          '长度必须正好 32 个字符，且所有 .qta 共用同一把。',
+    DecryptPlatform.netease || DecryptPlatform.migu =>
+      '这两个平台的密钥在文件头里，通常不需要导入。\n'
+          '每行一条 ekey，仅作备用记录。',
+  };
 
   // ==================== 导入数据库 ====================
 
@@ -222,8 +224,10 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
           final r = scanKeys(bytes, platform: platform, hint: name);
           found.addAll(r.entries);
           final n = r.entries.length;
-          notes.add('$name：${r.source} 命中 $n 条'
-              '${r.note != null ? '（${r.note!}）' : ''}');
+          notes.add(
+            '$name：${r.source} 命中 $n 条'
+            '${r.note != null ? '（${r.note!}）' : ''}',
+          );
         } catch (e) {
           failed++;
           notes.add('$name 读取失败');
@@ -295,28 +299,24 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   @override
   Widget build(BuildContext context) {
     final keys = _keys;
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: '密钥管理',
-        titleColor: AppColors.skyBlue,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.pop(context),
-          child: Icon(Icons.arrow_back_rounded,
-              color: AppColors.textPrimary),
-        ),
-        actions: [
-          if (keys != null && keys.isNotEmpty)
-            MiuixTextButton(
-              '清空',
-              onPressed: _openClearAll,
-              textStyle: const TextStyle(
-                  color: Color(0xFFFF6B6B), fontWeight: FontWeight.w700),
+    return PageScaffold(
+      title: '密钥管理',
+      snackbarHost: appSnackbarHostState,
+      // ListView 自带水平留白，脚手架只补顶栏高度
+      contentPadding: EdgeInsets.zero,
+      actions: [
+        if (keys != null && keys.isNotEmpty)
+          MiuixTextButton(
+            '清空',
+            onPressed: _openClearAll,
+            textStyle: const TextStyle(
+              color: Color(0xFFFF6B6B),
+              fontWeight: FontWeight.w700,
             ),
-        ],
-      ),
-      content: (padding) => _loading
+          ),
+      ],
+      bottomBar: _buildDialogs(),
+      child: _loading
           ? const Center(child: MiuixCircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
@@ -376,21 +376,28 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                         padding: const EdgeInsets.symmetric(vertical: 30),
                         child: Column(
                           children: [
-                            Icon(Icons.key_off_rounded,
-                                size: 34, color: AppColors.textTertiary),
+                            Icon(
+                              Icons.key_off_rounded,
+                              size: 34,
+                              color: AppColors.textTertiary,
+                            ),
                             const SizedBox(height: 10),
-                            Text('${_platform.label}还没有密钥',
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    color: AppColors.textTertiary)),
+                            Text(
+                              '${_platform.label}还没有密钥',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: AppColors.textTertiary,
+                              ),
+                            ),
                             const SizedBox(height: 6),
                             Text(
                               _platform.needsKey
                                   ? '该平台必须填写密钥才能解密'
                                   : '该平台通常无需密钥，文件头里已自带',
                               style: TextStyle(
-                                  fontSize: 11,
-                                  color: AppColors.textTertiary),
+                                fontSize: 11,
+                                color: AppColors.textTertiary,
+                              ),
                             ),
                           ],
                         ),
@@ -409,7 +416,6 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                   ),
               ],
             ),
-      bottomBar: _buildDialogs(),
     );
   }
 
@@ -459,10 +465,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                     textStyle: TextStyle(color: AppColors.textTertiary),
                   ),
                   const SizedBox(width: 8),
-                  MiuixTextButton(
-                    '仍然保存',
-                    onPressed: _confirmWarnSave,
-                  ),
+                  MiuixTextButton('仍然保存', onPressed: _confirmWarnSave),
                 ],
               ),
             ],
@@ -474,8 +477,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
           title: '导入密钥文本 → ${_platform.label}',
           backgroundColor: AppColors.bg2,
           maxWidth: 480,
-          onDismissRequest: () =>
-              setState(() => _showImportTextDialog = false),
+          onDismissRequest: () => setState(() => _showImportTextDialog = false),
           content: ConstrainedBox(
             constraints: BoxConstraints(maxHeight: maxH),
             child: SingleChildScrollView(
@@ -490,18 +492,18 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                     height: 1.6,
                   ),
                   const SizedBox(height: 12),
-                  MiuixTextField(
+                  AppTextField(
                     controller: _importController,
                     maxLines: 8,
                     minLines: 5,
                     autofocus: true,
                     textStyle: const TextStyle(fontSize: 12),
                     label: switch (_platform) {
-                      DecryptPlatform.qingting => '000102030405060708090a0b0c0d0e0f',
+                      DecryptPlatform.qingting =>
+                        '000102030405060708090a0b0c0d0e0f',
                       DecryptPlatform.kuwo =>
                         '12345678-128,UVFNdXNpYyBFbmNWMixLZXk6...',
-                      DecryptPlatform.kugou =>
-                        '8fd2a1c0e3b95d7f4a6b8c2d1e0f3a5b,UVFNdXNpYyBFbmNWMixLZXk6...',
+                      DecryptPlatform.kugou => '8fd2a1c0e3b95d7f4a6b8c2d1e0f3a5b,UVFNdXNpYyBFbmNWMixLZXk6...',
                       _ => '歌曲名.mp3,UVFNdXNpYyBFbmNWMixLZXk6...',
                     },
                   ),
@@ -513,8 +515,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                         '取消',
                         onPressed: () =>
                             setState(() => _showImportTextDialog = false),
-                        textStyle:
-                            TextStyle(color: AppColors.textTertiary),
+                        textStyle: TextStyle(color: AppColors.textTertiary),
                       ),
                       const SizedBox(width: 8),
                       MiuixTextButton('导入', onPressed: _runImportText),
@@ -574,8 +575,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
           title: _scanImported > 0 ? '已导入 $_scanImported 条密钥' : '未找到密钥',
           backgroundColor: AppColors.bg2,
           maxWidth: 480,
-          onDismissRequest: () =>
-              setState(() => _showScanReportDialog = false),
+          onDismissRequest: () => setState(() => _showScanReportDialog = false),
           content: ConstrainedBox(
             constraints: BoxConstraints(maxHeight: maxH),
             child: SingleChildScrollView(
@@ -595,10 +595,12 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                   for (final n in _scanNotes)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 6),
-                      child: MiuixText('· $n',
-                          color: AppColors.textSecondary,
-                          fontSize: 11.5,
-                          height: 1.5),
+                      child: MiuixText(
+                        '· $n',
+                        color: AppColors.textSecondary,
+                        fontSize: 11.5,
+                        height: 1.5,
+                      ),
                     ),
                   const SizedBox(height: 8),
                   MiuixText(
@@ -657,8 +659,9 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                     '清空',
                     onPressed: _confirmClearAll,
                     textStyle: const TextStyle(
-                        color: Color(0xFFFF6B6B),
-                        fontWeight: FontWeight.w700),
+                      color: Color(0xFFFF6B6B),
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ],
               ),
@@ -721,11 +724,11 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
 
   /// 平台需要的匹配键字段名（用于标题与错误提示）。
   String get _matchLabel => switch (widget.platform) {
-        DecryptPlatform.qqMusic => '原始文件名',
-        DecryptPlatform.kugou => 'audioHash（音频指纹）',
-        DecryptPlatform.kuwo => '资源 ID',
-        _ => '',
-      };
+    DecryptPlatform.qqMusic => '原始文件名',
+    DecryptPlatform.kugou => 'audioHash（音频指纹）',
+    DecryptPlatform.kuwo => '资源 ID',
+    _ => '',
+  };
 
   void _submit() {
     final p = widget.platform;
@@ -754,18 +757,23 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
           setState(() => _error = '资源 ID 与音质都要填，且必须是数字');
           return;
         }
-        widget.onSubmit(DecryptKeyEntry(
-          value: value,
-          platform: p,
-          resourceId: rid,
-          qualityId: q,
-        ));
+        widget.onSubmit(
+          DecryptKeyEntry(
+            value: value,
+            platform: p,
+            resourceId: rid,
+            qualityId: q,
+          ),
+        );
         return;
       }
       final mk = _match.text.trim();
       if (mk.isEmpty) {
-        setState(() => _error = '$_matchLabel不能为空——'
-            '没有它这条密钥永远匹配不上文件');
+        setState(
+          () => _error =
+              '$_matchLabel不能为空——'
+              '没有它这条密钥永远匹配不上文件',
+        );
         return;
       }
       widget.onSubmit(_entryWithMatchKey(value, mk, p));
@@ -778,15 +786,22 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
 
   /// 把「匹配键 + ekey」组装成对应平台的条目。
   static DecryptKeyEntry _entryWithMatchKey(
-      String value, String matchKey, DecryptPlatform p) =>
-      switch (p) {
-        DecryptPlatform.qqMusic => DecryptKeyEntry(
-            value: value, platform: p, mediaFilename: matchKey),
-        DecryptPlatform.kugou => DecryptKeyEntry(
-            value: value, platform: p, audioHash: matchKey),
-        _ => DecryptKeyEntry(
-            value: value, platform: p, mediaFilename: matchKey),
-      };
+    String value,
+    String matchKey,
+    DecryptPlatform p,
+  ) => switch (p) {
+    DecryptPlatform.qqMusic => DecryptKeyEntry(
+      value: value,
+      platform: p,
+      mediaFilename: matchKey,
+    ),
+    DecryptPlatform.kugou => DecryptKeyEntry(
+      value: value,
+      platform: p,
+      audioHash: matchKey,
+    ),
+    _ => DecryptKeyEntry(value: value, platform: p, mediaFilename: matchKey),
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -799,7 +814,8 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
       onDismissRequest: widget.onDismiss,
       content: ConstrainedBox(
         constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * 0.62),
+          maxHeight: MediaQuery.sizeOf(context).height * 0.62,
+        ),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -825,7 +841,7 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
                 Row(
                   children: [
                     Expanded(
-                      child: MiuixTextField(
+                      child: AppTextField(
                         controller: _rid,
                         label: '资源 ID（rid）',
                         keyboardType: TextInputType.number,
@@ -836,7 +852,7 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
                     const SizedBox(width: 10),
                     SizedBox(
                       width: 150,
-                      child: MiuixTextField(
+                      child: AppTextField(
                         controller: _quality,
                         label: '音质（quality）',
                         keyboardType: TextInputType.number,
@@ -855,7 +871,7 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
                 ),
                 const SizedBox(height: 12),
               ] else if (p.needsMatchKey) ...[
-                MiuixTextField(
+                AppTextField(
                   controller: _match,
                   label: '$_matchLabel（必填）',
                   singleLine: true,
@@ -865,7 +881,7 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
                 const SizedBox(height: 12),
               ],
               // ---- 密钥本体 ----
-              MiuixTextField(
+              AppTextField(
                 controller: _value,
                 maxLines: p.keyIsHex ? 1 : 3,
                 minLines: p.keyIsHex ? 1 : 2,
@@ -901,39 +917,38 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
   }
 
   static String _valueLabel(DecryptPlatform p) => switch (p) {
-        DecryptPlatform.qqMusic => 'ekey（QMC v2）',
-        DecryptPlatform.kugou => 'fileKey（KGM v5）',
-        DecryptPlatform.kuwo => 'fileKey（KWM v2）',
-        _ => 'ekey / fileKey',
-      };
+    DecryptPlatform.qqMusic => 'ekey（QMC v2）',
+    DecryptPlatform.kugou => 'fileKey（KGM v5）',
+    DecryptPlatform.kuwo => 'fileKey（KWM v2）',
+    _ => 'ekey / fileKey',
+  };
 
   /// 各平台的**解密条件**与密钥填法。
   ///
   /// 文案直接对着 um-react 的 TS 契约写：密钥填错版本是最常见的失败原因，
   /// 而用户往往分不清"这首歌到底是 v1 还是 v2"。
   static String _keyHint(DecryptPlatform p) => switch (p) {
-        DecryptPlatform.qqMusic =>
-          'QQ 音乐 QMC v2（.mflac）：按**原始文件名**查 ekey，'
-              '文件名对不上就解不出（找不到时会按相近文件名兜底）。\n'
-              'QMC v1（.qmcflac）用内置静态密钥，不需要填。',
-        DecryptPlatform.kugou =>
-          '酷狗 KGM：只有 **v5** 需要 fileKey，按文件头里的 **audioHash** 查表。'
-              'v2/v3 是内置密钥，不要填。\n'
-              'audioHash 可用工具箱的「读取文件信息」看到。',
-        DecryptPlatform.kuwo =>
-          '酷我 KWM：只有 **v2** 需要 fileKey，查表键是 `资源ID-音质`'
-              '（rid 在文件头 0x18，音质取文件头format_name 的开头数字）。\n'
-              '同一首歌不同音质是不同的 key，v1 用内置密钥。',
-        DecryptPlatform.netease =>
-          '网易云：密钥已内置在 .ncm 文件头的 meta 里，**无需填写**。',
-        DecryptPlatform.migu =>
-          '咪咕：无需填写——密钥由文件头已知明文反推。'
-              '填了反而可能导致解出噪声。',
-        DecryptPlatform.qingting =>
-          '蜻蜓 FM：只要一把 16 字节设备密钥（32 位十六进制），'
-              '不做任何匹配——所有 .qta 文件共用它。\n'
-              '它由手机机型信息派生，不在任何客户端数据库里。',
-      };
+    DecryptPlatform.qqMusic =>
+      'QQ 音乐 QMC v2（.mflac）：按**原始文件名**查 ekey，'
+          '文件名对不上就解不出（找不到时会按相近文件名兜底）。\n'
+          'QMC v1（.qmcflac）用内置静态密钥，不需要填。',
+    DecryptPlatform.kugou =>
+      '酷狗 KGM：只有 **v5** 需要 fileKey，按文件头里的 **audioHash** 查表。'
+          'v2/v3 是内置密钥，不要填。\n'
+          'audioHash 可用工具箱的「读取文件信息」看到。',
+    DecryptPlatform.kuwo =>
+      '酷我 KWM：只有 **v2** 需要 fileKey，查表键是 `资源ID-音质`'
+          '（rid 在文件头 0x18，音质取文件头format_name 的开头数字）。\n'
+          '同一首歌不同音质是不同的 key，v1 用内置密钥。',
+    DecryptPlatform.netease => '网易云：密钥已内置在 .ncm 文件头的 meta 里，**无需填写**。',
+    DecryptPlatform.migu =>
+      '咪咕：无需填写——密钥由文件头已知明文反推。'
+          '填了反而可能导致解出噪声。',
+    DecryptPlatform.qingting =>
+      '蜻蜓 FM：只要一把 16 字节设备密钥（32 位十六进制），'
+          '不做任何匹配——所有 .qta 文件共用它。\n'
+          '它由手机机型信息派生，不在任何客户端数据库里。',
+  };
 }
 
 /// 蜻蜓 FM 设备密钥生成器：填 6 段机型信息 → 派生 device key。
@@ -997,10 +1012,9 @@ class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
 
   Future<void> _save() async {
     final keys = await DecryptKeys.load();
-    await keys.add(DecryptKeyEntry(
-      value: _result!,
-      platform: DecryptPlatform.qingting,
-    ));
+    await keys.add(
+      DecryptKeyEntry(value: _result!, platform: DecryptPlatform.qingting),
+    );
     widget.onSaved();
   }
 
@@ -1014,7 +1028,8 @@ class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
       onDismissRequest: widget.onDismiss,
       content: ConstrainedBox(
         constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * 0.62),
+          maxHeight: MediaQuery.sizeOf(context).height * 0.62,
+        ),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1029,7 +1044,7 @@ class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
               ),
               const SizedBox(height: 14),
               for (final entry in _fields.entries) ...[
-                MiuixTextField(
+                AppTextField(
                   controller: entry.value,
                   label: entry.key,
                   singleLine: true,
@@ -1049,9 +1064,10 @@ class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
                   child: SelectableText(
                     _result!,
                     style: TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        color: AppColors.textPrimary),
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: AppColors.textPrimary,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -1135,8 +1151,9 @@ class _PlatformTabs extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
-                      color:
-                          sel ? AppColors.textPrimary : AppColors.textSecondary,
+                      color: sel
+                          ? AppColors.textPrimary
+                          : AppColors.textSecondary,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -1149,8 +1166,7 @@ class _PlatformTabs extends StatelessWidget {
                     n > 0 ? '$n 条' : '未设置',
                     style: TextStyle(
                       fontSize: 10,
-                      color:
-                          n > 0 ? AppColors.accent : AppColors.textTertiary,
+                      color: n > 0 ? AppColors.accent : AppColors.textTertiary,
                     ),
                   ),
                 ],
@@ -1197,8 +1213,7 @@ class _PlatformBanner extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11.5,
                 height: 1.5,
-                color:
-                    needs ? const Color(0xFFFFB020) : AppColors.textTertiary,
+                color: needs ? const Color(0xFFFFB020) : AppColors.textTertiary,
               ),
             ),
           ),
@@ -1226,8 +1241,7 @@ class _KeyTile extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
       child: Row(
         children: [
-          Icon(Icons.vpn_key_outlined,
-              size: 17, color: AppColors.accent),
+          Icon(Icons.vpn_key_outlined, size: 17, color: AppColors.accent),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -1237,8 +1251,7 @@ class _KeyTile extends StatelessWidget {
                   preview,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 12, color: AppColors.textPrimary),
+                  style: TextStyle(fontSize: 12, color: AppColors.textPrimary),
                 ),
                 const SizedBox(height: 3),
                 Text(
@@ -1254,8 +1267,7 @@ class _KeyTile extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 10.5,
-                    color: (!entry.hasMatchKey &&
-                            entry.platform.needsMatchKey)
+                    color: (!entry.hasMatchKey && entry.platform.needsMatchKey)
                         ? const Color(0xFFFFB020)
                         : AppColors.textTertiary,
                   ),
@@ -1265,8 +1277,11 @@ class _KeyTile extends StatelessWidget {
           ),
           MiuixIconButton(
             onPressed: onDelete,
-            child: Icon(Icons.delete_outline_rounded,
-                size: 18, color: AppColors.textTertiary),
+            child: Icon(
+              Icons.delete_outline_rounded,
+              size: 18,
+              color: AppColors.textTertiary,
+            ),
           ),
         ],
       ),
@@ -1274,11 +1289,11 @@ class _KeyTile extends StatelessWidget {
   }
 
   static String _sourceLabel(KeySource s) => switch (s) {
-        KeySource.manual => '手动填写',
-        KeySource.importedMmkv => 'MMKV 导入',
-        KeySource.importedDatabase => '数据库导入',
-        KeySource.importedText => '文本导入',
-      };
+    KeySource.manual => '手动填写',
+    KeySource.importedMmkv => 'MMKV 导入',
+    KeySource.importedDatabase => '数据库导入',
+    KeySource.importedText => '文本导入',
+  };
 }
 
 class _MiniAction extends StatelessWidget {
@@ -1304,8 +1319,7 @@ class _MiniAction extends StatelessWidget {
           const SizedBox(height: 7),
           Text(
             label,
-            style: TextStyle(
-                fontSize: 11.5, color: AppColors.textPrimary),
+            style: TextStyle(fontSize: 11.5, color: AppColors.textPrimary),
           ),
         ],
       ),

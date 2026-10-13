@@ -82,23 +82,9 @@ class _AboutPageState extends State<AboutPage> {
 
   @override
   Widget build(BuildContext context) {
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: '关于',
-        titleColor: AppColors.skyBlue,
-        color: Colors.transparent,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Icon(Icons.arrow_back_ios_new_rounded,
-              color: AppColors.textPrimary, size: 20),
-        ),
-      ),
-      content: (padding) => SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
+    final body = SingleChildScrollView(
+      child: Column(
+        children: [
             Container(
               width: 80,
               height: 80,
@@ -204,9 +190,20 @@ class _AboutPageState extends State<AboutPage> {
             ),
           ],
         ),
-      ),
-      // 开发者模式密码弹层（声明式，挂 bottomBar 槽位由 root popup host 渲染）
-      bottomBar: MiuixOverlayDialog(
+      );
+  // 开发者模式密码弹层（声明式，挂 bottomBar 槽位由 root popup host 渲染）
+  return PageScaffold(
+    title: '关于',
+    snackbarHost: appSnackbarHostState,
+    contentPadding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+    bottomBar: _buildPasswordDialog(),
+    child: body,
+  );
+  }
+
+  /// 开发者模式密码弹层（声明式，挂 bottomBar 槽位由 root popup host 渲染）。
+  Widget _buildPasswordDialog() {
+    return MiuixOverlayDialog(
         show: _showPasswordDialog,
         title: '开启开发者模式',
         summary: '请输入开发者密码',
@@ -292,7 +289,6 @@ class _AboutPageState extends State<AboutPage> {
             ),
           ],
         ),
-      ),
     );
   }
 

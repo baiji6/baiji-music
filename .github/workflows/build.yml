@@ -37,7 +37,7 @@ env:
   # 历史上这里写死过 '2.1.0'，导致后续发版的 Release 标题与产物名全部错位。
   #
   # Dart 混淆参数（五端通用核心防逆向）
-  OBF_ARGS: --obfuscate --split-debug-info=build/out/debug-info
+  OBF_ARGS: --obfuscate --split-debug-info=build/out/debug-info --tree-shake-icons
 
 jobs:
   # ---------------------------------------------------------------- Android

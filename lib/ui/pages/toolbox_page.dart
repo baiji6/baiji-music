@@ -19,25 +19,15 @@ class ToolboxPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      topBar: MiuixTopAppBar(
-        title: '工具箱',
-        titleColor: AppColors.skyBlue,
-        color: Colors.transparent,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Icon(Icons.arrow_back_ios_new_rounded,
-              color: AppColors.textPrimary, size: 20),
-        ),
-      ),
-      content: (padding) => ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+    return PageScaffold(
+      title: '工具箱',
+      contentPadding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
+      child: ListView(
         children: [
-          const SectionHeader(
+          SectionHeader(
               title: '音乐工具', icon: Icons.build_outlined),
           GlassCard(
-            padding: const EdgeInsets.symmetric(vertical: 4),
+            padding: EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
                 _ToolRow(
@@ -47,7 +37,7 @@ class ToolboxPage extends StatelessWidget {
                   tag: 'QQ 音乐 · 酷狗 · 酷我 · 网易云 · 咪咕',
                   description: '批量解密已下载的加密音频文件，支持导入密钥与手动填写，'
                       '可自定义保存位置。解密后的文件可直接在「本地音乐」里播放。',
-                  page: const DecryptPage(),
+                  page: DecryptPage(),
                 ),
                 MiuixHorizontalDivider(
                     thickness: 1, color: AppColors.strokeGlass),
@@ -58,16 +48,16 @@ class ToolboxPage extends StatelessWidget {
                   tag: 'ekey · 平台密钥',
                   description: '按平台整理解密密钥，支持导入、编辑与删除。'
                       '批量解密前可以先在这里把密钥准备好。',
-                  page: const DecryptKeysPage(),
+                  page: DecryptKeysPage(),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 24),
-          const SectionHeader(
+          SizedBox(height: 24),
+          SectionHeader(
               title: '诊断工具', icon: Icons.bug_report_outlined),
           GlassCard(
-            padding: const EdgeInsets.symmetric(vertical: 4),
+            padding: EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
                 _ToolRow(
@@ -77,7 +67,7 @@ class ToolboxPage extends StatelessWidget {
                   tag: '抓包 · 崩溃 · 播放记录',
                   description: '实时查看应用运行日志，按级别筛选、导出分享。'
                       '遇到闪退或播放异常时，这里是定位问题的第一现场。',
-                  page: const LogPage(),
+                  page: LogPage(),
                 ),
               ],
             ),

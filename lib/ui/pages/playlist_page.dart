@@ -53,92 +53,86 @@ class _PlaylistPageState extends State<PlaylistPage> {
   @override
   Widget build(BuildContext context) {
     final names = PlaylistStore.playlistNames();
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: '本地歌单',
-        titleColor: AppColors.skyBlue,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.pop(context),
-          child: Icon(Icons.arrow_back_rounded,
-              color: AppColors.textPrimary),
-        ),
-        actions: [
-          MiuixIconButton(
-            onPressed: _openCreateDialog,
-            child: Icon(Icons.add_rounded, color: AppColors.accent),
-          ),
-        ],
-      ),
-      content: (padding) => names.isEmpty
-          ? Center(
-              child: Text(
-                '暂无歌单\n点击右上角 + 创建',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textTertiary, fontSize: 13),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: names.length,
-              itemBuilder: (ctx, i) => GlassCard(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: MiuixPressable(
-                  onPressed: () => _openPlaylist(names[i]),
-                  borderRadius: BorderRadius.circular(22),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                                colors: AppColors.accentGradient),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.queue_music_rounded,
-                              color: Colors.white, size: 22),
+    final body = names.isEmpty
+        ? Center(
+            child: Text(
+              '暂无歌单\n点击右上角 + 创建',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textTertiary, fontSize: 13),
+            ),
+          )
+        : ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: names.length,
+            itemBuilder: (ctx, i) => GlassCard(
+              margin: const EdgeInsets.only(bottom: 10),
+              child: MiuixPressable(
+                onPressed: () => _openPlaylist(names[i]),
+                borderRadius: BorderRadius.circular(22),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                              colors: AppColors.accentGradient),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                names[i],
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 15, fontWeight: FontWeight.w600),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                '${PlaylistStore.songsOf(names[i]).length} 首',
-                                style: TextStyle(
-                                    fontSize: 12, color: AppColors.textTertiary),
-                              ),
-                            ],
-                          ),
+                        child: const Icon(Icons.queue_music_rounded,
+                            color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              names[i],
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${PlaylistStore.songsOf(names[i]).length} 首',
+                              style: TextStyle(
+                                  fontSize: 12, color: AppColors.textTertiary),
+                            ),
+                          ],
                         ),
-                        MiuixIconButton(
-                          onPressed: () {
-                            PlaylistStore.deletePlaylist(names[i]);
-                            _refresh();
-                          },
-                          child: Icon(Icons.delete_outline,
-                              color: AppColors.danger, size: 20),
-                        ),
-                      ],
-                    ),
+                      ),
+                      MiuixIconButton(
+                        onPressed: () {
+                          PlaylistStore.deletePlaylist(names[i]);
+                          _refresh();
+                        },
+                        child: Icon(Icons.delete_outline,
+                            color: AppColors.danger, size: 20),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
+          );
+
+    return PageScaffold(
+      title: '本地歌单',
+      snackbarHost: appSnackbarHostState,
+      contentPadding: EdgeInsets.zero,
+      actions: [
+        MiuixIconButton(
+          onPressed: _openCreateDialog,
+          child: Icon(Icons.add_rounded, color: AppColors.accent),
+        ),
+      ],
       bottomBar: _buildDialogs(),
+      child: body,
     );
   }
 
@@ -154,12 +148,14 @@ class _PlaylistPageState extends State<PlaylistPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              MiuixTextField(
+              AppTextField(
                 controller: _nameCtrl,
                 autofocus: true,
                 label: '歌单名称',
                 singleLine: true,
                 textStyle: TextStyle(color: AppColors.textPrimary),
+                leadingIcon: Icon(Icons.queue_music_rounded,
+                    size: 18, color: AppColors.textTertiary),
               ),
               const SizedBox(height: 18),
               Row(
@@ -197,82 +193,76 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
   @override
   Widget build(BuildContext context) {
     final songs = PlaylistStore.songsOf(widget.name);
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: widget.name,
-        titleColor: AppColors.skyBlue,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.pop(context),
-          child: Icon(Icons.arrow_back_rounded,
-              color: AppColors.textPrimary),
-        ),
-      ),
-      content: (padding) => songs.isEmpty
-          ? Center(
-              child: Text(
-                '歌单为空\n去搜索页添加歌曲',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textTertiary, fontSize: 13),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: songs.length,
-              itemBuilder: (ctx, i) => GlassCard(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: MiuixPressable(
-                  onPressed: () {
-                    PlayerController.instance.playQueue(songs, startIndex: i);
-                  },
-                  borderRadius: BorderRadius.circular(22),
-                  child: Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Row(
-                      children: [
-                        CoverImage(song: songs[i], size: 44, radius: 10),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                songs[i].name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.w600),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                songs[i].singer,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                    fontSize: 12, color: AppColors.textTertiary),
-                              ),
-                            ],
-                          ),
+    final body = songs.isEmpty
+        ? Center(
+            child: Text(
+              '歌单为空\n去搜索页添加歌曲',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textTertiary, fontSize: 13),
+            ),
+          )
+        : ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: songs.length,
+            itemBuilder: (ctx, i) => GlassCard(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: MiuixPressable(
+                onPressed: () {
+                  PlayerController.instance.playQueue(songs, startIndex: i);
+                },
+                borderRadius: BorderRadius.circular(22),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Row(
+                    children: [
+                      CoverImage(song: songs[i], size: 44, radius: 10),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              songs[i].name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              songs[i].singer,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 12, color: AppColors.textTertiary),
+                            ),
+                          ],
                         ),
-                        MiuixIconButton(
-                          onPressed: () {
-                            PlaylistStore.removeSong(
-                                widget.name, songs[i].mid);
-                            _refresh();
-                          },
-                          child: Icon(Icons.delete_outline,
-                              color: AppColors.danger, size: 20),
-                        ),
-                        Icon(Icons.play_arrow_rounded,
-                            color: AppColors.accent, size: 24),
-                      ],
-                    ),
+                      ),
+                      MiuixIconButton(
+                        onPressed: () {
+                          PlaylistStore.removeSong(
+                              widget.name, songs[i].mid);
+                          _refresh();
+                        },
+                        child: Icon(Icons.delete_outline,
+                            color: AppColors.danger, size: 20),
+                      ),
+                      Icon(Icons.play_arrow_rounded,
+                          color: AppColors.accent, size: 24),
+                    ],
                   ),
                 ),
               ),
             ),
+          );
+
+    return PageScaffold(
+      title: widget.name,
+      snackbarHost: appSnackbarHostState,
+      contentPadding: EdgeInsets.zero,
+      child: body,
     );
   }
 }

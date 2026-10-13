@@ -2,17 +2,54 @@ import 'package:flutter/foundation.dart';
 
 import 'log_store.dart';
 
+/// 一条结构化日志条目。
+///
+/// v2.2.8 起日志从「纯文本行」升级为结构化条目：级别、时间、tag、
+/// 消息体各自独立，UI 端不再需要每次重建都对全量日志跑正则解析。
+/// [raw] 保留完整原始行，导出 / 落盘格式不变。
+class LogEntry {
+  const LogEntry({
+    required this.level,
+    required this.time,
+    required this.tag,
+    required this.message,
+    required this.raw,
+    this.noiseLines = 0,
+  });
+
+  final String level;
+
+  /// 条目产生时间（落盘回读的历史条目按行内时间戳近似）。
+  final DateTime time;
+
+  /// 日志 tag（模块名）。
+  final String tag;
+
+  /// 消息正文（不含时间戳 / 级别 / tag 前缀）。
+  final String message;
+
+  /// 完整原始行（`MM-DD HH:MM:SS.mmm LEVEL/tag message`），导出用。
+  final String raw;
+
+  /// 消息体内被识别为「系统崩溃转储」的噪声行数
+  /// （VM tombstone `***`、backtrace `#NN abs` 等）。
+  final int noiseLines;
+
+  bool get hasNoise => noiseLines > 0;
+}
+
 /// 应用内日志记录器。
 ///
 /// 在桌面/移动端将日志同时输出到控制台与内存环形缓冲（供「日志查看」页读取），
 /// 支持六档级别与按档位开关。v2.2.6 起额外落盘（[LogStore]）：按天写文件、
 /// 保留 7 天、启动回读当天——日志不再"每次打开软件就清空"。
+/// v2.2.8 起条目结构化（[LogEntry]），并识别崩溃转储噪声行。
 /// 移植自原 Android 实现的 AppLog。
 class AppLog {
   static const String trace = 'TRACE';
   static const String debug = 'DEBUG';
-  static const String info  = 'INFO';
-  static const String warn  = 'WARN';
+  static const String info = 'INFO';
+  static const String warn = 'WARN';
   static const String error = 'ERROR';
   static const String fatal = 'FATAL';
 
@@ -29,7 +66,7 @@ class AppLog {
     fatal: true,
   };
 
-  final List<({String level, String line})> _entries = [];
+  final List<LogEntry> _entries = [];
   final Map<String, bool> _enabled = Map.of(defaultEnabled);
   final List<AppLogListener> _listeners = [];
 
@@ -62,24 +99,82 @@ class AppLog {
     final history = await LogStore.instance.readToday();
     if (history.isEmpty) return;
     for (final line in history) {
-      _entries.add((level: _levelOfLine(line), line: line));
+      _entries.add(_parseLine(line));
     }
     while (_entries.length > maxLines) {
       _entries.removeAt(0);
     }
   }
 
-  /// 从日志行文本提取级别（回读历史时用）。格式: "MM-DD HH:MM:SS.mmm LEVEL/tag ..."。
-  static String _levelOfLine(String line) {
-    final m = RegExp(r'\d{2}:\d{2}:\d{2}\.\d{3}\s+([A-Z]+)/').firstMatch(line);
-    return m?.group(1) ?? info;
+  /// 把落盘回读的原始行还原成结构化条目。
+  /// 格式: "MM-DD HH:MM:SS.mmm LEVEL/tag message"。
+  static LogEntry _parseLine(String line) {
+    final m = RegExp(
+      r'^(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\.\d{3} ([A-Z]+)/(\S+)\s*(.*)$',
+      dotAll: true,
+    ).firstMatch(line);
+    if (m == null) {
+      return LogEntry(
+        level: info,
+        time: DateTime.now(),
+        tag: '',
+        message: line,
+        raw: line,
+        noiseLines: countNoiseLines(line),
+      );
+    }
+    final message = m.group(8) ?? '';
+    final now = DateTime.now();
+    return LogEntry(
+      level: m.group(6) ?? info,
+      // 行内没有年份，回读时按当前年补一个近似时间（仅用于 UI 展示）。
+      time: DateTime(
+        now.year,
+        int.parse(m.group(1)!),
+        int.parse(m.group(2)!),
+        int.parse(m.group(3)!),
+        int.parse(m.group(4)!),
+        int.parse(m.group(5)!),
+      ),
+      tag: m.group(7) ?? '',
+      message: message,
+      raw: line,
+      noiseLines: countNoiseLines(message),
+    );
+  }
+
+  // ==================== 崩溃转储噪声识别 ====================
+
+  /// 识别 VM / 系统崩溃转储的噪声行：
+  /// - tombstone 分隔与段头（`*** *** ***` / `Build fingerprint:` / `pid: N, tid: N`）
+  /// - native backtrace 帧（`#01 abs 0000…` / `#02 pc 0000…`）
+  ///
+  /// 这类行动辄几百行十六进制地址，对排障没有可读性；日志页默认折叠，
+  /// 用户显式展开才看全文（崩前证据仍完整保留在 raw 里）。
+  static final RegExp _noiseRe = RegExp(
+    r'^(?:\*[\*\s]*$'
+    r'|#{1,2}\d{1,3}\s+(?:abs|pc|ip|sp)\s'
+    r'|Build fingerprint:'
+    r'|pid:\s*\d+,\s*tid:'
+    r'|>>>\s)',
+  );
+
+  /// 单行是否崩溃转储噪声（日志页折叠视图复用同一判定）。
+  static bool isNoiseLine(String line) => _noiseRe.hasMatch(line.trimLeft());
+
+  /// 统计 [text] 里的崩溃转储噪声行数。
+  static int countNoiseLines(String text) {
+    if (!text.contains('\n')) return 0;
+    var n = 0;
+    for (final line in text.split('\n')) {
+      if (isNoiseLine(line)) n++;
+    }
+    return n;
   }
 
   void log(String level, String tag, String message, [Object? error]) {
     if (!isEnabled(level)) return;
-    final line = error == null
-        ? '$message [$tag]'
-        : '$message [$tag] err=${error.toString()}';
+    final msg = error == null ? message : '$message err=${error.toString()}';
     final buf = StringBuffer()
       ..write(_ts())
       ..write(' ')
@@ -87,20 +182,29 @@ class AppLog {
       ..write('/')
       ..write(tag)
       ..write(' ')
-      ..write(line);
-    final text = buf.toString();
-    _entries.add((level: level, line: text));
+      ..write(msg);
+    final raw = buf.toString();
+    _entries.add(
+      LogEntry(
+        level: level,
+        time: DateTime.now(),
+        tag: tag,
+        message: msg,
+        raw: raw,
+        noiseLines: countNoiseLines(msg),
+      ),
+    );
     while (_entries.length > maxLines) {
       _entries.removeAt(0);
     }
     for (final l in _listeners) {
-      l(level, text);
+      l(level, raw);
     }
     // 落盘（异步批量；暂停/降级时静默跳过）
-    LogStore.instance.write(text);
+    LogStore.instance.write(raw);
     // 控制台输出
     if (kDebugMode) {
-      debugPrint(text);
+      debugPrint(raw);
     }
   }
 
@@ -118,9 +222,37 @@ class AppLog {
       _instance.log(fatal, tag, msg, e);
 
   /// 所有日志条目（含级别信息）。
-  List<({String level, String line})> get entries => List.unmodifiable(_entries);
+  List<LogEntry> get entries => List.unmodifiable(_entries);
 
-  List<String> dump() => _entries.map((e) => e.line).toList();
+  /// 按级别下限 + 关键词过滤的快照（日志页专用）。
+  ///
+  /// [minLevel] 级别下限（含本身）；[keyword] 对 tag / 消息做不区分大小写
+  /// 的子串匹配；[hideNoise] 为 true 时隐藏**整条都是崩溃转储**的条目
+  /// （有正文的条目仍保留，转储部分由 UI 折叠）。
+  List<LogEntry> snapshot({
+    String minLevel = trace,
+    String keyword = '',
+    bool hideNoise = false,
+  }) {
+    final minIdx = levelIndex(minLevel);
+    final kw = keyword.trim().toLowerCase();
+    return _entries.where((e) {
+      if (levelIndex(e.level) < minIdx) return false;
+      if (kw.isNotEmpty &&
+          !e.tag.toLowerCase().contains(kw) &&
+          !e.message.toLowerCase().contains(kw)) {
+        return false;
+      }
+      if (hideNoise &&
+          e.hasNoise &&
+          e.message.trim().split('\n').length == e.noiseLines) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  List<String> dump() => _entries.map((e) => e.raw).toList();
 
   /// 清空内存日志，同时清掉当天落盘文件（否则重启又回读回来了）。
   void clear() {

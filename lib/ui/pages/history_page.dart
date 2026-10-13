@@ -4,6 +4,7 @@ import 'package:flutter_miuix/miuix.dart';
 import '../../data/history_store.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
 
@@ -21,30 +22,22 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   Widget build(BuildContext context) {
     final recent = HistoryStore.playHistory();
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      topBar: MiuixTopAppBar(
-        title: '播放历史',
-        titleColor: AppColors.skyBlue,
-        color: Colors.transparent,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Icon(Icons.arrow_back_ios_new_rounded,
-              color: AppColors.textPrimary, size: 20),
-        ),
-        actions: [
-          if (recent.isNotEmpty)
-            MiuixTextButton(
-              '清空',
-              onPressed: () {
-                HistoryStore.clearPlay();
-                _refresh();
-              },
-              textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
-            ),
-        ],
-      ),
-      content: (padding) => recent.isEmpty
+    return PageScaffold(
+      title: '播放历史',
+      snackbarHost: appSnackbarHostState,
+      contentPadding: EdgeInsets.zero,
+      actions: [
+        if (recent.isNotEmpty)
+          MiuixTextButton(
+            '清空',
+            onPressed: () {
+              HistoryStore.clearPlay();
+              _refresh();
+            },
+            textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
+          ),
+      ],
+      child: recent.isEmpty
           ? Center(
               child: Text(
                 '暂无播放记录\n去搜索页听一首歌吧',

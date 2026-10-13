@@ -315,7 +315,7 @@ class _SearchHomeState extends State<SearchHome> {
               ),
               Padding(
                 padding: const EdgeInsets.all(20),
-                child: MiuixTextField(
+                child: AppTextField(
                   controller: _controller,
                   label: _source == Source.qq
                       ? '搜索 QQ 音乐曲库…'
@@ -331,7 +331,6 @@ class _SearchHomeState extends State<SearchHome> {
                     }
                     setState(() {});
                   },
-                  cursorColor: sourceColor,
                   textStyle: TextStyle(
                       color: AppColors.textPrimary, fontSize: 15),
                   leadingIcon: Icon(Icons.search_rounded,

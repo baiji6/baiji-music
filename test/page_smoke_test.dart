@@ -195,4 +195,43 @@ void main() {
       expect(find.byType(TextField), findsOneWidget);
     });
   });
+
+  // v2.2.8 #64 回归：子页面曾因零背景绘制透出设备黑窗口（Android
+  // values-night NormalTheme），与白色主界面割裂；PageScaffold 统一补
+  // NebulaBackground 后，亮色系统下每个子页面都必须画出亮色底。
+  group('子页面背景统一（#64 回归：白底 + 跟随系统主题）', () {
+    testWidgets('亮色系统下子页面均绘制 NebulaBackground 且 palette 为亮色',
+        (tester) async {
+      tester.platformDispatcher.platformBrightnessTestValue = Brightness.light;
+      addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+      // 模拟根组件把系统亮度写进全局令牌
+      AppColors.setBrightness(Brightness.light);
+      addTearDown(() => AppColors.setBrightness(Brightness.dark));
+
+      const pages = <Widget>[
+        SettingsPage(),
+        AboutPage(),
+        ToolboxPage(),
+        LogPage(),
+        DecryptPage(),
+        DecryptKeysPage(),
+        PlayerPage(),
+      ];
+      for (final page in pages) {
+        final e = await pumpAndCatch(tester, page);
+        final s = e?.toString() ?? '';
+        final subpixelOverflow = s.contains('RenderFlex overflowed by 0.8');
+        expect(e == null || subpixelOverflow, isTrue,
+            reason: '${page.runtimeType} build 抛异常: $e');
+        expect(find.byType(NebulaBackground), findsWidgets,
+            reason: '${page.runtimeType} 缺少统一星云背景（会透出黑色窗口）');
+      }
+
+      // palette 跟随系统亮度：亮色下 bg1 应为近白
+      expect(AppColors.isDark, isFalse);
+      final bg = AppColors.bg1;
+      expect((bg.r + bg.g + bg.b) / 3, greaterThan(0.8),
+          reason: '亮色 palette 的 bg1 应为近白，实际: $bg');
+    });
+  });
 }

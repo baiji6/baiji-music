@@ -323,6 +323,196 @@ class SectionHeader extends StatelessWidget {
   }
 }
 
+/// 子页面统一骨架：星云背景 + Miuix 大标题顶栏 + 正确的内容缩进。
+///
+/// v2.2.8 之前每个子页面各写一遍 `MiuixScaffold`，两个共性缺陷：
+///
+/// 1. **不画背景**：`containerColor: Colors.transparent` 且内容里没有
+///    [NebulaBackground]，整页直接透出设备窗口底色——Android 深色模式下
+///    窗口是纯黑（values-night NormalTheme），于是出现「主界面白的、
+///    设置/关于/工具箱/日志全黑」的割裂观感（玻璃卡是 65% 白叠黑底，
+///    变成一格格灰方块）。这里统一补上和主界面同款的星云底。
+/// 2. **顶栏压内容**：内容构建器全部忽略脚手架回传的 [padding]，
+///    硬编码 `top: 8`，大标题与首张卡片重叠、首行点不到。这里统一把
+///    `padding.top / padding.bottom` 应用上。
+///
+/// 用法：把原来 `MiuixScaffold` 的 `topBar` / `content` 换成本组件，
+/// [child] 传滚动体（ListView / SingleChildScrollView），左右下边距用
+/// [contentPadding] 控制，顶/底边距由脚手架回传值自动叠加。
+///
+/// 全出血页面（播放页）传 [showTopBar] = false：不画顶栏、不套内容
+/// Padding，窗口 inset 由页面自绘的 SafeArea 管理。
+class PageScaffold extends StatelessWidget {
+  const PageScaffold({
+    super.key,
+    this.title,
+    required this.child,
+    this.onBack,
+    this.actions,
+    this.snackbarHost,
+    this.bottomBar,
+    this.floatingActionButton,
+    this.contentPadding = const EdgeInsets.fromLTRB(20, 4, 20, 24),
+    this.largeTitle = true,
+    this.showTopBar = true,
+  });
+
+  /// 页面标题；[showTopBar] 为 false 时忽略（全出血页面自绘顶栏）。
+  final String? title;
+
+  /// 页面滚动体（ListView / SingleChildScrollView / Column）。
+  final Widget child;
+
+  /// 返回回调；null = 默认 Navigator.pop。
+  final VoidCallback? onBack;
+
+  /// 顶栏右侧动作（MiuixIconButton 等）。
+  final List<Widget>? actions;
+
+  final MiuixSnackbarHostState? snackbarHost;
+  final Widget? bottomBar;
+  final Widget? floatingActionButton;
+
+  /// 内容左右 / 上下（顶栏下方）边距；顶栏与系统底栏的高度由脚手架自动叠加。
+  final EdgeInsets contentPadding;
+
+  final bool largeTitle;
+
+  /// 是否显示统一顶栏；false 用于播放页等自绘顶栏的全出血页面。
+  final bool showTopBar;
+
+  @override
+  Widget build(BuildContext context) {
+    return MiuixScaffold(
+      containerColor: Colors.transparent,
+      snackbarHost: snackbarHost != null
+          ? MiuixSnackbarHost(state: snackbarHost!)
+          : null,
+      bottomBar: bottomBar,
+      floatingActionButton: floatingActionButton,
+      topBar: showTopBar
+          ? MiuixTopAppBar(
+              title: title ?? '',
+              titleColor: AppColors.skyBlue,
+              color: Colors.transparent,
+              largeTitle: largeTitle ? null : '',
+              navigationIcon: MiuixIconButton(
+                onPressed: onBack ?? () => Navigator.of(context).pop(),
+                child: Icon(Icons.arrow_back_rounded,
+                    color: AppColors.textPrimary, size: 22),
+              ),
+              actions: actions,
+            )
+          : null,
+      content: showTopBar
+          ? (padding) => NebulaBackground(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  contentPadding.left,
+                  padding.top + contentPadding.top,
+                  contentPadding.right,
+                  padding.bottom + contentPadding.bottom,
+                ),
+                child: child,
+              ),
+            )
+          : (_) => NebulaBackground(child: child),
+    );
+  }
+}
+
+/// 全 App 统一输入框。
+///
+/// v2.2.8 之前各页面输入框风格五花八门：搜索页/本地音乐是裸
+/// [MiuixTextField]（默认底色与主题不搭），关于页密码框是手搓的
+/// `Container + TextField`，密钥页 6 处又各写一遍。这里收口成一个组件：
+/// 玻璃底 + 主题描边 + 统一文字/光标/标签色，保留 Miuix 浮动标签交互。
+class AppTextField extends StatelessWidget {
+  const AppTextField({
+    super.key,
+    this.controller,
+    this.focusNode,
+    this.onChanged,
+    this.onSubmitted,
+    this.label = '',
+    this.useLabelAsPlaceholder = false,
+    this.enabled = true,
+    this.readOnly = false,
+    this.textStyle,
+    this.leadingIcon,
+    this.trailingIcon,
+    this.singleLine = false,
+    this.maxLines,
+    this.minLines,
+    this.keyboardType,
+    this.textInputAction,
+    this.obscureText = false,
+    this.autofocus = false,
+    this.textCapitalization = TextCapitalization.none,
+    this.cornerRadius = 14,
+    this.insideMargin =
+        const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+  });
+
+  final TextEditingController? controller;
+  final FocusNode? focusNode;
+  final ValueChanged<String>? onChanged;
+  final ValueChanged<String>? onSubmitted;
+
+  /// 浮动标签文案（[useLabelAsPlaceholder] = true 时兼作占位符）。
+  final String label;
+  final bool useLabelAsPlaceholder;
+  final bool enabled;
+  final bool readOnly;
+  final TextStyle? textStyle;
+  final Widget? leadingIcon;
+  final Widget? trailingIcon;
+  final bool singleLine;
+  final int? maxLines;
+  final int? minLines;
+  final TextInputType? keyboardType;
+  final TextInputAction? textInputAction;
+  final bool obscureText;
+  final bool autofocus;
+  final TextCapitalization textCapitalization;
+  final double cornerRadius;
+  final EdgeInsets insideMargin;
+
+  @override
+  Widget build(BuildContext context) {
+    return MiuixTextField(
+      controller: controller,
+      focusNode: focusNode,
+      onChanged: onChanged,
+      onSubmitted: onSubmitted,
+      label: label,
+      useLabelAsPlaceholder: useLabelAsPlaceholder,
+      enabled: enabled,
+      readOnly: readOnly,
+      singleLine: singleLine,
+      maxLines: maxLines,
+      minLines: minLines,
+      keyboardType: keyboardType,
+      textInputAction: textInputAction,
+      obscureText: obscureText,
+      autofocus: autofocus,
+      textCapitalization: textCapitalization,
+      cornerRadius: cornerRadius,
+      insideMargin: insideMargin,
+      leadingIcon: leadingIcon,
+      trailingIcon: trailingIcon,
+      cursorColor: AppColors.accent,
+      textStyle: textStyle ??
+          TextStyle(fontSize: 13.5, color: AppColors.textPrimary),
+      colors: MiuixTextFieldColors(
+        backgroundColor: AppColors.surfaceGlass,
+        labelColor: AppColors.textTertiary,
+        borderColor: AppColors.strokeGlass,
+      ),
+    );
+  }
+}
+
 /// 幽灵徽章（来源标签：QQ / 网易云 / 无损 等）。
 class TagBadge extends StatelessWidget {
   const TagBadge(this.text, {super.key, this.color = AppColors.cyan, this.opacity = 0.16});

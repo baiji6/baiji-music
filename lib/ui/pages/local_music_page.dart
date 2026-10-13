@@ -86,6 +86,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     setState(() {
       _sortKey = key;
       if (desc != null) _sortDesc = desc;
+      _invalidateView();
     });
     try {
       final kv = KvStore.instance;
@@ -97,12 +98,25 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   /// 当前真正要渲染的列表：原始库 → 过滤 → 排序。
   ///
   /// 播放队列也用它，保证 `startIndex` 与屏幕上的行号一致。
-  List<Song> get _view => LocalSongQuery.apply(
-        _songs,
-        query: _query,
-        key: _sortKey,
-        desc: _sortDesc,
-      );
+  ///
+  /// 带 memoization：几千首歌的过滤+排序不该在每次 build 里重跑
+  /// （一次 build 会读它 3~4 次），输入框逐字符 setState 时尤其明显。
+  /// 只在「数据/查询/排序」变化时失效。
+  List<Song> get _view {
+    _viewCache ??= LocalSongQuery.apply(
+      _songs,
+      query: _query,
+      key: _sortKey,
+      desc: _sortDesc,
+    );
+    return _viewCache!;
+  }
+
+  List<Song>? _viewCache;
+
+  void _invalidateView() {
+    _viewCache = null;
+  }
 
   String get _sortLabel => '${_sortKey.label}${_sortDesc ? ' ↓' : ' ↑'}';
 
@@ -118,6 +132,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     setState(() {
       _songs = LocalMusicStore.songs();
       _customDirs = LocalMusicStore.customDirs();
+      _invalidateView();
     });
   }
 
@@ -150,9 +165,12 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
 
     // 移动端需要存储权限才能读到公共目录
     if (!await LocalScanner.ensurePermission()) {
+      // 权限弹窗停留期间用户可能已退出本页，setState 前必须判 mounted
+      if (!mounted) return;
       _flash('没有存储权限，无法扫描本地音乐', warn: true);
       return;
     }
+    if (!mounted) return;
 
     setState(() {
       _scanning = true;
@@ -163,6 +181,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     try {
       final dirs = await _dirs();
       if (dirs.isEmpty) {
+        if (!mounted) return;
         _flash('没有可扫描的目录，请手动添加一个', warn: true);
         setState(() => _scanning = false);
         return;
@@ -282,47 +301,42 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
         if (didPop) return;
         Navigator.of(context).pop(true);
       },
-      child: MiuixScaffold(
-        containerColor: Colors.transparent,
-        snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-        topBar: MiuixTopAppBar(
-          title: '本地音乐',
-          titleColor: AppColors.skyBlue,
-          navigationIcon: MiuixIconButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Icon(Icons.arrow_back_rounded,
+      child: PageScaffold(
+        title: '本地音乐',
+        snackbarHost: appSnackbarHostState,
+        // 内部各面板自带水平/垂直留白，脚手架只补顶栏高度与底部安全区
+        contentPadding: EdgeInsets.zero,
+        actions: [
+          MiuixIconButton(
+            onPressed: () {
+              if (_searchOpen) {
+                _searchCtrl.clear();
+                setState(() {
+                  _searchOpen = false;
+                  _query = '';
+                  _invalidateView();
+                });
+              } else {
+                setState(() => _searchOpen = true);
+              }
+            },
+            child: Icon(
+              _searchOpen ? Icons.search_off_rounded : Icons.search_rounded,
+              color: _searchOpen ? AppColors.accent : AppColors.textPrimary,
+            ),
+          ),
+          MiuixIconButton(
+            onPressed: () => setState(() => _showSortSheet = true),
+            child: Icon(Icons.swap_vert_rounded,
                 color: AppColors.textPrimary),
           ),
-          actions: [
-            MiuixIconButton(
-              onPressed: () {
-                if (_searchOpen) {
-                  _searchCtrl.clear();
-                  setState(() {
-                    _searchOpen = false;
-                    _query = '';
-                  });
-                } else {
-                  setState(() => _searchOpen = true);
-                }
-              },
-              child: Icon(
-                _searchOpen ? Icons.search_off_rounded : Icons.search_rounded,
-                color: _searchOpen ? AppColors.accent : AppColors.textPrimary,
-              ),
-            ),
-            MiuixIconButton(
-              onPressed: () => setState(() => _showSortSheet = true),
-              child: Icon(Icons.swap_vert_rounded,
-                  color: AppColors.textPrimary),
-            ),
-            MiuixIconButton(
-              onPressed: _scanning ? null : () => _scan(),
-              child: Icon(Icons.refresh_rounded, color: AppColors.accent),
-            ),
-          ],
-        ),
-        content: (padding) => Column(
+          MiuixIconButton(
+            onPressed: _scanning ? null : () => _scan(),
+            child: Icon(Icons.refresh_rounded, color: AppColors.accent),
+          ),
+        ],
+        bottomBar: _buildSheets(),
+        child: Column(
           children: [
             // 扫描进度条
             if (_scanning)
@@ -376,7 +390,6 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
             Expanded(child: _buildBody(current)),
           ],
         ),
-        bottomBar: _buildSheets(),
       ),
     );
   }
@@ -384,14 +397,13 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   Widget _buildSearchBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
-      child: MiuixTextField(
+      child: AppTextField(
         controller: _searchCtrl,
         autofocus: true,
         label: '搜索歌名 / 歌手 / 专辑',
         useLabelAsPlaceholder: true,
         singleLine: true,
         textInputAction: TextInputAction.search,
-        cursorColor: AppColors.accent,
         textStyle: const TextStyle(fontSize: 13),
         trailingIcon: _query.isNotEmpty
             ? MiuixIconButton(
@@ -403,7 +415,10 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                     size: 16, color: AppColors.textTertiary),
               )
             : null,
-        onChanged: (v) => setState(() => _query = v),
+        onChanged: (v) {
+          _invalidateView();
+          setState(() => _query = v);
+        },
       ),
     );
   }
@@ -556,7 +571,10 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                   '清空搜索',
                   onPressed: () {
                     _searchCtrl.clear();
-                    setState(() => _query = '');
+                    setState(() {
+                      _query = '';
+                      _invalidateView();
+                    });
                   },
                   textStyle: TextStyle(
                       fontSize: 12, color: AppColors.accent),

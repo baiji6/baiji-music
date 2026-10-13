@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -8,11 +9,19 @@ import '../../core/app_logger.dart';
 import '../../core/cache_manager.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
+import '../widgets/app_widgets.dart';
 
-/// 日志与调试页：展示应用运行日志，支持六级分级过滤与导出。
+/// 日志与调试页：展示应用运行日志，支持六级分级过滤 + 关键词搜索 +
+/// 崩溃转储折叠 + 单条复制 + 导出。
 ///
-/// v2.2.7 重新设计：每条日志一张「条目卡」（级别色条 + 时间 + 徽章 + tag +
-/// 消息），长 stack dump 默认折叠，错误不再刷屏；视觉与设置页统一。
+/// v2.2.8 重构：
+/// 1. 脚手架切到 [PageScaffold]——修掉子页面透出黑色窗口、大标题压内容
+///    两个老毛病（与设置/关于等页同一套骨架）；
+/// 2. 日志模型升级为结构化 [LogEntry]（`AppLog.snapshot` 负责过滤），
+///    不再每次重建都对全量文本跑正则；
+/// 3. 新增关键词搜索框与「隐藏纯转储」开关——release 下 VM isolate dump
+///    动辄几百行 `#NN abs`，默认折叠成摘要，不再刷屏；
+/// 4. 单条复制——报 bug 时可以直接贴出某一行。
 class LogPage extends StatefulWidget {
   const LogPage({super.key});
 
@@ -23,10 +32,30 @@ class LogPage extends StatefulWidget {
 class _LogPageState extends State<LogPage> {
   bool _exporting = false;
   String _filterLevel = AppLog.info;
-  final List<String> _levels = [AppLog.trace, AppLog.debug, AppLog.info, AppLog.warn, AppLog.error, AppLog.fatal];
+  final List<String> _levels = [
+    AppLog.trace,
+    AppLog.debug,
+    AppLog.info,
+    AppLog.warn,
+    AppLog.error,
+    AppLog.fatal,
+  ];
 
-  /// 单条日志超过这个长度就把 stack dump 折叠起来（release 下 VM dump 极长）。
+  /// 关键词搜索（对 tag / 消息做不区分大小写子串匹配）。
+  final _searchController = TextEditingController();
+  String _keyword = '';
+
+  /// 隐藏「整条都是崩溃转储」的条目（有正文的条目保留，转储由卡片折叠）。
+  bool _hideNoise = false;
+
+  /// 单条日志超过这个长度就把尾部折叠起来。
   static const int _collapseAt = 140;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   Future<void> _exportLogs() async {
     setState(() => _exporting = true);
@@ -47,7 +76,7 @@ class _LogPageState extends State<LogPage> {
         subject: 'baiji_music_logs.txt',
       );
     } catch (e) {
-      // 这里 await 过了，context 可能已经失效——和 finally 一样要先判mounted
+      // 这里 await 过了，context 可能已经失效——和 finally 一样要先判 mounted
       if (!mounted) return;
       showAppSnack('导出失败: $e');
     } finally {
@@ -74,85 +103,84 @@ class _LogPageState extends State<LogPage> {
     }
   }
 
-  /// 从日志行文本中提取级别，格式: "MM-DD HH:MM:SS.mmm LEVEL/tag ..."
-  String _extractLevel(String line) {
-    final match = RegExp(r'\d{2}:\d{2}:\d{2}\.\d{3}\s+([A-Z]+)/').firstMatch(line);
-    return match?.group(1) ?? AppLog.info;
-  }
-
-  /// 从日志行提取时间部分 "MM-DD HH:MM:SS.mmm"（截到秒，卡片上好读）。
-  String _extractTime(String line) {
-    final match = RegExp(r'(\d{2}-\d{2} \d{2}:\d{2}:\d{2})').firstMatch(line);
-    return match?.group(1) ?? '';
-  }
-
-  /// 从日志行提取 tag（LEVEL/ 之后、空格之前）。
-  String _extractTag(String line) {
-    final match = RegExp(r'\d{2}:\d{2}:\d{2}\.\d{3}\s+[A-Z]+/(\S+)').firstMatch(line);
-    return match?.group(1) ?? '';
-  }
-
-  /// 消息正文（去掉时间戳与 LEVEL/tag 前缀）。
-  String _extractMessage(String line) {
-    final match = RegExp(r'^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s+[A-Z]+/\S+\s*').firstMatch(line);
-    return match == null ? line : line.substring(match.end);
-  }
-
-  int _levelIndex(String level) => _levels.indexOf(level);
-
   @override
   Widget build(BuildContext context) {
-    final allLogs = AppLog.instance.dump();
-    final filterIdx = _levelIndex(_filterLevel);
-    final logs = allLogs.where((e) {
-      final level = _extractLevel(e);
-      return _levelIndex(level) >= filterIdx;
-    }).toList();
+    final all = AppLog.instance.snapshot(
+      minLevel: AppLog.trace,
+      hideNoise: false,
+    );
+    final logs = AppLog.instance.snapshot(
+      minLevel: _filterLevel,
+      keyword: _keyword,
+      hideNoise: _hideNoise,
+    );
 
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: '运行日志',
-        titleColor: AppColors.skyBlue,
-        color: Colors.transparent,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Icon(Icons.arrow_back_ios_new_rounded,
-              color: AppColors.textPrimary, size: 20),
+    return PageScaffold(
+      title: '运行日志',
+      snackbarHost: appSnackbarHostState,
+      // 内部各栏自带水平留白，脚手架只补顶栏高度
+      contentPadding: EdgeInsets.zero,
+      actions: [
+        MiuixTextButton(
+          '清空',
+          onPressed: () {
+            AppLog.instance.clear();
+            showAppSnack('日志已清空（含当天落盘文件）');
+            setState(() {});
+          },
+          textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
         ),
-        actions: [
-          MiuixTextButton(
-            '清空',
-            onPressed: () {
-              AppLog.instance.clear();
-              showAppSnack('日志已清空（含当天落盘文件）');
-              setState(() {});
-            },
-            textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
-          ),
-          if (allLogs.isNotEmpty)
-            if (_exporting)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-                child: MiuixCircularProgressIndicator(size: 16, strokeWidth: 2),
-              )
-            else
-              MiuixTextButton(
-                '导出',
-                onPressed: _exportLogs,
-                textStyle: TextStyle(color: AppColors.accent, fontSize: 13),
-              ),
-        ],
-      ),
-      content: (padding) => Column(
+        if (all.isNotEmpty)
+          if (_exporting)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+              child: MiuixCircularProgressIndicator(size: 16, strokeWidth: 2),
+            )
+          else
+            MiuixTextButton(
+              '导出',
+              onPressed: _exportLogs,
+              textStyle: TextStyle(color: AppColors.accent, fontSize: 13),
+            ),
+      ],
+      child: Column(
         children: [
+          // 关键词搜索
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: AppTextField(
+              controller: _searchController,
+              label: '搜索 tag 或消息内容',
+              useLabelAsPlaceholder: true,
+              singleLine: true,
+              textInputAction: TextInputAction.search,
+              leadingIcon: Icon(
+                Icons.search_rounded,
+                size: 18,
+                color: AppColors.textTertiary,
+              ),
+              trailingIcon: _keyword.isEmpty
+                  ? null
+                  : MiuixIconButton(
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() => _keyword = '');
+                      },
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+              onChanged: (v) => setState(() => _keyword = v),
+            ),
+          ),
           // 级别过滤栏
-          Container(
-            height: 44,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+          SizedBox(
+            height: 40,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               itemCount: _levels.length,
               itemBuilder: (ctx, i) {
                 final level = _levels[i];
@@ -163,20 +191,31 @@ class _LogPageState extends State<LogPage> {
                     onPressed: () => setState(() => _filterLevel = level),
                     borderRadius: BorderRadius.circular(16),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
-                        color: active ? _levelColor(level).withValues(alpha: 0.2) : AppColors.surfaceGlass,
+                        color: active
+                            ? _levelColor(level).withValues(alpha: 0.2)
+                            : AppColors.surfaceGlass,
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
-                          color: active ? _levelColor(level) : AppColors.strokeGlass,
+                          color: active
+                              ? _levelColor(level)
+                              : AppColors.strokeGlass,
                         ),
                       ),
                       child: Text(
                         level,
                         style: TextStyle(
                           fontSize: 11,
-                          fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                          color: active ? _levelColor(level) : AppColors.textTertiary,
+                          fontWeight: active
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                          color: active
+                              ? _levelColor(level)
+                              : AppColors.textTertiary,
                         ),
                       ),
                     ),
@@ -185,19 +224,25 @@ class _LogPageState extends State<LogPage> {
               },
             ),
           ),
-          // 统计条
+          // 统计 + 转储隐藏开关
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            padding: const EdgeInsets.fromLTRB(16, 6, 8, 2),
             child: Row(
               children: [
                 Text(
-                  '显示 ${logs.length} / 共 ${allLogs.length} 条',
+                  '显示 ${logs.length} / 共 ${all.length} 条',
                   style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
                 ),
                 const Spacer(),
-                Text(
-                  '当前过滤: ≥ $_filterLevel',
-                  style: TextStyle(fontSize: 11, color: _levelColor(_filterLevel)),
+                MiuixTextButton(
+                  _hideNoise ? '显示转储' : '隐藏转储',
+                  onPressed: () => setState(() => _hideNoise = !_hideNoise),
+                  textStyle: TextStyle(
+                    fontSize: 11,
+                    color: _hideNoise
+                        ? AppColors.accent
+                        : AppColors.textTertiary,
+                  ),
                 ),
               ],
             ),
@@ -207,17 +252,21 @@ class _LogPageState extends State<LogPage> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
             child: Row(
               children: [
-                Icon(Icons.save_rounded,
-                    size: 12, color: AppColors.textTertiary.withValues(alpha: 0.7)),
+                Icon(
+                  Icons.save_rounded,
+                  size: 12,
+                  color: AppColors.textTertiary.withValues(alpha: 0.7),
+                ),
                 const SizedBox(width: 5),
                 Expanded(
                   child: Text(
                     '日志按天保存在本地（保留 7 天），重启不会丢失；'
                     '发生闪退后重新打开此页即可查看崩前记录',
                     style: TextStyle(
-                        fontSize: 10,
-                        height: 1.4,
-                        color: AppColors.textTertiary.withValues(alpha: 0.7)),
+                      fontSize: 10,
+                      height: 1.4,
+                      color: AppColors.textTertiary.withValues(alpha: 0.7),
+                    ),
                   ),
                 ),
               ],
@@ -229,8 +278,11 @@ class _LogPageState extends State<LogPage> {
             child: logs.isEmpty
                 ? Center(
                     child: Text(
-                      '该级别暂无日志',
-                      style: TextStyle(color: AppColors.textTertiary, fontSize: 13),
+                      _keyword.isEmpty ? '该级别暂无日志' : '没有匹配「$_keyword」的日志',
+                      style: TextStyle(
+                        color: AppColors.textTertiary,
+                        fontSize: 13,
+                      ),
                     ),
                   )
                 : ListView.builder(
@@ -241,11 +293,7 @@ class _LogPageState extends State<LogPage> {
                       final entry = logs[logs.length - 1 - i];
                       return _LogEntryCard(
                         entry: entry,
-                        level: _extractLevel(entry),
-                        time: _extractTime(entry),
-                        tag: _extractTag(entry),
-                        message: _extractMessage(entry),
-                        color: _levelColor(_extractLevel(entry)),
+                        color: _levelColor(entry.level),
                         collapseAt: _collapseAt,
                       );
                     },
@@ -257,26 +305,19 @@ class _LogPageState extends State<LogPage> {
   }
 }
 
-/// 单条日志卡片：左侧级别色条 + 时间/徽章行 + 消息正文。
+/// 单条日志卡片：级别色条 + 时间/徽章/tag + 消息正文 + 转储折叠 + 复制。
 ///
-/// release 下 VM isolate dump 极长（`*** *** ***` + 几百个 `#NN abs …`），
-/// 默认折叠，点「展开」才看全文——否则一屏全是十六进制地址。
+/// release 下 VM isolate dump 极长（`*** *** ***` + 几百个 `#NN abs …`）：
+/// 含转储的条目默认把噪声行折叠成一行摘要，点「展开转储」才看全文——
+/// 否则一屏全是十六进制地址。点击复制图标把整条 raw 写进剪贴板。
 class _LogEntryCard extends StatefulWidget {
   const _LogEntryCard({
     required this.entry,
-    required this.level,
-    required this.time,
-    required this.tag,
-    required this.message,
     required this.color,
     required this.collapseAt,
   });
 
-  final String entry;
-  final String level;
-  final String time;
-  final String tag;
-  final String message;
+  final LogEntry entry;
   final Color color;
   final int collapseAt;
 
@@ -287,13 +328,48 @@ class _LogEntryCard extends StatefulWidget {
 class _LogEntryCardState extends State<_LogEntryCard> {
   bool _expanded = false;
 
+  /// 折叠视图：去掉崩溃转储噪声行后的正文（首几行 + 摘要）。
+  ({String text, bool truncated}) get _shown {
+    final msg = widget.entry.message;
+    if (widget.entry.hasNoise && !_expanded) {
+      final lines = msg.split('\n');
+      final body = lines
+          .where((l) => l.trim().isNotEmpty && !AppLog.isNoiseLine(l))
+          .toList();
+      final head = body.take(3).join('\n');
+      final hidden = lines.length - body.length;
+      return (
+        text: hidden > 0 ? '$head\n……（已折叠 $hidden 行系统转储，点「展开转储」查看）' : head,
+        truncated: hidden > 0,
+      );
+    }
+    final long = msg.length > widget.collapseAt;
+    if (long && !_expanded) {
+      return (
+        text: '${msg.substring(0, widget.collapseAt).trimRight()}…',
+        truncated: true,
+      );
+    }
+    return (text: msg, truncated: false);
+  }
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.entry.raw));
+    if (!mounted) return;
+    showAppSnack('已复制该条日志');
+  }
+
   @override
   Widget build(BuildContext context) {
-    final long = widget.message.length > widget.collapseAt;
-    final shown = (long && !_expanded)
-        ? '${widget.message.substring(0, widget.collapseAt).trimRight()}…'
-        : widget.message;
-    final isSevere = widget.level == AppLog.error || widget.level == AppLog.fatal;
+    final entry = widget.entry;
+    final shown = _shown;
+    final isSevere = entry.level == AppLog.error || entry.level == AppLog.fatal;
+    final time = entry.time;
+
+    String two(int v) => v.toString().padLeft(2, '0');
+    final timeText =
+        '${two(time.month)}-${two(time.day)} '
+        '${two(time.hour)}:${two(time.minute)}:${two(time.second)}';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -315,7 +391,9 @@ class _LogEntryCardState extends State<_LogEntryCard> {
               width: 3,
               decoration: BoxDecoration(
                 color: widget.color,
-                borderRadius: const BorderRadius.horizontal(left: Radius.circular(11)),
+                borderRadius: const BorderRadius.horizontal(
+                  left: Radius.circular(11),
+                ),
               ),
             ),
             Expanded(
@@ -326,25 +404,27 @@ class _LogEntryCardState extends State<_LogEntryCard> {
                   children: [
                     Row(
                       children: [
-                        if (widget.time.isNotEmpty)
-                          Text(
-                            widget.time,
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: AppColors.textTertiary,
-                              fontFamily: 'monospace',
-                            ),
+                        Text(
+                          timeText,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: AppColors.textTertiary,
+                            fontFamily: 'monospace',
                           ),
+                        ),
                         const SizedBox(width: 6),
                         // 级别徽章
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 1,
+                          ),
                           decoration: BoxDecoration(
                             color: widget.color.withValues(alpha: 0.16),
                             borderRadius: BorderRadius.circular(5),
                           ),
                           child: Text(
-                            widget.level,
+                            entry.level,
                             style: TextStyle(
                               fontSize: 9,
                               fontWeight: FontWeight.w700,
@@ -352,11 +432,11 @@ class _LogEntryCardState extends State<_LogEntryCard> {
                             ),
                           ),
                         ),
-                        if (widget.tag.isNotEmpty) ...[
+                        if (entry.tag.isNotEmpty) ...[
                           const SizedBox(width: 6),
                           Flexible(
                             child: Text(
-                              widget.tag,
+                              entry.tag,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
@@ -366,26 +446,42 @@ class _LogEntryCardState extends State<_LogEntryCard> {
                             ),
                           ),
                         ],
+                        const Spacer(),
+                        // 复制按钮
+                        GestureDetector(
+                          onTap: _copy,
+                          behavior: HitTestBehavior.opaque,
+                          child: Padding(
+                            padding: const EdgeInsets.all(4),
+                            child: Icon(
+                              Icons.copy_rounded,
+                              size: 13,
+                              color: AppColors.textTertiary,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 4),
                     SelectableText(
-                      shown,
+                      shown.text,
                       style: TextStyle(
                         fontSize: 11,
                         height: 1.45,
-                        color: isSevere ? widget.color : AppColors.textSecondary,
+                        color: isSevere
+                            ? widget.color
+                            : AppColors.textSecondary,
                         fontFamily: 'monospace',
                       ),
                     ),
-                    if (long)
+                    if (shown.truncated)
                       GestureDetector(
                         onTap: () => setState(() => _expanded = !_expanded),
                         behavior: HitTestBehavior.opaque,
                         child: Padding(
                           padding: const EdgeInsets.only(top: 4),
                           child: Text(
-                            _expanded ? '收起' : '展开全文',
+                            _expanded ? '收起' : '展开转储',
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w600,

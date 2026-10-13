@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_logger.dart';
 import '../../network/music_api.dart';
@@ -55,81 +54,84 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: '网易云音乐登录',
-        titleColor: AppColors.skyBlue,
-        color: Colors.transparent,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.pop(context),
-          child: Icon(Icons.arrow_back_rounded,
-              color: AppColors.textPrimary),
-        ),
-      ),
-      content: (padding) => SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              GlassCard(
-                padding: const EdgeInsets.all(16),
-                glowColor: AppColors.magenta,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Cookie 登录',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+    return PageScaffold(
+      title: '网易云音乐登录',
+      snackbarHost: appSnackbarHostState,
+      // 水平/底部留白由内部 SingleChildScrollView 自管，脚手架只补顶栏高度
+      contentPadding: EdgeInsets.zero,
+      child: SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            GlassCard(
+              padding: const EdgeInsets.all(16),
+              glowColor: AppColors.magenta,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Cookie 登录',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '粘贴浏览器中 music.163.com 的 Cookie（需包含 MUSIC_U）',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textTertiary,
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '粘贴浏览器中 music.163.com 的 Cookie（需包含 MUSIC_U）',
-                      style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                  ),
+                  const SizedBox(height: 12),
+                  AppTextField(
+                    controller: _cookieController,
+                    label: 'MUSIC_U=xxx; ...',
+                    useLabelAsPlaceholder: true,
+                    minLines: 2,
+                    maxLines: 4,
+                    textStyle: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textPrimary,
                     ),
-                    const SizedBox(height: 12),
-                    MiuixTextField(
-                      controller: _cookieController,
-                      label: 'MUSIC_U=xxx; ...',
-                      useLabelAsPlaceholder: true,
-                      minLines: 2,
-                      maxLines: 4,
-                      cursorColor: AppColors.accentAlt,
-                      textStyle: TextStyle(
-                          fontSize: 12, color: AppColors.textPrimary),
+                    leadingIcon: Icon(
+                      Icons.cookie_outlined,
+                      size: 18,
+                      color: AppColors.textTertiary,
                     ),
-                    const SizedBox(height: 12),
-                    NeonButton(
-                      label: '网易云登录',
-                      icon: Icons.login_rounded,
-                      gradient: const [AppColors.magenta, AppColors.violet],
-                      onPressed: _busy ? null : _login,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  NeonButton(
+                    label: '网易云登录',
+                    icon: Icons.login_rounded,
+                    gradient: const [AppColors.magenta, AppColors.violet],
+                    onPressed: _busy ? null : _login,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceGlass,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceGlass,
-                        borderRadius: BorderRadius.circular(10),
+                    child: Text(
+                      '获取方法：\n'
+                      '1. 在浏览器中登录 music.163.com\n'
+                      '2. 按 F12 打开开发者工具 → Application/Storage → Cookies\n'
+                      '3. 复制包含 MUSIC_U 的整段 Cookie\n'
+                      '4. 粘贴到上方输入框',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppColors.textTertiary,
+                        height: 1.6,
                       ),
-                      child: Text(
-                        '获取方法：\n'
-                        '1. 在浏览器中登录 music.163.com\n'
-                        '2. 按 F12 打开开发者工具 → Application/Storage → Cookies\n'
-                        '3. 复制包含 MUSIC_U 的整段 Cookie\n'
-                        '4. 粘贴到上方输入框',
-                        style: TextStyle(fontSize: 11, color: AppColors.textTertiary, height: 1.6),
-                      ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

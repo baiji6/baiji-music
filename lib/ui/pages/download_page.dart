@@ -230,79 +230,72 @@ class _DownloadPageState extends State<DownloadPage> {
     final active = _tasks.where((t) => t.state.isActive).toList();
     final finished = _tasks.where((t) => t.state.isTerminal).toList();
 
-    return MiuixScaffold(
-      containerColor: Colors.transparent,
-      snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
-      topBar: MiuixTopAppBar(
-        title: '下载管理',
-        titleColor: AppColors.skyBlue,
-        navigationIcon: MiuixIconButton(
-          onPressed: () => Navigator.pop(context),
-          child: Icon(Icons.arrow_back_rounded,
-              color: AppColors.textPrimary),
-        ),
-        actions: [
-          if (finished.isNotEmpty)
-            MiuixIconButton(
-              onPressed: () {
-                final n = DownloadTaskRegistry.instance.clearFinished();
-                setState(() => _tasks = DownloadTaskRegistry.instance.tasks);
-                showAppSnack('已清除 $n 条记录（文件保留）');
-              },
-              child: Icon(Icons.playlist_remove_rounded,
-                  color: AppColors.textSecondary),
+    final body = _tasks.isEmpty
+        ? Center(
+            child: Text(
+              '暂无下载\n搜索歌曲后长按可下载',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textTertiary, fontSize: 13),
             ),
-          if (finished.isNotEmpty)
-            MiuixIconButton(
-              onPressed: _openClearAll,
-              child: Icon(Icons.delete_sweep_rounded,
-                  color: AppColors.danger),
-            ),
-        ],
-      ),
-      content: (padding) => _tasks.isEmpty
-          ? Center(
-              child: Text(
-                '暂无下载\n搜索歌曲后长按可下载',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textTertiary, fontSize: 13),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: _tasks.length,
-              itemBuilder: (ctx, i) {
-                final t = _tasks[i];
-                // 分组标题：进行中 / 已完成
-                final showHeader = i == 0 ||
-                    _tasks[i - 1].state.isActive != t.state.isActive;
-                final header = showHeader
-                    ? (t.state.isActive
-                        ? '进行中（${active.length}）'
-                        : '已完成（${finished.length}）')
-                    : null;
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (header != null)
-                      Padding(
-                        padding: EdgeInsets.only(
-                            top: i == 0 ? 0 : 14, bottom: 8, left: 4),
-                        child: Text(
-                          header,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textTertiary,
-                            fontWeight: FontWeight.w700,
-                          ),
+          )
+        : ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: _tasks.length,
+            itemBuilder: (ctx, i) {
+              final t = _tasks[i];
+              // 分组标题：进行中 / 已完成
+              final showHeader = i == 0 ||
+                  _tasks[i - 1].state.isActive != t.state.isActive;
+              final header = showHeader
+                  ? (t.state.isActive
+                      ? '进行中（${active.length}）'
+                      : '已完成（${finished.length}）')
+                  : null;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (header != null)
+                    Padding(
+                      padding: EdgeInsets.only(
+                          top: i == 0 ? 0 : 14, bottom: 8, left: 4),
+                      child: Text(
+                        header,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textTertiary,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                    _taskTile(t),
-                  ],
-                );
-              },
-            ),
+                    ),
+                  _taskTile(t),
+                ],
+              );
+            },
+          );
+
+    return PageScaffold(
+      title: '下载管理',
+      snackbarHost: appSnackbarHostState,
+      contentPadding: EdgeInsets.zero,
+      actions: [
+        if (finished.isNotEmpty)
+          MiuixIconButton(
+            onPressed: () {
+              final n = DownloadTaskRegistry.instance.clearFinished();
+              setState(() => _tasks = DownloadTaskRegistry.instance.tasks);
+              showAppSnack('已清除 $n 条记录（文件保留）');
+            },
+            child: Icon(Icons.playlist_remove_rounded,
+                color: AppColors.textSecondary),
+          ),
+        if (finished.isNotEmpty)
+          MiuixIconButton(
+            onPressed: _openClearAll,
+            child: Icon(Icons.delete_sweep_rounded, color: AppColors.danger),
+          ),
+      ],
       bottomBar: _buildDialogs(),
+      child: body,
     );
   }
 

@@ -43,3 +43,14 @@
 # ---- 资源混淆保护：Material 组件 / 系统主题资源名 keep 由 androidResources.keepNames 处理 ----
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
+# ---- R8 fullMode 附加保留 ----
+# 泛型签名 / 内部类 / 外部类引用：反射与 Gson 需要（fullMode 下默认剥离，
+# 缺失时泛型集合反序列化会退化成原始类型）。
+-keepattributes Signature,InnerClasses,EnclosingMethod
+# 注解：kotlin.Metadata 已在上方 keep 成员级保留；这里再保留运行时可见注解，
+# 防止 fullMode 把插件/AAR 依赖的运行时注解类优化掉。
+-keepattributes RuntimeVisible*Annotations,RuntimeVisibleParameterAnnotations
+# 原生方法名必须原样保留（JNI 按名查找）——fullMode 下额外兜底。
+-keepclasseswithmembernames,includedescriptorclasses class * {
+    native <methods>;
+}
