@@ -287,9 +287,10 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
         snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
         topBar: MiuixTopAppBar(
           title: '本地音乐',
+          titleColor: AppColors.skyBlue,
           navigationIcon: MiuixIconButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Icon(Icons.arrow_back_rounded,
+            child: Icon(Icons.arrow_back_rounded,
                 color: AppColors.textPrimary),
           ),
           actions: [
@@ -307,17 +308,17 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
               },
               child: Icon(
                 _searchOpen ? Icons.search_off_rounded : Icons.search_rounded,
-                color: _searchOpen ? AppColors.cyan : AppColors.textPrimary,
+                color: _searchOpen ? AppColors.accent : AppColors.textPrimary,
               ),
             ),
             MiuixIconButton(
               onPressed: () => setState(() => _showSortSheet = true),
-              child: const Icon(Icons.swap_vert_rounded,
+              child: Icon(Icons.swap_vert_rounded,
                   color: AppColors.textPrimary),
             ),
             MiuixIconButton(
               onPressed: _scanning ? null : () => _scan(),
-              child: const Icon(Icons.refresh_rounded, color: AppColors.cyan),
+              child: Icon(Icons.refresh_rounded, color: AppColors.accent),
             ),
           ],
         ),
@@ -349,7 +350,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                             : Icons.library_music_outlined,
                     size: 14,
                     color: _hintWarn
-                        ? AppColors.magenta
+                        ? AppColors.accentAlt
                         : AppColors.textTertiary,
                   ),
                   const SizedBox(width: 6),
@@ -362,7 +363,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                               : _countLine(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
                         color: AppColors.textTertiary,
                       ),
@@ -390,7 +391,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
         useLabelAsPlaceholder: true,
         singleLine: true,
         textInputAction: TextInputAction.search,
-        cursorColor: AppColors.cyan,
+        cursorColor: AppColors.accent,
         textStyle: const TextStyle(fontSize: 13),
         trailingIcon: _query.isNotEmpty
             ? MiuixIconButton(
@@ -398,7 +399,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                   _searchCtrl.clear();
                   setState(() => _query = '');
                 },
-                child: const Icon(Icons.close_rounded,
+                child: Icon(Icons.close_rounded,
                     size: 16, color: AppColors.textTertiary),
               )
             : null,
@@ -425,13 +426,13 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                 MiuixTextButton(
                   '添加目录',
                   onPressed: _pickDir,
-                  textStyle: const TextStyle(
-                      fontSize: 12, color: AppColors.cyan),
+                  textStyle: TextStyle(
+                      fontSize: 12, color: AppColors.accent),
                 ),
               ],
             ),
             if (_customDirs.isEmpty)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 4, bottom: 4),
                 child: Text(
                   '只扫描系统音乐目录。添加自定义目录后会自动重新扫描。',
@@ -444,15 +445,15 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                   padding: const EdgeInsets.only(top: 6),
                   child: Row(
                     children: [
-                      const Icon(Icons.folder_rounded,
-                          size: 15, color: AppColors.cyan),
+                      Icon(Icons.folder_rounded,
+                          size: 15, color: AppColors.accent),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           d,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
                             color: AppColors.textSecondary,
                           ),
@@ -460,7 +461,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                       ),
                       MiuixIconButton(
                         onPressed: () => _removeDir(d),
-                        child: const Icon(Icons.close_rounded,
+                        child: Icon(Icons.close_rounded,
                             size: 16, color: AppColors.textTertiary),
                       ),
                     ],
@@ -474,7 +475,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
 
   Widget _buildBody(Song? current) {
     if (_scanning && _songs.isEmpty) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -496,7 +497,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.library_music_outlined,
+              Icon(Icons.library_music_outlined,
                   size: 52, color: AppColors.textTertiary),
               const SizedBox(height: 16),
               const Text(
@@ -504,7 +505,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 '扫描本机上的 MP3 / FLAC / M4A / OGG / WAV 文件，\n自动识别标题、艺术家、专辑与时长',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
@@ -522,8 +523,8 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                 MiuixTextButton(
                   '扫描系统音乐目录',
                   onPressed: () => _scan(force: true),
-                  textStyle: const TextStyle(
-                      fontSize: 12, color: AppColors.cyan),
+                  textStyle: TextStyle(
+                      fontSize: 12, color: AppColors.accent),
                 ),
               ],
             ],
@@ -542,13 +543,13 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.search_off_rounded,
+                Icon(Icons.search_off_rounded,
                     size: 48, color: AppColors.textTertiary),
                 const SizedBox(height: 14),
                 Text(
                   '没有匹配「${_query.trim()}」的歌曲',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                  style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
                 ),
                 const SizedBox(height: 12),
                 MiuixTextButton(
@@ -557,8 +558,8 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                     _searchCtrl.clear();
                     setState(() => _query = '');
                   },
-                  textStyle: const TextStyle(
-                      fontSize: 12, color: AppColors.cyan),
+                  textStyle: TextStyle(
+                      fontSize: 12, color: AppColors.accent),
                 ),
               ],
             ),
@@ -597,7 +598,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                             color:
-                                playing ? AppColors.cyan : AppColors.textPrimary,
+                                playing ? AppColors.accent : AppColors.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 3),
@@ -605,7 +606,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                           s.singer.isEmpty ? '未知艺术家' : s.singer,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 12, color: AppColors.textTertiary),
                         ),
                       ],
@@ -619,12 +620,12 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                   const SizedBox(width: 6),
                   Text(
                     _fmtDuration(s.duration),
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 11, color: AppColors.textTertiary),
                   ),
                   const SizedBox(width: 8),
-                  const Icon(Icons.play_arrow_rounded,
-                      color: AppColors.cyan, size: 24),
+                  Icon(Icons.play_arrow_rounded,
+                      color: AppColors.accent, size: 24),
                 ],
               ),
             ),
@@ -670,14 +671,14 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                     '取消',
                     onPressed: () =>
                         setState(() => _showClearAllDialog = false),
-                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                    textStyle: TextStyle(color: AppColors.textTertiary),
                   ),
                   const SizedBox(width: 8),
                   MiuixTextButton(
                     '清空',
                     onPressed: _confirmClearAll,
-                    textStyle: const TextStyle(
-                        color: AppColors.magenta, fontWeight: FontWeight.w700),
+                    textStyle: TextStyle(
+                        color: AppColors.accentAlt, fontWeight: FontWeight.w700),
                   ),
                 ],
               ),
@@ -703,7 +704,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                           horizontal: 12, vertical: 10),
                       decoration: BoxDecoration(
                         color: k == _sortKey
-                            ? AppColors.cyan.withValues(alpha: 0.12)
+                            ? AppColors.accent.withValues(alpha: 0.12)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -715,7 +716,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                                 : Icons.radio_button_unchecked_rounded,
                             size: 17,
                             color: k == _sortKey
-                                ? AppColors.cyan
+                                ? AppColors.accent
                                 : AppColors.textSecondary,
                           ),
                           const SizedBox(width: 10),
@@ -727,7 +728,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                                   ? FontWeight.w700
                                   : FontWeight.w500,
                               color: k == _sortKey
-                                  ? AppColors.cyan
+                                  ? AppColors.accent
                                   : AppColors.textPrimary,
                             ),
                           ),
@@ -738,7 +739,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
                                   ? Icons.arrow_downward_rounded
                                   : Icons.arrow_upward_rounded,
                               size: 15,
-                              color: AppColors.cyan,
+                              color: AppColors.accent,
                             ),
                           ],
                         ],
@@ -788,7 +789,7 @@ class _SheetAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = danger ? AppColors.magenta : AppColors.textPrimary;
+    final color = danger ? AppColors.accentAlt : AppColors.textPrimary;
     return MiuixPressable(
       onPressed: onTap,
       borderRadius: BorderRadius.circular(12),

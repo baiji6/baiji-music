@@ -110,11 +110,11 @@ class _LibraryHomeState extends State<LibraryHome> {
       ('本地音乐', localCount > 0 ? '$localCount 首' : '去扫描',
           Icons.library_music_rounded, AppColors.aqua,
           () => _openLocalMusic(context)),
-      ('本地歌单', '${playlists.length} 个', Icons.queue_music_rounded, AppColors.cyan,
+      ('本地歌单', '${playlists.length} 个', Icons.queue_music_rounded, AppColors.accent,
           () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlaylistPage()))),
       ('下载管理', '0 首', Icons.download_rounded, AppColors.violet,
           () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DownloadPage()))),
-      ('播放历史', '${recent.length} 首', Icons.history_rounded, AppColors.magenta,
+      ('播放历史', '${recent.length} 首', Icons.history_rounded, AppColors.accentAlt,
           () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryPage()))),
       ('我的收藏', '${HistoryStore.favorites().length} 首', Icons.favorite_border_rounded, AppColors.aqua,
           () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const FavoritePage()))),
@@ -126,12 +126,12 @@ class _LibraryHomeState extends State<LibraryHome> {
           child: MiuixPullToRefresh(
             isRefreshing: _refreshing,
             onRefresh: _refresh,
-            color: AppColors.cyan,
+            color: AppColors.accent,
             refreshTexts: const ['下拉刷新', '松手立即刷新', '正在刷新…', '刷新完成'],
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(
                   parent: BouncingScrollPhysics()),
-              padding: const EdgeInsets.fromLTRB(20, 26, 20, 30),
+              padding: EdgeInsets.fromLTRB(20, 26, 20, 30),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -155,7 +155,7 @@ class _LibraryHomeState extends State<LibraryHome> {
                             borderRadius: BorderRadius.circular(18),
                             boxShadow: [
                               BoxShadow(
-                                color: AppColors.magenta.withValues(alpha: 0.4),
+                                color: AppColors.accentAlt.withValues(alpha: 0.4),
                                 blurRadius: 18,
                               ),
                             ],
@@ -183,15 +183,15 @@ class _LibraryHomeState extends State<LibraryHome> {
                                 _qqLoggedIn
                                     ? '绿钻音质已同步 · QQ 音乐'
                                     : '登录 QQ 音乐账号，同步绿钻与无损音质',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 12, color: AppColors.textTertiary),
                               ),
                               if (_loginHint.isNotEmpty) ...[
                                 const SizedBox(height: 6),
                                 Text(
                                   _loginHint,
-                                  style: const TextStyle(
-                                      fontSize: 11, color: AppColors.magenta),
+                                  style: TextStyle(
+                                      fontSize: 11, color: AppColors.accentAlt),
                                 ),
                               ],
                             ],
@@ -253,7 +253,7 @@ class _LibraryHomeState extends State<LibraryHome> {
                                   const Spacer(),
                                   Text(
                                     e.$2,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 12,
                                       color: AppColors.textTertiary,
                                     ),
@@ -277,7 +277,7 @@ class _LibraryHomeState extends State<LibraryHome> {
                           icon: Icons.settings_outlined,
                           title: '设置',
                           subtitle: '音质偏好 · 下载目录 · 缓存管理',
-                          color: AppColors.cyan,
+                          color: AppColors.accent,
                           onTap: () => _openSettings(context),
                         ),
                         _SettingTile(
@@ -299,7 +299,7 @@ class _LibraryHomeState extends State<LibraryHome> {
                           icon: Icons.info_outline_rounded,
                           title: '关于',
                           subtitle: AppVersion.display,
-                          color: AppColors.magenta,
+                          color: AppColors.accentAlt,
                           onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AboutPage())),
                         ),
                       ],
@@ -358,7 +358,7 @@ class _LibraryHomeState extends State<LibraryHome> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             '确定退出当前 QQ 音乐账号吗？',
             style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
           ),
@@ -369,13 +369,13 @@ class _LibraryHomeState extends State<LibraryHome> {
               MiuixTextButton(
                 '取消',
                 onPressed: () => setState(() => _showLogoutDialog = false),
-                textStyle: const TextStyle(color: AppColors.textTertiary),
+                textStyle: TextStyle(color: AppColors.textTertiary),
               ),
               const SizedBox(width: 8),
               MiuixTextButton(
                 '退出',
                 onPressed: _confirmLogout,
-                textStyle: const TextStyle(color: AppColors.magenta),
+                textStyle: TextStyle(color: AppColors.accentAlt),
               ),
             ],
           ),
@@ -444,12 +444,12 @@ class _LoginOptionRow extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                    style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+            Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
           ],
         ),
       ),
@@ -489,11 +489,11 @@ class _SettingTile extends StatelessWidget {
                 children: [
                   Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
-                  Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textTertiary)),
+                  Text(subtitle, style: TextStyle(fontSize: 11, color: AppColors.textTertiary)),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+            Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
           ],
         ),
       ),

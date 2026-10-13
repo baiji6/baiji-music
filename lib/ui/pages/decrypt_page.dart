@@ -312,25 +312,26 @@ class _DecryptPageState extends State<DecryptPage> {
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
         title: '本地音乐解密',
+        titleColor: AppColors.skyBlue,
         color: Colors.transparent,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Icon(Icons.arrow_back_ios_new_rounded,
+          child: Icon(Icons.arrow_back_ios_new_rounded,
               color: AppColors.textPrimary, size: 20),
         ),
       ),
       content: (padding) => ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
+        padding: EdgeInsets.fromLTRB(20, 8, 20, 120),
         children: [
           // 说明
           GlassCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
+              children: [
                 Row(
                   children: [
                     Icon(Icons.info_outline_rounded,
-                        size: 16, color: AppColors.cyan),
+                        size: 16, color: AppColors.accent),
                     SizedBox(width: 8),
                     Text(
                       '使用说明',
@@ -371,7 +372,7 @@ class _DecryptPageState extends State<DecryptPage> {
                 ));
                 await _loadKeys();
               },
-              textStyle: const TextStyle(color: AppColors.cyan, fontSize: 12),
+              textStyle: TextStyle(color: AppColors.accent, fontSize: 12),
             ),
           ),
           GlassCard(
@@ -388,7 +389,7 @@ class _DecryptPageState extends State<DecryptPage> {
                       size: 18,
                       color: _platformKeys.isEmpty
                           ? AppColors.textTertiary
-                          : AppColors.cyan,
+                          : AppColors.accent,
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -446,7 +447,7 @@ class _DecryptPageState extends State<DecryptPage> {
                   onTap: _busy ? null : _pickFiles,
                 ),
               ),
-              const SizedBox(width: 10),
+              SizedBox(width: 10),
               Expanded(
                 child: _ActionButton(
                   icon: Icons.folder_open_outlined,
@@ -456,16 +457,16 @@ class _DecryptPageState extends State<DecryptPage> {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
 
           if (_tasks.isEmpty)
             GlassCard(
               child: Center(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 26),
+                  padding: EdgeInsets.symmetric(vertical: 26),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
-                    children: const [
+                    children: [
                       Icon(Icons.queue_music_outlined,
                           size: 34, color: AppColors.textTertiary),
                       SizedBox(height: 10),
@@ -502,13 +503,13 @@ class _DecryptPageState extends State<DecryptPage> {
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 child: Row(
                   children: [
-                    const Icon(Icons.save_alt_rounded,
-                        size: 20, color: AppColors.cyan),
+                    Icon(Icons.save_alt_rounded,
+                        size: 20, color: AppColors.accent),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
                         _outputDir ?? '未选择',
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 12, color: AppColors.textSecondary),
                       ),
                     ),
@@ -541,7 +542,7 @@ class _DecryptPageState extends State<DecryptPage> {
             )
           : MiuixFloatingActionButton(
               onPressed: _start,
-              containerColor: AppColors.cyan,
+              containerColor: AppColors.accent,
               child: MiuixContentColor(
                 color: Colors.black,
                 child: const Padding(
@@ -625,7 +626,7 @@ class _TaskTile extends StatelessWidget {
     Color statusColor;
     String statusText;
     if (task.running) {
-      statusColor = AppColors.cyan;
+      statusColor = AppColors.accent;
       statusText = '解密中';
     } else if (task.error != null) {
       statusColor = const Color(0xFFFF6B6B);
@@ -668,7 +669,7 @@ class _TaskTile extends StatelessWidget {
               children: [
                 Text(
                   shown,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 12.5, color: AppColors.textPrimary),
                 ),
                 const SizedBox(height: 2),
@@ -710,7 +711,7 @@ class _ActionButton extends StatelessWidget {
         children: [
           Icon(icon,
               size: 17,
-              color: disabled ? AppColors.textTertiary : AppColors.cyan),
+              color: disabled ? AppColors.textTertiary : AppColors.accent),
           const SizedBox(width: 8),
           Text(
             label,
@@ -734,7 +735,7 @@ class _PlatformChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = ready ? AppColors.cyan : AppColors.textTertiary;
+    final color = ready ? AppColors.accent : AppColors.textTertiary;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(

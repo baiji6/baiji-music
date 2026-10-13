@@ -50,7 +50,7 @@ class _DiscoverHomeState extends State<DiscoverHome> {
       child: MiuixPullToRefresh(
         isRefreshing: _refreshing,
         onRefresh: _refresh,
-        color: AppColors.cyan,
+        color: AppColors.accent,
         refreshTexts: const ['下拉刷新', '松手立即刷新', '正在刷新…', '刷新完成'],
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(
@@ -61,7 +61,7 @@ class _DiscoverHomeState extends State<DiscoverHome> {
             children: [
               Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -96,7 +96,7 @@ class _DiscoverHomeState extends State<DiscoverHome> {
                       borderRadius: BorderRadius.circular(14),
                       boxShadow: [
                         BoxShadow(
-                          color: AppColors.cyan.withValues(alpha: 0.35),
+                          color: AppColors.accent.withValues(alpha: 0.35),
                           blurRadius: 16,
                         ),
                       ],
@@ -126,7 +126,7 @@ class _DiscoverHomeState extends State<DiscoverHome> {
               const SizedBox(height: 28),
 
               // 推荐歌单（占位入口）
-              const SectionHeader(
+              SectionHeader(
                 title: '推荐歌单',
                 subtitle: '为您精选',
                 trailing: Icon(Icons.arrow_forward_ios_rounded,
@@ -171,7 +171,7 @@ class _DiscoverHomeState extends State<DiscoverHome> {
                             p.$2,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 11,
                               color: AppColors.textTertiary,
                             ),
@@ -193,17 +193,17 @@ class _DiscoverHomeState extends State<DiscoverHome> {
                     : MiuixPressable(
                         onPressed: _playAllRecent,
                         borderRadius: BorderRadius.circular(8),
-                        child: const Padding(
+                        child: Padding(
                           padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                           child: Row(
                             children: [
                               Icon(Icons.play_circle_fill_rounded,
-                                  color: AppColors.cyan, size: 16),
+                                  color: AppColors.accent, size: 16),
                               SizedBox(width: 4),
                               Text(
                                 '全部播放',
                                 style: TextStyle(
-                                    fontSize: 12, color: AppColors.cyan),
+                                    fontSize: 12, color: AppColors.accent),
                               ),
                             ],
                           ),
@@ -211,7 +211,7 @@ class _DiscoverHomeState extends State<DiscoverHome> {
                       ),
               ),
               if (recent.isEmpty)
-                const GlassCard(
+                GlassCard(
                   padding: EdgeInsets.symmetric(vertical: 26),
                   child: Center(
                     child: Text(
@@ -280,7 +280,7 @@ class _RecentTile extends StatelessWidget {
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color:
-                          isCurrent ? AppColors.cyan : AppColors.textPrimary,
+                          isCurrent ? AppColors.accent : AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 3),
@@ -288,7 +288,7 @@ class _RecentTile extends StatelessWidget {
                     song.singer,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 12, color: AppColors.textTertiary),
                   ),
                 ],
@@ -296,11 +296,11 @@ class _RecentTile extends StatelessWidget {
             ),
             TagBadge(
               song.isNetease ? '网易云' : 'QQ',
-              color: song.isNetease ? AppColors.magenta : AppColors.cyan,
+              color: song.isNetease ? AppColors.accentAlt : AppColors.accent,
             ),
             const SizedBox(width: 8),
-            const Icon(Icons.play_arrow_rounded,
-                color: AppColors.cyan, size: 26),
+            Icon(Icons.play_arrow_rounded,
+                color: AppColors.accent, size: 26),
           ],
         ),
       ),
@@ -330,7 +330,7 @@ class _QuickAction extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
               color: AppColors.textSecondary,

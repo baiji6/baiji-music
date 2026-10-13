@@ -58,20 +58,21 @@ class _PlaylistPageState extends State<PlaylistPage> {
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
         title: '本地歌单',
+        titleColor: AppColors.skyBlue,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.pop(context),
-          child: const Icon(Icons.arrow_back_rounded,
+          child: Icon(Icons.arrow_back_rounded,
               color: AppColors.textPrimary),
         ),
         actions: [
           MiuixIconButton(
             onPressed: _openCreateDialog,
-            child: const Icon(Icons.add_rounded, color: AppColors.cyan),
+            child: Icon(Icons.add_rounded, color: AppColors.accent),
           ),
         ],
       ),
       content: (padding) => names.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
                 '暂无歌单\n点击右上角 + 创建',
                 textAlign: TextAlign.center,
@@ -117,7 +118,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                               const SizedBox(height: 3),
                               Text(
                                 '${PlaylistStore.songsOf(names[i]).length} 首',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 12, color: AppColors.textTertiary),
                               ),
                             ],
@@ -128,7 +129,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                             PlaylistStore.deletePlaylist(names[i]);
                             _refresh();
                           },
-                          child: const Icon(Icons.delete_outline,
+                          child: Icon(Icons.delete_outline,
                               color: AppColors.danger, size: 20),
                         ),
                       ],
@@ -158,7 +159,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 autofocus: true,
                 label: '歌单名称',
                 singleLine: true,
-                textStyle: const TextStyle(color: AppColors.textPrimary),
+                textStyle: TextStyle(color: AppColors.textPrimary),
               ),
               const SizedBox(height: 18),
               Row(
@@ -168,7 +169,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                     '取消',
                     onPressed: () =>
                         setState(() => _showCreateDialog = false),
-                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                    textStyle: TextStyle(color: AppColors.textTertiary),
                   ),
                   const SizedBox(width: 8),
                   MiuixTextButton('创建', onPressed: _submitCreate),
@@ -201,14 +202,15 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
         title: widget.name,
+        titleColor: AppColors.skyBlue,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.pop(context),
-          child: const Icon(Icons.arrow_back_rounded,
+          child: Icon(Icons.arrow_back_rounded,
               color: AppColors.textPrimary),
         ),
       ),
       content: (padding) => songs.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
                 '歌单为空\n去搜索页添加歌曲',
                 textAlign: TextAlign.center,
@@ -248,7 +250,7 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
                                 songs[i].singer,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 12, color: AppColors.textTertiary),
                               ),
                             ],
@@ -260,11 +262,11 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
                                 widget.name, songs[i].mid);
                             _refresh();
                           },
-                          child: const Icon(Icons.delete_outline,
+                          child: Icon(Icons.delete_outline,
                               color: AppColors.danger, size: 20),
                         ),
-                        const Icon(Icons.play_arrow_rounded,
-                            color: AppColors.cyan, size: 24),
+                        Icon(Icons.play_arrow_rounded,
+                            color: AppColors.accent, size: 24),
                       ],
                     ),
                   ),

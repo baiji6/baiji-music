@@ -20,20 +20,21 @@ class ToolboxPage extends StatelessWidget {
       containerColor: Colors.transparent,
       topBar: MiuixTopAppBar(
         title: '工具箱',
+        titleColor: AppColors.skyBlue,
         color: Colors.transparent,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Icon(Icons.arrow_back_ios_new_rounded,
+          child: Icon(Icons.arrow_back_ios_new_rounded,
               color: AppColors.textPrimary, size: 20),
         ),
       ),
       content: (padding) => ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-        children: const [
+        children: [
           SectionHeader(title: '音乐工具'),
           _ToolCard(
             icon: Icons.lock_open_rounded,
-            color: AppColors.cyan,
+            color: AppColors.accent,
             title: '本地音乐解密',
             subtitle: 'QQ 音乐 · 酷狗 · 酷我 · 网易云 · 咪咕',
             description: '批量解密已下载的加密音频文件，支持导入密钥与手动填写，'
@@ -92,7 +93,7 @@ class _ToolCard extends StatelessWidget {
                     children: [
                       Text(
                         title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
                           color: AppColors.textPrimary,
@@ -108,7 +109,7 @@ class _ToolCard extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     description,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
                       height: 1.5,
                       color: AppColors.textTertiary,
@@ -117,7 +118,7 @@ class _ToolCard extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded,
+            Icon(Icons.chevron_right_rounded,
                 color: AppColors.textTertiary),
           ],
         ),

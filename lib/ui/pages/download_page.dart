@@ -235,9 +235,10 @@ class _DownloadPageState extends State<DownloadPage> {
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
         title: '下载管理',
+        titleColor: AppColors.skyBlue,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.pop(context),
-          child: const Icon(Icons.arrow_back_rounded,
+          child: Icon(Icons.arrow_back_rounded,
               color: AppColors.textPrimary),
         ),
         actions: [
@@ -248,19 +249,19 @@ class _DownloadPageState extends State<DownloadPage> {
                 setState(() => _tasks = DownloadTaskRegistry.instance.tasks);
                 showAppSnack('已清除 $n 条记录（文件保留）');
               },
-              child: const Icon(Icons.playlist_remove_rounded,
+              child: Icon(Icons.playlist_remove_rounded,
                   color: AppColors.textSecondary),
             ),
           if (finished.isNotEmpty)
             MiuixIconButton(
               onPressed: _openClearAll,
-              child: const Icon(Icons.delete_sweep_rounded,
+              child: Icon(Icons.delete_sweep_rounded,
                   color: AppColors.danger),
             ),
         ],
       ),
       content: (padding) => _tasks.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
                 '暂无下载\n搜索歌曲后长按可下载',
                 textAlign: TextAlign.center,
@@ -289,7 +290,7 @@ class _DownloadPageState extends State<DownloadPage> {
                             top: i == 0 ? 0 : 14, bottom: 8, left: 4),
                         child: Text(
                           header,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
                             color: AppColors.textTertiary,
                             fontWeight: FontWeight.w700,
@@ -325,7 +326,7 @@ class _DownloadPageState extends State<DownloadPage> {
                 height: 44,
                 decoration: BoxDecoration(
                   gradient: failed
-                      ? const LinearGradient(
+                      ? LinearGradient(
                           colors: [AppColors.danger, Colors.transparent])
                       : const LinearGradient(colors: AppColors.neonGradient),
                   borderRadius: BorderRadius.circular(12),
@@ -361,7 +362,7 @@ class _DownloadPageState extends State<DownloadPage> {
                       t.song.singer.isEmpty ? '未知艺术家' : t.song.singer,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12, color: AppColors.textTertiary),
                     ),
                     const SizedBox(height: 4),
@@ -383,7 +384,7 @@ class _DownloadPageState extends State<DownloadPage> {
                                 ratio == null
                                     ? t.state.label
                                     : '${(ratio * 100).toStringAsFixed(0)}%',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 10, color: AppColors.textTertiary),
                               ),
                             ],
@@ -396,7 +397,7 @@ class _DownloadPageState extends State<DownloadPage> {
                               if (_fmtSpeed(t.bytesPerSecond).isNotEmpty)
                                 _fmtSpeed(t.bytesPerSecond),
                             ].join(' · '),
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 10, color: AppColors.textTertiary),
                           ),
                         ],
@@ -442,15 +443,15 @@ class _DownloadPageState extends State<DownloadPage> {
         children: [
           MiuixIconButton(
             onPressed: () => _retry(t),
-            child: const Icon(Icons.refresh_rounded,
-                color: AppColors.cyan, size: 20),
+            child: Icon(Icons.refresh_rounded,
+                color: AppColors.accent, size: 20),
           ),
           MiuixIconButton(
             onPressed: () {
               DownloadTaskRegistry.instance.remove(t.id);
               setState(() => _tasks = DownloadTaskRegistry.instance.tasks);
             },
-            child: const Icon(Icons.close_rounded,
+            child: Icon(Icons.close_rounded,
                 color: AppColors.textTertiary, size: 18),
           ),
         ],
@@ -461,12 +462,12 @@ class _DownloadPageState extends State<DownloadPage> {
       children: [
         MiuixIconButton(
           onPressed: () => _play(t),
-          child: const Icon(Icons.play_circle_fill_rounded,
-              color: AppColors.cyan, size: 26),
+          child: Icon(Icons.play_circle_fill_rounded,
+              color: AppColors.accent, size: 26),
         ),
         MiuixIconButton(
           onPressed: () => _deleteFile(t),
-          child: const Icon(Icons.delete_outline,
+          child: Icon(Icons.delete_outline,
               color: AppColors.danger, size: 20),
         ),
       ],
@@ -499,13 +500,13 @@ class _DownloadPageState extends State<DownloadPage> {
                     '取消',
                     onPressed: () =>
                         setState(() => _showClearAllDialog = false),
-                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                    textStyle: TextStyle(color: AppColors.textTertiary),
                   ),
                   const SizedBox(width: 8),
                   MiuixTextButton(
                     '清空',
                     onPressed: _confirmClearAll,
-                    textStyle: const TextStyle(
+                    textStyle: TextStyle(
                         color: AppColors.danger, fontWeight: FontWeight.w700),
                   ),
                 ],

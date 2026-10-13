@@ -286,14 +286,14 @@ class _SearchHomeState extends State<SearchHome> {
   @override
   Widget build(BuildContext context) {
     final sourceColor =
-        _source == Source.qq ? AppColors.cyan : AppColors.magenta;
+        _source == Source.qq ? AppColors.accent : AppColors.accentAlt;
     return Stack(
       children: [
         SafeArea(
           child: Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 26, 20, 6),
+                padding: EdgeInsets.fromLTRB(20, 26, 20, 6),
                 child: Row(
                   children: [
                     const NeonText(
@@ -332,7 +332,7 @@ class _SearchHomeState extends State<SearchHome> {
                     setState(() {});
                   },
                   cursorColor: sourceColor,
-                  textStyle: const TextStyle(
+                  textStyle: TextStyle(
                       color: AppColors.textPrimary, fontSize: 15),
                   leadingIcon: Icon(Icons.search_rounded,
                       color: sourceColor, size: 22),
@@ -340,7 +340,7 @@ class _SearchHomeState extends State<SearchHome> {
                       ? null
                       : MiuixIconButton(
                           onPressed: _clear,
-                          child: const Icon(Icons.close_rounded,
+                          child: Icon(Icons.close_rounded,
                               color: AppColors.textTertiary, size: 18),
                         ),
                 ),
@@ -377,7 +377,7 @@ class _SearchHomeState extends State<SearchHome> {
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
                 '${song.singer} · ${song.album}',
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 12, color: AppColors.textTertiary),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -386,19 +386,19 @@ class _SearchHomeState extends State<SearchHome> {
           _SheetActionRow(
             icon: isFav ? Icons.favorite_rounded : Icons.favorite_border_rounded,
             label: isFav ? '取消收藏' : '收藏',
-            color: isFav ? AppColors.magenta : AppColors.cyan,
+            color: isFav ? AppColors.accentAlt : AppColors.accent,
             onTap: () => _runSongAction('fav'),
           ),
           _SheetActionRow(
             icon: Icons.download_rounded,
             label: '下载',
-            color: AppColors.cyan,
+            color: AppColors.accent,
             onTap: () => _runSongAction('download'),
           ),
           _SheetActionRow(
             icon: Icons.play_circle_outline_rounded,
             label: '播放',
-            color: AppColors.cyan,
+            color: AppColors.accent,
             onTap: () => _runSongAction('play'),
           ),
           const SizedBox(height: 12),
@@ -443,10 +443,10 @@ class _SearchHomeState extends State<SearchHome> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SectionHeader(
+          SectionHeader(
             title: '热门搜索',
             trailing: Icon(Icons.local_fire_department_rounded,
-                size: 20, color: AppColors.magenta),
+                size: 20, color: AppColors.accentAlt),
           ),
           Wrap(
             spacing: 10,
@@ -484,7 +484,7 @@ class _SearchHomeState extends State<SearchHome> {
                         const SizedBox(width: 8),
                         Text(
                           _hotTags[i],
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w500,
                             color: AppColors.textSecondary,
@@ -507,7 +507,7 @@ class _SearchHomeState extends State<SearchHome> {
                       setState(() => _history = []);
                     },
                     borderRadius: BorderRadius.circular(8),
-                    child: const Padding(
+                    child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       child: Text(
                         '清空',
@@ -518,7 +518,7 @@ class _SearchHomeState extends State<SearchHome> {
                   ),
           ),
           if (_history.isEmpty)
-            const Text(
+            Text(
               '暂无历史记录',
               style: TextStyle(fontSize: 13, color: AppColors.textTertiary),
             )
@@ -544,12 +544,12 @@ class _SearchHomeState extends State<SearchHome> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.history_rounded,
+                          Icon(Icons.history_rounded,
                               size: 14, color: AppColors.textTertiary),
                           const SizedBox(width: 6),
                           Text(
                             h,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 13,
                               color: AppColors.textSecondary,
                             ),
@@ -601,7 +601,7 @@ class _SearchHomeState extends State<SearchHome> {
                   '「$_keyword」· ${_results.length} 首 · ${_source == Source.qq ? 'QQ 音乐' : '网易云音乐'} 第 $_page 页',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     color: AppColors.textTertiary,
                   ),
@@ -611,14 +611,14 @@ class _SearchHomeState extends State<SearchHome> {
               MiuixPressable(
                 onPressed: () => _playAll(_results),
                 borderRadius: BorderRadius.circular(8),
-                child: const Row(
+                child: Row(
                   children: [
                     Icon(Icons.play_circle_fill_rounded,
-                        color: AppColors.cyan, size: 17),
+                        color: AppColors.accent, size: 17),
                     SizedBox(width: 4),
                     Text(
                       '全部播放',
-                      style: TextStyle(fontSize: 12, color: AppColors.cyan),
+                      style: TextStyle(fontSize: 12, color: AppColors.accent),
                     ),
                   ],
                 ),
@@ -665,7 +665,7 @@ class _SearchHomeState extends State<SearchHome> {
         child: Center(
           child: Text(
             '已显示全部 ${_results.length} 首结果',
-            style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+            style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
           ),
         ),
       );
@@ -686,7 +686,7 @@ class _SearchHomeState extends State<SearchHome> {
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Text(
               '第 $_page 页',
-              style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
+              style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
             ),
           ),
           _PageButton(
@@ -750,13 +750,13 @@ class _SourceSwitch extends StatelessWidget {
         children: [
           _SourceChip(
             label: 'QQ',
-            color: AppColors.cyan,
+            color: AppColors.accent,
             active: current == Source.qq,
             onTap: () => onSwitch(Source.qq),
           ),
           _SourceChip(
             label: '网易',
-            color: AppColors.magenta,
+            color: AppColors.accentAlt,
             active: current == Source.netease,
             onTap: () => onSwitch(Source.netease),
           ),
@@ -852,7 +852,7 @@ class _SongTile extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: isCurrent ? AppColors.cyan : AppColors.textPrimary,
+                        color: isCurrent ? AppColors.accent : AppColors.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -860,7 +860,7 @@ class _SongTile extends StatelessWidget {
                       '${song.singer} · ${song.album}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
                         color: AppColors.textTertiary,
                       ),
@@ -871,7 +871,7 @@ class _SongTile extends StatelessWidget {
               const SizedBox(width: 8),
               TagBadge(
                 song.isNetease ? '网易云' : 'QQ',
-                color: song.isNetease ? AppColors.magenta : AppColors.cyan,
+                color: song.isNetease ? AppColors.accentAlt : AppColors.accent,
               ),
               const SizedBox(width: 6),
               Icon(
@@ -880,7 +880,7 @@ class _SongTile extends StatelessWidget {
                         ? Icons.pause_circle_filled_rounded
                         : Icons.play_circle_filled_rounded)
                     : Icons.play_circle_outline_rounded,
-                color: isCurrent ? AppColors.cyan : AppColors.textTertiary,
+                color: isCurrent ? AppColors.accent : AppColors.textTertiary,
                 size: 26,
               ),
             ],
@@ -918,7 +918,7 @@ class _SheetActionRow extends StatelessWidget {
             const SizedBox(width: 14),
             Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 color: AppColors.textPrimary,
               ),

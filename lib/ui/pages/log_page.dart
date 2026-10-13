@@ -56,13 +56,13 @@ class _LogPageState extends State<LogPage> {
       case AppLog.debug:
         return AppColors.textTertiary;
       case AppLog.info:
-        return AppColors.cyan;
+        return AppColors.accent;
       case AppLog.warn:
         return AppColors.warning;
       case AppLog.error:
         return AppColors.danger;
       case AppLog.fatal:
-        return AppColors.magenta;
+        return AppColors.accentAlt;
       default:
         return AppColors.textSecondary;
     }
@@ -90,10 +90,11 @@ class _LogPageState extends State<LogPage> {
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
         title: '日志与调试',
+        titleColor: AppColors.skyBlue,
         color: Colors.transparent,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Icon(Icons.arrow_back_ios_new_rounded,
+          child: Icon(Icons.arrow_back_ios_new_rounded,
               color: AppColors.textPrimary, size: 20),
         ),
         actions: [
@@ -104,7 +105,7 @@ class _LogPageState extends State<LogPage> {
               showAppSnack('日志已清空');
               setState(() {});
             },
-            textStyle: const TextStyle(color: AppColors.danger, fontSize: 13),
+            textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
           ),
           if (allLogs.isNotEmpty)
             if (_exporting)
@@ -116,7 +117,7 @@ class _LogPageState extends State<LogPage> {
               MiuixTextButton(
                 '导出',
                 onPressed: _exportLogs,
-                textStyle: const TextStyle(color: AppColors.cyan, fontSize: 13),
+                textStyle: TextStyle(color: AppColors.accent, fontSize: 13),
               ),
         ],
       ),
@@ -167,7 +168,7 @@ class _LogPageState extends State<LogPage> {
               children: [
                 Text(
                   '显示 ${logs.length} / 共 ${allLogs.length} 条',
-                  style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                  style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
                 ),
                 const Spacer(),
                 Text(
@@ -177,11 +178,11 @@ class _LogPageState extends State<LogPage> {
               ],
             ),
           ),
-          const MiuixHorizontalDivider(thickness: 1, color: AppColors.strokeGlass),
+          MiuixHorizontalDivider(thickness: 1, color: AppColors.strokeGlass),
           // 日志列表
           Expanded(
             child: logs.isEmpty
-                ? const Center(
+                ? Center(
                     child: Text(
                       '该级别暂无日志',
                       style: TextStyle(color: AppColors.textTertiary, fontSize: 13),

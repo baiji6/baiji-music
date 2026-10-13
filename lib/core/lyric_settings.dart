@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
 import 'kv_store.dart';
 
 /// 歌词显示偏好：字号 / 对齐 / 当前行放大 / 字重 / 卡片圆角 / 三色。
@@ -37,8 +38,10 @@ class LyricSettings extends ChangeNotifier {
   static const double maxCorner = 40.0;
   static const double defaultCorner = 24.0;
 
-  // 默认三色：已唱 = 荧光黄绿（参考视频实测色值），当前行未唱 = 亮白，
-  // 非当前行 = 暗灰。三者都可在设置里自定义。
+  // 默认三色（深色主题下的取值；浅色主题由 AppPalette.light 提供，
+  // 见 AppColors.karaoke / lyricUnsung / lyricInactive）：
+  // 已唱 = 荧光黄绿（参考视频实测色值），当前行未唱 = 亮白，
+  // 非当前行 = 暗灰。三者都可在设置里自定义，自定义后不再跟随主题。
   static const Color defaultSungColor = Color(0xFFA8F685);
   static const Color defaultUnsungColor = Color(0xFFF2F5FF);
   static const Color defaultInactiveColor = Color(0xFF5A6686);
@@ -58,9 +61,12 @@ class LyricSettings extends ChangeNotifier {
   double _activeScale = defaultActiveScale;
   int _weight = defaultWeight;
   double _corner = defaultCorner;
-  Color _sungColor = defaultSungColor;
-  Color _unsungColor = defaultUnsungColor;
-  Color _inactiveColor = defaultInactiveColor;
+
+  /// 用户自定义三色。null = 未自定义，跟随当前主题的默认色
+  /// （[AppColors.karaoke] / [AppColors.lyricUnsung] / [AppColors.lyricInactive]）。
+  Color? _sungCustom;
+  Color? _unsungCustom;
+  Color? _inactiveCustom;
 
   /// 歌词字号（逻辑像素）。
   double get fontSize => _fontSize;
@@ -91,14 +97,14 @@ class LyricSettings extends ChangeNotifier {
   /// 歌词卡片圆角半径（逻辑像素）。
   double get corner => _corner;
 
-  /// 已唱色（逐字填充的目标色）。
-  Color get sungColor => _sungColor;
+  /// 已唱色（逐字填充的目标色）。未自定义时跟随主题。
+  Color get sungColor => _sungCustom ?? AppColors.karaoke;
 
-  /// 当前行未唱色。
-  Color get unsungColor => _unsungColor;
+  /// 当前行未唱色。未自定义时跟随主题。
+  Color get unsungColor => _unsungCustom ?? AppColors.lyricUnsung;
 
-  /// 非当前行颜色。
-  Color get inactiveColor => _inactiveColor;
+  /// 非当前行颜色。未自定义时跟随主题。
+  Color get inactiveColor => _inactiveCustom ?? AppColors.lyricInactive;
 
   /// 应用启动时调用一次，从本地存储恢复设置。
   Future<void> load() async {
@@ -119,9 +125,9 @@ class LyricSettings extends ChangeNotifier {
         .clamp(minWeight, maxWeight);
     _corner = (double.tryParse(c ?? '') ?? defaultCorner)
         .clamp(minCorner, maxCorner);
-    _sungColor = _parseColor(sung) ?? defaultSungColor;
-    _unsungColor = _parseColor(unsung) ?? defaultUnsungColor;
-    _inactiveColor = _parseColor(inactive) ?? defaultInactiveColor;
+    _sungCustom = _parseColor(sung);
+    _unsungCustom = _parseColor(unsung);
+    _inactiveCustom = _parseColor(inactive);
     if (f == null &&
         a == null &&
         sc == null &&
@@ -176,32 +182,43 @@ class LyricSettings extends ChangeNotifier {
   }
 
   Future<void> setSungColor(Color c) async {
-    if (c == _sungColor) return;
-    _sungColor = c;
+    if (c == sungColor) return;
+    _sungCustom = c;
     notifyListeners();
     await KvStore.instance.setString('$_prefs:$_kSung', _colorToString(c));
   }
 
   Future<void> setUnsungColor(Color c) async {
-    if (c == _unsungColor) return;
-    _unsungColor = c;
+    if (c == unsungColor) return;
+    _unsungCustom = c;
     notifyListeners();
     await KvStore.instance.setString('$_prefs:$_kUnsung', _colorToString(c));
   }
 
   Future<void> setInactiveColor(Color c) async {
-    if (c == _inactiveColor) return;
-    _inactiveColor = c;
+    if (c == inactiveColor) return;
+    _inactiveCustom = c;
     notifyListeners();
     await KvStore.instance.setString('$_prefs:$_kInactive', _colorToString(c));
   }
 
   /// 三色一起恢复默认（设置面板的「恢复默认颜色」用）。
+  ///
+  /// 恢复的是「跟随主题」而不是写死深色三色——清掉自定义后，
+  /// 浅色主题下歌词自动换成白底可读的深色系。
   Future<void> resetColors() async {
-    await setSungColor(defaultSungColor);
-    await setUnsungColor(defaultUnsungColor);
-    await setInactiveColor(defaultInactiveColor);
+    _sungCustom = null;
+    _unsungCustom = null;
+    _inactiveCustom = null;
+    notifyListeners();
+    await KvStore.instance.remove('$_prefs:$_kSung');
+    await KvStore.instance.remove('$_prefs:$_kUnsung');
+    await KvStore.instance.remove('$_prefs:$_kInactive');
   }
+
+  /// 系统明暗切换时由根组件调用：未自定义的三色要重新取主题默认值，
+  /// 播放页的歌词列表监听本对象，推一次即可重排。
+  void notifyThemeChanged() => notifyListeners();
 
   /// `#RRGGBB` 十六进制串 → Color；非法输入返回 null（交给调用方用默认值）。
   static Color? _parseColor(String? hex) {

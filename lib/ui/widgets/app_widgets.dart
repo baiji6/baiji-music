@@ -41,8 +41,10 @@ class GlassCard extends StatelessWidget {
                   ),
                 ]
               : [
+                  // 暗色主题下是淡黑影；浅色主题换成极淡的蓝灰投影——
+                  // 白纸上纯黑影太脏，柔蓝才配玻璃卡。
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.35),
+                    color: AppColors.cardShadow,
                     blurRadius: 18,
                     offset: const Offset(0, 6),
                   ),
@@ -111,7 +113,7 @@ class NeonButton extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (icon != null) ...[
-          Icon(icon, size: 17, color: filled ? Colors.white : AppColors.cyan),
+          Icon(icon, size: 17, color: filled ? Colors.white : AppColors.accent),
           const SizedBox(width: 8),
         ],
         Text(label, style: labelStyle),
@@ -239,7 +241,7 @@ class SectionHeader extends StatelessWidget {
             const SizedBox(width: 10),
             Text(
               subtitle!,
-              style: const TextStyle(color: AppColors.textTertiary, fontSize: 12),
+              style: TextStyle(color: AppColors.textTertiary, fontSize: 12),
             ),
           ],
           const Spacer(),
@@ -319,7 +321,7 @@ class EmptyView extends StatelessWidget {
             Text(
               subtitle!,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 color: AppColors.textTertiary,
                 fontSize: 13,
                 height: 1.5,

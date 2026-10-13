@@ -300,9 +300,10 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
         title: '密钥管理',
+        titleColor: AppColors.skyBlue,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.pop(context),
-          child: const Icon(Icons.arrow_back_rounded,
+          child: Icon(Icons.arrow_back_rounded,
               color: AppColors.textPrimary),
         ),
         actions: [
@@ -375,11 +376,11 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                         padding: const EdgeInsets.symmetric(vertical: 30),
                         child: Column(
                           children: [
-                            const Icon(Icons.key_off_rounded,
+                            Icon(Icons.key_off_rounded,
                                 size: 34, color: AppColors.textTertiary),
                             const SizedBox(height: 10),
                             Text('${_platform.label}还没有密钥',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 13,
                                     color: AppColors.textTertiary)),
                             const SizedBox(height: 6),
@@ -387,7 +388,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                               _platform.needsKey
                                   ? '该平台必须填写密钥才能解密'
                                   : '该平台通常无需密钥，文件头里已自带',
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 11,
                                   color: AppColors.textTertiary),
                             ),
@@ -455,7 +456,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                       _showWarnDialog = false;
                       _pendingEntry = null;
                     }),
-                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                    textStyle: TextStyle(color: AppColors.textTertiary),
                   ),
                   const SizedBox(width: 8),
                   MiuixTextButton(
@@ -513,7 +514,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                         onPressed: () =>
                             setState(() => _showImportTextDialog = false),
                         textStyle:
-                            const TextStyle(color: AppColors.textTertiary),
+                            TextStyle(color: AppColors.textTertiary),
                       ),
                       const SizedBox(width: 8),
                       MiuixTextButton('导入', onPressed: _runImportText),
@@ -552,7 +553,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                     '关闭',
                     onPressed: () =>
                         setState(() => _showQingTingHintDialog = false),
-                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                    textStyle: TextStyle(color: AppColors.textTertiary),
                   ),
                   const SizedBox(width: 8),
                   MiuixTextButton('去生成', onPressed: _openQingTingGenerator),
@@ -649,7 +650,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
                     '取消',
                     onPressed: () =>
                         setState(() => _showClearAllDialog = false),
-                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                    textStyle: TextStyle(color: AppColors.textTertiary),
                   ),
                   const SizedBox(width: 8),
                   MiuixTextButton(
@@ -808,7 +809,7 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: AppColors.cyan.withValues(alpha: 0.08),
+                  color: AppColors.accent.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: MiuixText(
@@ -886,7 +887,7 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
                   MiuixTextButton(
                     '取消',
                     onPressed: widget.onDismiss,
-                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                    textStyle: TextStyle(color: AppColors.textTertiary),
                   ),
                   const SizedBox(width: 8),
                   MiuixTextButton('添加', onPressed: _submit),
@@ -1042,12 +1043,12 @@ class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: AppColors.cyan.withValues(alpha: 0.10),
+                    color: AppColors.accent.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: SelectableText(
                     _result!,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 12,
                         fontFamily: 'monospace',
                         color: AppColors.textPrimary),
@@ -1070,7 +1071,7 @@ class _QingTingGeneratorDialogState extends State<_QingTingGeneratorDialog> {
                   MiuixTextButton(
                     '关闭',
                     onPressed: widget.onDismiss,
-                    textStyle: const TextStyle(color: AppColors.textTertiary),
+                    textStyle: TextStyle(color: AppColors.textTertiary),
                   ),
                   MiuixTextButton('生成', onPressed: _generate),
                   if (_result != null)
@@ -1109,7 +1110,7 @@ class _PlatformTabs extends StatelessWidget {
           final p = DecryptPlatform.values[i];
           final n = counts[p] ?? 0;
           final sel = p == current;
-          final color = sel ? AppColors.cyan : AppColors.textTertiary;
+          final color = sel ? AppColors.accent : AppColors.textTertiary;
           return MiuixPressable(
             onPressed: () => onSelect(p),
             borderRadius: BorderRadius.circular(14),
@@ -1149,7 +1150,7 @@ class _PlatformTabs extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 10,
                       color:
-                          n > 0 ? AppColors.cyan : AppColors.textTertiary,
+                          n > 0 ? AppColors.accent : AppColors.textTertiary,
                     ),
                   ),
                 ],
@@ -1225,8 +1226,8 @@ class _KeyTile extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
       child: Row(
         children: [
-          const Icon(Icons.vpn_key_outlined,
-              size: 17, color: AppColors.cyan),
+          Icon(Icons.vpn_key_outlined,
+              size: 17, color: AppColors.accent),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -1236,7 +1237,7 @@ class _KeyTile extends StatelessWidget {
                   preview,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 12, color: AppColors.textPrimary),
                 ),
                 const SizedBox(height: 3),
@@ -1264,7 +1265,7 @@ class _KeyTile extends StatelessWidget {
           ),
           MiuixIconButton(
             onPressed: onDelete,
-            child: const Icon(Icons.delete_outline_rounded,
+            child: Icon(Icons.delete_outline_rounded,
                 size: 18, color: AppColors.textTertiary),
           ),
         ],
@@ -1299,11 +1300,11 @@ class _MiniAction extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 13),
       child: Column(
         children: [
-          Icon(icon, size: 19, color: AppColors.cyan),
+          Icon(icon, size: 19, color: AppColors.accent),
           const SizedBox(height: 7),
           Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
                 fontSize: 11.5, color: AppColors.textPrimary),
           ),
         ],

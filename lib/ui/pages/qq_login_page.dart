@@ -240,10 +240,11 @@ class _QQLoginPageState extends State<QQLoginPage> {
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
         title: 'QQ 音乐登录',
+        titleColor: AppColors.skyBlue,
         color: Colors.transparent,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.pop(context),
-          child: const Icon(Icons.arrow_back_rounded,
+          child: Icon(Icons.arrow_back_rounded,
               color: AppColors.textPrimary),
         ),
       ),
@@ -266,7 +267,7 @@ class _QQLoginPageState extends State<QQLoginPage> {
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       '粘贴浏览器中 y.qq.com 的完整 Cookie，QQ 与微信登录都支持',
                       style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
                     ),
@@ -279,8 +280,8 @@ class _QQLoginPageState extends State<QQLoginPage> {
                       useLabelAsPlaceholder: true,
                       minLines: 2,
                       maxLines: 3,
-                      cursorColor: AppColors.cyan,
-                      textStyle: const TextStyle(
+                      cursorColor: AppColors.accent,
+                      textStyle: TextStyle(
                           fontSize: 12, color: AppColors.textPrimary),
                     ),
                     const SizedBox(height: 12),
@@ -306,7 +307,7 @@ class _QQLoginPageState extends State<QQLoginPage> {
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       '使用 QQ 音乐 App 扫描二维码',
                       style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
                     ),
@@ -334,7 +335,7 @@ class _QQLoginPageState extends State<QQLoginPage> {
                       Center(
                         child: Text(
                           _qrStatus!,
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 12, color: AppColors.textSecondary),
                           textAlign: TextAlign.center,
                         ),
@@ -345,7 +346,7 @@ class _QQLoginPageState extends State<QQLoginPage> {
                       Center(
                         child: Text(
                           _qrError!,
-                          style: const TextStyle(fontSize: 12, color: AppColors.magenta),
+                          style: TextStyle(fontSize: 12, color: AppColors.accentAlt),
                           textAlign: TextAlign.center,
                         ),
                       ),

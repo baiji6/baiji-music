@@ -60,10 +60,11 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
         title: '网易云音乐登录',
+        titleColor: AppColors.skyBlue,
         color: Colors.transparent,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.pop(context),
-          child: const Icon(Icons.arrow_back_rounded,
+          child: Icon(Icons.arrow_back_rounded,
               color: AppColors.textPrimary),
         ),
       ),
@@ -85,7 +86,7 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       '粘贴浏览器中 music.163.com 的 Cookie（需包含 MUSIC_U）',
                       style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
                     ),
@@ -96,8 +97,8 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
                       useLabelAsPlaceholder: true,
                       minLines: 2,
                       maxLines: 4,
-                      cursorColor: AppColors.magenta,
-                      textStyle: const TextStyle(
+                      cursorColor: AppColors.accentAlt,
+                      textStyle: TextStyle(
                           fontSize: 12, color: AppColors.textPrimary),
                     ),
                     const SizedBox(height: 12),
@@ -115,7 +116,7 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
                         color: AppColors.surfaceGlass,
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Text(
+                      child: Text(
                         '获取方法：\n'
                         '1. 在浏览器中登录 music.163.com\n'
                         '2. 按 F12 打开开发者工具 → Application/Storage → Cookies\n'

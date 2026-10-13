@@ -25,10 +25,11 @@ class _HistoryPageState extends State<HistoryPage> {
       containerColor: Colors.transparent,
       topBar: MiuixTopAppBar(
         title: '播放历史',
+        titleColor: AppColors.skyBlue,
         color: Colors.transparent,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Icon(Icons.arrow_back_ios_new_rounded,
+          child: Icon(Icons.arrow_back_ios_new_rounded,
               color: AppColors.textPrimary, size: 20),
         ),
         actions: [
@@ -39,12 +40,12 @@ class _HistoryPageState extends State<HistoryPage> {
                 HistoryStore.clearPlay();
                 _refresh();
               },
-              textStyle: const TextStyle(color: AppColors.danger, fontSize: 13),
+              textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
             ),
         ],
       ),
       content: (padding) => recent.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
                 '暂无播放记录\n去搜索页听一首歌吧',
                 textAlign: TextAlign.center,
@@ -84,7 +85,7 @@ class _HistoryPageState extends State<HistoryPage> {
                                     fontSize: 14,
                                     fontWeight: FontWeight.w600,
                                     color: isCurrent
-                                        ? AppColors.cyan
+                                        ? AppColors.accent
                                         : AppColors.textPrimary,
                                   ),
                                 ),
@@ -93,7 +94,7 @@ class _HistoryPageState extends State<HistoryPage> {
                                   song.singer,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       fontSize: 12, color: AppColors.textTertiary),
                                 ),
                               ],
@@ -102,12 +103,12 @@ class _HistoryPageState extends State<HistoryPage> {
                           TagBadge(
                             song.isNetease ? '网易云' : 'QQ',
                             color: song.isNetease
-                                ? AppColors.magenta
-                                : AppColors.cyan,
+                                ? AppColors.accentAlt
+                                : AppColors.accent,
                           ),
                           const SizedBox(width: 8),
-                          const Icon(Icons.play_arrow_rounded,
-                              color: AppColors.cyan, size: 24),
+                          Icon(Icons.play_arrow_rounded,
+                              color: AppColors.accent, size: 24),
                         ],
                       ),
                     ),

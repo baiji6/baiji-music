@@ -176,8 +176,11 @@ class _AgreementPopupState extends State<_AgreementPopup>
   Widget build(BuildContext context) {
     // 自给自足的 Miuix 弹窗根域：即便宿主只是普通 MaterialApp（如单测），
     // 对话框也有完整的 Miuix 主题与注册表可用。
+    // 明暗跟随当前全局令牌（AppColors.isDark 由根组件维护）。
     return MiuixTheme(
-      data: AppTheme.miuix(),
+      data: AppTheme.miuix(
+        brightness: AppColors.isDark ? Brightness.dark : Brightness.light,
+      ),
       child: MiuixPopupScope(
         establishRoot: true,
         child: Stack(
@@ -320,13 +323,13 @@ class _AgreementPopupState extends State<_AgreementPopup>
             MiuixTextButton(
               '返回',
               onPressed: () => setState(() => _showConfirm = false),
-              textStyle: const TextStyle(color: AppColors.textTertiary),
+              textStyle: TextStyle(color: AppColors.textTertiary),
             ),
             const SizedBox(width: 8),
             MiuixTextButton(
               '退出',
               onPressed: _exitApp,
-              textStyle: const TextStyle(
+              textStyle: TextStyle(
                 color: AppColors.danger,
                 fontWeight: FontWeight.w700,
               ),
@@ -387,7 +390,7 @@ class _DocPaneState extends State<_DocPane> {
               padding: const EdgeInsets.fromLTRB(22, 16, 22, 8),
               child: Text(
                 widget.text.trim(),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12.5,
                   height: 1.75,
                   color: AppColors.textSecondary,

@@ -15,10 +15,11 @@ class AboutPage extends StatelessWidget {
       containerColor: Colors.transparent,
       topBar: MiuixTopAppBar(
         title: '关于',
+        titleColor: AppColors.skyBlue,
         color: Colors.transparent,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Icon(Icons.arrow_back_ios_new_rounded,
+          child: Icon(Icons.arrow_back_ios_new_rounded,
               color: AppColors.textPrimary, size: 20),
         ),
       ),
@@ -34,14 +35,14 @@ class AboutPage extends StatelessWidget {
                 borderRadius: BorderRadius.circular(24),
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.magenta.withValues(alpha: 0.4),
+                    color: AppColors.accentAlt.withValues(alpha: 0.4),
                     blurRadius: 24,
                   ),
                 ],
               ),
               child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 40),
             ),
-            const SizedBox(height: 20),
+            SizedBox(height: 20),
             const NeonText(
               '白姬音乐',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
@@ -49,30 +50,30 @@ class AboutPage extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               AppVersion.display,
-              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
             ),
             const SizedBox(height: 24),
             GlassCard(
               child: Column(
                 children: [
                   _infoTile('平台支持', 'iOS / macOS / Windows / Linux / Android'),
-                  const MiuixHorizontalDivider(
+                  MiuixHorizontalDivider(
                       thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('音源', 'QQ 音乐 + 网易云音乐'),
-                  const MiuixHorizontalDivider(
+                  MiuixHorizontalDivider(
                       thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('技术栈', 'Flutter 3.47 · Dart · 纯 Dart 加密'),
-                  const MiuixHorizontalDivider(
+                  MiuixHorizontalDivider(
                       thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('构建加固', 'R8 / UPX / Dart Obfuscate / Strip'),
-                  const MiuixHorizontalDivider(
+                  MiuixHorizontalDivider(
                       thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('作者', '白姬9527'),
                 ],
               ),
             ),
             const SizedBox(height: 24),
-            const Text(
+            Text(
               '© 2024-2026 白姬音乐. All rights reserved.',
               style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
             ),
@@ -87,7 +88,7 @@ class AboutPage extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
       child: Row(
         children: [
-          Text(label, style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+          Text(label, style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
           const Spacer(),
           Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         ],

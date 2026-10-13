@@ -88,7 +88,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _sectionLabel('字号', Icons.format_size_rounded, AppColors.cyan,
+                _sectionLabel('字号', Icons.format_size_rounded, AppColors.accent,
                     '${_fontSize.toStringAsFixed(0)} px'),
                 MiuixSlider(
                   value: _fontSize,
@@ -103,7 +103,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                   },
                 ),
                 _sectionLabel('当前行放大', Icons.zoom_out_map_rounded,
-                    AppColors.magenta, '${_activeScale.toStringAsFixed(2)}×'),
+                    AppColors.accentAlt, '${_activeScale.toStringAsFixed(2)}×'),
                 MiuixSlider(
                   value: _activeScale,
                   min: LyricSettings.minActiveScale,
@@ -114,7 +114,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                     s.setActiveScale(v);
                   },
                 ),
-                const Padding(
+                Padding(
                   padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                   child: Text(
                       '正在唱的这一行会按这个倍率放大显示，默认 1.12×（轻微放大）。'
@@ -147,7 +147,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                   steps: 40,
                   onValueChanged: (v) => s.setCorner(v),
                 ),
-                const Padding(
+                Padding(
                   padding: EdgeInsets.fromLTRB(20, 6, 20, 8),
                   child: Row(
                     children: [
@@ -167,7 +167,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                       _ColorChip(
                         label: '已唱',
                         color: s.sungColor,
-                        defaultColor: LyricSettings.defaultSungColor,
+                        defaultColor: AppColors.karaoke,
                         onTap: () => _pickColor(
                             '已唱颜色', s.sungColor, (c) => s.setSungColor(c)),
                       ),
@@ -175,7 +175,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                       _ColorChip(
                         label: '未唱',
                         color: s.unsungColor,
-                        defaultColor: LyricSettings.defaultUnsungColor,
+                        defaultColor: AppColors.lyricUnsung,
                         onTap: () => _pickColor('未唱颜色', s.unsungColor,
                             (c) => s.setUnsungColor(c)),
                       ),
@@ -183,7 +183,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                       _ColorChip(
                         label: '非当前行',
                         color: s.inactiveColor,
-                        defaultColor: LyricSettings.defaultInactiveColor,
+                        defaultColor: AppColors.lyricInactive,
                         onTap: () => _pickColor('非当前行颜色', s.inactiveColor,
                             (c) => s.setInactiveColor(c)),
                       ),
@@ -318,7 +318,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                   Expanded(
                     child: MiuixText(
                       _hex(_pickerColor),
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12, color: AppColors.textSecondary),
                     ),
                   ),
@@ -349,7 +349,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                   const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
           const Spacer(),
           Text(value,
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 12, color: AppColors.textTertiary)),
         ],
       ),
@@ -390,19 +390,19 @@ class _ColorChip extends StatelessWidget {
                 border: Border.all(color: AppColors.strokeGlass),
               ),
               child: changed
-                  ? const Align(
+                  ? Align(
                       alignment: Alignment.topRight,
                       child: Padding(
                         padding: EdgeInsets.all(2),
                         child: Icon(Icons.circle,
-                            size: 7, color: AppColors.cyan),
+                            size: 7, color: AppColors.accent),
                       ),
                     )
                   : null,
             ),
             const SizedBox(height: 4),
             Text(label,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 11, color: AppColors.textSecondary)),
           ],
         ),
@@ -433,11 +433,11 @@ class _AlignOption extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.cyan.withValues(alpha: 0.12)
+              ? AppColors.accent.withValues(alpha: 0.12)
               : AppColors.surfaceGlass,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: selected ? AppColors.cyan : AppColors.strokeGlass,
+            color: selected ? AppColors.accent : AppColors.strokeGlass,
             width: selected ? 1.2 : 1,
           ),
         ),
@@ -446,14 +446,14 @@ class _AlignOption extends StatelessWidget {
           children: [
             Icon(icon,
                 size: 17,
-                color: selected ? AppColors.cyan : AppColors.textTertiary),
+                color: selected ? AppColors.accent : AppColors.textTertiary),
             const SizedBox(width: 8),
             Text(
               label,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: selected ? AppColors.cyan : AppColors.textPrimary,
+                color: selected ? AppColors.accent : AppColors.textPrimary,
               ),
             ),
           ],

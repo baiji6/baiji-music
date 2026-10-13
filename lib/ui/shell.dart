@@ -159,7 +159,7 @@ class _Rail extends StatelessWidget {
     return Container(
       width: 92,
       margin: const EdgeInsets.all(18),
-      padding: const EdgeInsets.symmetric(vertical: 26),
+      padding: EdgeInsets.symmetric(vertical: 26),
       decoration: BoxDecoration(
         color: AppColors.surfaceGlass,
         borderRadius: BorderRadius.circular(28),
@@ -169,7 +169,7 @@ class _Rail extends StatelessWidget {
         children: [
           const NeonText('BAIJI', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 2)),
           const SizedBox(height: 6),
-          const Text(
+          Text(
             '白姬音乐',
             style: TextStyle(color: AppColors.textTertiary, fontSize: 10, letterSpacing: 1),
           ),
@@ -184,9 +184,9 @@ class _Rail extends StatelessWidget {
             const SizedBox(height: 10),
           ],
           const Spacer(),
-          const Icon(Icons.settings_outlined, size: 22, color: AppColors.textTertiary),
+          Icon(Icons.settings_outlined, size: 22, color: AppColors.textTertiary),
           const SizedBox(height: 8),
-          const Text('设置', style: TextStyle(color: AppColors.textTertiary, fontSize: 10)),
+          Text('设置', style: TextStyle(color: AppColors.textTertiary, fontSize: 10)),
         ],
       ),
     );
@@ -238,7 +238,7 @@ class _RailItem extends StatelessWidget {
             Icon(
               icon,
               size: 23,
-              color: selected ? AppColors.cyan : AppColors.textTertiary,
+              color: selected ? AppColors.accent : AppColors.textTertiary,
             ),
             const SizedBox(height: 5),
             Text(
@@ -372,13 +372,13 @@ class _MiniPlayerBarState extends State<MiniPlayerBar> {
                   : null,
               child: Icon(
                 _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                color: hasSong ? AppColors.cyan : AppColors.textTertiary,
+                color: hasSong ? AppColors.accent : AppColors.textTertiary,
                 size: 28,
               ),
             ),
             MiuixIconButton(
               onPressed: hasSong ? () => PlayerController.instance.next() : null,
-              child: const Icon(Icons.skip_next_rounded,
+              child: Icon(Icons.skip_next_rounded,
                   color: AppColors.textSecondary, size: 22),
             ),
           ],
@@ -450,7 +450,7 @@ class _MiniTitle extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               hasSong ? '${fmt(position)} / ${fmt(duration)}' : '00:00',
-              style: const TextStyle(color: AppColors.textTertiary, fontSize: 10),
+              style: TextStyle(color: AppColors.textTertiary, fontSize: 10),
             ),
           ],
         ),

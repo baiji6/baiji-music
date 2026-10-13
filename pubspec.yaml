@@ -2,7 +2,7 @@ name: baiji_music
 description: "白姬音乐 - 跨平台音乐播放客户端（iOS / macOS / Windows / Linux / Android / HarmonyOS）"
 publish_to: 'none'
 
-version: 2.2.4
+version: 2.2.5
 
 environment:
   sdk: ^3.13.5
@@ -50,6 +50,10 @@ dependencies:
   flutter_markdown_plus: ^1.0.12
   gal: ^2.3.3
   flutter_miuix: ^1.3.0
+  # 莫奈取色（设置里可开关）：读 Android 系统壁纸强调色作主题种子。
+  # 注意本包同时是 flutter_miuix 的传递依赖（其平台动态取色走同一通道），
+  # 提升为直接依赖不改变解析结果，只是让 import 它名正言顺。
+  dynamic_color: ^1.9.0
 
 dev_dependencies:
   flutter_test:

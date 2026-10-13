@@ -28,10 +28,11 @@ class _FavoritePageState extends State<FavoritePage> {
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       topBar: MiuixTopAppBar(
         title: '我的收藏',
+        titleColor: AppColors.skyBlue,
         color: Colors.transparent,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Icon(Icons.arrow_back_ios_new_rounded,
+          child: Icon(Icons.arrow_back_ios_new_rounded,
               color: AppColors.textPrimary, size: 20),
         ),
         actions: [
@@ -42,12 +43,12 @@ class _FavoritePageState extends State<FavoritePage> {
                 HistoryStore.clearFavorites();
                 _refresh();
               },
-              textStyle: const TextStyle(color: AppColors.danger, fontSize: 13),
+              textStyle: TextStyle(color: AppColors.danger, fontSize: 13),
             ),
         ],
       ),
       content: (padding) => favs.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
                 '还没有收藏的歌曲\n在搜索结果长按或点击收藏按钮试试',
                 textAlign: TextAlign.center,
@@ -87,7 +88,7 @@ class _FavoritePageState extends State<FavoritePage> {
                                     fontSize: 14,
                                     fontWeight: FontWeight.w600,
                                     color: isCurrent
-                                        ? AppColors.cyan
+                                        ? AppColors.accent
                                         : AppColors.textPrimary,
                                   ),
                                 ),
@@ -96,7 +97,7 @@ class _FavoritePageState extends State<FavoritePage> {
                                   song.singer,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       fontSize: 12, color: AppColors.textTertiary),
                                 ),
                               ],
@@ -105,8 +106,8 @@ class _FavoritePageState extends State<FavoritePage> {
                           TagBadge(
                             song.isNetease ? '网易云' : 'QQ',
                             color: song.isNetease
-                                ? AppColors.magenta
-                                : AppColors.cyan,
+                                ? AppColors.accentAlt
+                                : AppColors.accent,
                           ),
                           const SizedBox(width: 4),
                           MiuixIconButton(

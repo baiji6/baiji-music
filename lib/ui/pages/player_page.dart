@@ -299,7 +299,7 @@ class _PlayerPageState extends State<PlayerPage> {
       containerColor: Colors.transparent,
       snackbarHost: MiuixSnackbarHost(state: appSnackbarHostState),
       content: (_) => Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
@@ -313,7 +313,7 @@ class _PlayerPageState extends State<PlayerPage> {
               _buildTopBar(song, landscape),
 
               if (song == null)
-                const Expanded(
+                Expanded(
                   child: Center(
                     child: Text('未在播放\n去搜索一首歌吧',
                         textAlign: TextAlign.center,
@@ -424,11 +424,11 @@ class _PlayerPageState extends State<PlayerPage> {
           children: [
             MiuixIconButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Icon(Icons.keyboard_arrow_down_rounded,
+              child: Icon(Icons.keyboard_arrow_down_rounded,
                   color: AppColors.textSecondary, size: 28),
             ),
             const SizedBox(width: 2),
-            const Text('正在播放',
+            Text('正在播放',
                 style: TextStyle(fontSize: 11, color: AppColors.textTertiary)),
             const Spacer(),
             if (song != null) _SourceChip(song: song),
@@ -437,7 +437,7 @@ class _PlayerPageState extends State<PlayerPage> {
             MiuixIconButton(
               onPressed: () =>
                   setState(() => _showLyricStyleSheet = true),
-              child: const Icon(Icons.format_size_rounded,
+              child: Icon(Icons.format_size_rounded,
                   color: AppColors.textSecondary, size: 20),
             ),
           ],
@@ -523,8 +523,8 @@ class _PlayerPageState extends State<PlayerPage> {
             onPressed: _song == null
                 ? null
                 : () => setState(() => _showAudioSpecSheet = true),
-            child: const Icon(Icons.graphic_eq_rounded,
-                size: 20, color: AppColors.cyan),
+            child: Icon(Icons.graphic_eq_rounded,
+                size: 20, color: AppColors.accent),
           ),
         ],
       );
@@ -595,7 +595,7 @@ class _PlayerPageState extends State<PlayerPage> {
   Widget _buildLyrics({required double padFactor}) {
     final future = _lyricsFuture;
     if (future == null) {
-      return const Center(
+      return Center(
           child: Text('暂无歌词',
               style: TextStyle(color: AppColors.textTertiary, fontSize: 13)));
     }
@@ -617,7 +617,7 @@ class _PlayerPageState extends State<PlayerPage> {
         }
         final lyrics = snap.data;
         if (lyrics == null || lyrics.isEmpty) {
-          return const Center(
+          return Center(
             child: Text('暂无歌词\n本曲可能没有提供歌词资源',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.textTertiary, fontSize: 13)),
@@ -732,7 +732,7 @@ class _SongTitle extends StatelessWidget {
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 12, color: AppColors.textSecondary),
             ),
           ],
@@ -773,7 +773,7 @@ class _PageIndicator extends StatelessWidget {
                   height: 5,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(3),
-                    color: i == index ? AppColors.cyan : AppColors.strokeGlass,
+                    color: i == index ? AppColors.accent : AppColors.strokeGlass,
                   ),
                 ),
               ),
@@ -805,7 +805,7 @@ class _SourceChip extends StatelessWidget {
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
-          color: ne ? AppColors.magenta : AppColors.cyan,
+          color: ne ? AppColors.accentAlt : AppColors.accent,
         ),
       ),
     );
@@ -908,11 +908,11 @@ class _ProgressSection extends StatelessWidget {
                     Row(
                       children: [
                         Text(_fmt(pos),
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 11, color: AppColors.textTertiary)),
                         Expanded(child: _slider(maxMs, value)),
                         Text(_fmt(total),
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontSize: 11, color: AppColors.textTertiary)),
                       ],
                     )
@@ -924,10 +924,10 @@ class _ProgressSection extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(_fmt(pos),
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 11, color: AppColors.textTertiary)),
                           Text(_fmt(total),
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 11, color: AppColors.textTertiary)),
                         ],
                       ),
@@ -1013,7 +1013,7 @@ class _ControlsRow extends StatelessWidget {
               boxShadow: hasSong
                   ? [
                       BoxShadow(
-                        color: AppColors.cyan.withValues(alpha: 0.45),
+                        color: AppColors.accent.withValues(alpha: 0.45),
                         blurRadius: 22,
                       )
                     ]
@@ -1132,7 +1132,7 @@ class _QualityButton extends StatelessWidget {
                 size: 16,
                 color: downgraded
                     ? AppColors.warning
-                    : (netease ? AppColors.magenta : AppColors.cyan)),
+                    : (netease ? AppColors.accentAlt : AppColors.accent)),
             const SizedBox(width: 6),
             Text(
               label,
@@ -1193,7 +1193,7 @@ class _DownloadButton extends StatelessWidget {
             else
               Icon(Icons.download_rounded,
                   size: 16,
-                  color: enabled ? AppColors.cyan : AppColors.textTertiary),
+                  color: enabled ? AppColors.accent : AppColors.textTertiary),
             const SizedBox(width: 6),
             Text(
               downloading
@@ -1260,7 +1260,7 @@ class _QualitySheet<T> extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 decoration: BoxDecoration(
                   color: selected
-                      ? AppColors.cyan.withValues(alpha: 0.12)
+                      ? AppColors.accent.withValues(alpha: 0.12)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1272,7 +1272,7 @@ class _QualitySheet<T> extends StatelessWidget {
                           : Icons.audiotrack_rounded,
                       size: 18,
                       color: selected
-                          ? AppColors.cyan
+                          ? AppColors.accent
                           : AppColors.textTertiary,
                     ),
                     const SizedBox(width: 12),
@@ -1289,14 +1289,14 @@ class _QualitySheet<T> extends StatelessWidget {
                                   ? FontWeight.w700
                                   : FontWeight.w500,
                               color: selected
-                                  ? AppColors.cyan
+                                  ? AppColors.accent
                                   : AppColors.textPrimary,
                             ),
                           ),
                           if (sub.isNotEmpty)
                             Text(
                               sub,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 10,
                                   color: AppColors.textTertiary),
                             ),
@@ -1662,10 +1662,10 @@ class _AudioSpecSheetState extends State<_AudioSpecSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               children: [
                 Icon(Icons.graphic_eq_rounded,
-                    size: 18, color: AppColors.cyan),
+                    size: 18, color: AppColors.accent),
                 SizedBox(width: 8),
                 Text(
                   '音频规格',
@@ -1693,7 +1693,7 @@ class _AudioSpecSheetState extends State<_AudioSpecSheet> {
                 }
                 final spec = snap.data ?? const AudioSpec();
                 if (spec.isEmpty) {
-                  return const Padding(
+                  return Padding(
                     padding: EdgeInsets.symmetric(vertical: 22),
                     child: Text(
                       '没能读到这首歌的音频规格。'
@@ -1719,7 +1719,7 @@ class _AudioSpecSheetState extends State<_AudioSpecSheet> {
                               width: 92,
                               child: Text(
                                 it.label,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12.5,
                                   color: AppColors.textTertiary,
                                 ),
@@ -1728,7 +1728,7 @@ class _AudioSpecSheetState extends State<_AudioSpecSheet> {
                             Expanded(
                               child: Text(
                                 it.value,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12.5,
                                   color: AppColors.textPrimary,
                                   fontWeight: FontWeight.w500,
@@ -1739,7 +1739,7 @@ class _AudioSpecSheetState extends State<_AudioSpecSheet> {
                         ),
                       ),
                     const SizedBox(height: 10),
-                    const Text(
+                    Text(
                       '采样率越高还原细节越多；比特率是无损以外的音质档，'
                       '无损格式（FLAC / ALAC）通常不标注固定码率。',
                       style: TextStyle(
@@ -1832,7 +1832,7 @@ class _KaraokeLineState extends State<_KaraokeLine> {
   void _measure(double maxWidth) {
     if (_wordSpans != null && _laidWidth == maxWidth) return;
     final painter = TextPainter(
-      text: _span(Colors.white),
+      text: _span(LyricSettings.instance.unsungColor),
       textAlign: widget.align,
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: maxWidth);
@@ -1924,7 +1924,7 @@ class _KaraokeLineState extends State<_KaraokeLine> {
             final gradient = _buildGradient(posMs);
             final child = RichText(
               textAlign: widget.align,
-              text: _span(Colors.white),
+              text: _span(LyricSettings.instance.unsungColor),
             );
             if (gradient == null) return child;
             return ShaderMask(

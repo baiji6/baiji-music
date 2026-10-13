@@ -8,6 +8,7 @@ import '../../core/app_logger.dart';
 import '../../core/cache_manager.dart';
 import '../../core/capture_trust.dart';
 import '../../core/lyric_settings.dart';
+import '../../core/theme_controller.dart';
 import '../../core/update_checker.dart';
 import '../../download/download_extras.dart';
 import '../../download/download_manager.dart';
@@ -297,34 +298,34 @@ class _SettingsPageState extends State<SettingsPage> {
 
   /// 更新日志的排版：字号压到 12~13，整体偏灰，和 App 暗色玻璃主题一致。
   MarkdownStyleSheet get _changelogSheet => MarkdownStyleSheet(
-        p: const TextStyle(
+        p: TextStyle(
             fontSize: 12.5, height: 1.5, color: AppColors.textSecondary),
-        listBullet: const TextStyle(color: AppColors.textTertiary),
-        h1: const TextStyle(
+        listBullet: TextStyle(color: AppColors.textTertiary),
+        h1: TextStyle(
             fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
-        h2: const TextStyle(
+        h2: TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.w700,
             color: AppColors.textPrimary),
-        h3: const TextStyle(
+        h3: TextStyle(
             fontSize: 13.5,
             fontWeight: FontWeight.w600,
             color: AppColors.textPrimary),
-        h4: const TextStyle(
+        h4: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w600,
             color: AppColors.textPrimary),
-        h5: const TextStyle(
+        h5: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w600,
             color: AppColors.textPrimary),
-        h6: const TextStyle(
+        h6: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w600,
             color: AppColors.textPrimary),
-        code: const TextStyle(
+        code: TextStyle(
             fontSize: 12,
-            color: AppColors.cyan,
+            color: AppColors.accent,
             backgroundColor: AppColors.surfaceGlass),
         codeblockDecoration: BoxDecoration(
           color: AppColors.surfaceGlass,
@@ -334,15 +335,15 @@ class _SettingsPageState extends State<SettingsPage> {
         codeblockPadding: const EdgeInsets.all(12),
         blockquoteDecoration: BoxDecoration(
           border: Border(
-            left: BorderSide(color: AppColors.cyan.withValues(alpha: 0.7), width: 3),
+            left: BorderSide(color: AppColors.accent.withValues(alpha: 0.7), width: 3),
           ),
         ),
         blockquotePadding: const EdgeInsets.only(left: 12),
         horizontalRuleDecoration: BoxDecoration(
           border: Border(top: BorderSide(color: AppColors.strokeGlass)),
         ),
-        a: const TextStyle(
-            color: AppColors.cyan, decoration: TextDecoration.underline),
+        a: TextStyle(
+            color: AppColors.accent, decoration: TextDecoration.underline),
         tableBorder: TableBorder.all(color: AppColors.strokeGlass),
         tableHead: const TextStyle(fontWeight: FontWeight.w600),
         tableBody: const TextStyle(fontSize: 12),
@@ -355,9 +356,10 @@ class _SettingsPageState extends State<SettingsPage> {
       snackbarHost: MiuixSnackbarHost(state: _snackbarHostState),
       topBar: MiuixTopAppBar(
         title: '设置',
+        titleColor: AppColors.skyBlue,
         navigationIcon: MiuixIconButton(
           onPressed: () => Navigator.pop(context),
-          child: const Icon(Icons.arrow_back_rounded,
+          child: Icon(Icons.arrow_back_rounded,
               color: AppColors.textPrimary),
         ),
       ),
@@ -367,6 +369,34 @@ class _SettingsPageState extends State<SettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            const SectionHeader(title: '外观'),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              // 主题偏好是 ChangeNotifier，只重建这一行，不波及整个设置页
+              child: AnimatedBuilder(
+                animation: ThemeController.instance,
+                builder: (ctx, _) => MiuixSwitchPreference(
+                  title: '莫奈取色',
+                  summary: '开启后主题色跟随系统壁纸取色'
+                      '（Android 支持；其他平台回退品牌紫）',
+                  startAction: const Icon(Icons.palette_rounded,
+                      color: AppColors.violet, size: 22),
+                  value: ThemeController.instance.monet,
+                  onChanged: (v) => ThemeController.instance.setMonet(v),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                '整体界面默认跟随系统自动切换深色 / 浅色；标题文字为天蓝色。'
+                '莫奈取色只影响主题强调色（按钮 / 开关 / 选中态），'
+                '玻璃底、背景光晕与标题天蓝保持不变。',
+                style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+              ),
+            ),
+            const SizedBox(height: 24),
             const SectionHeader(title: '音质设置'),
             GlassCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
@@ -375,8 +405,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   MiuixArrowPreference(
                     title: 'QQ 音乐播放音质',
                     summary: _qqQuality.label,
-                    startAction: const Icon(Icons.equalizer_rounded,
-                        color: AppColors.cyan, size: 22),
+                    startAction: Icon(Icons.equalizer_rounded,
+                        color: AppColors.accent, size: 22),
                     onClick: () =>
                         setState(() => _showQQQualitySheet = true),
                   ),
@@ -384,8 +414,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   MiuixArrowPreference(
                     title: '网易云音乐播放音质',
                     summary: _neQuality.label,
-                    startAction: const Icon(Icons.equalizer_rounded,
-                        color: AppColors.magenta, size: 22),
+                    startAction: Icon(Icons.equalizer_rounded,
+                        color: AppColors.accentAlt, size: 22),
                     onClick: () =>
                         setState(() => _showNeteaseQualitySheet = true),
                   ),
@@ -408,7 +438,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   const MiuixHorizontalDivider(),
                   MiuixArrowPreference(
                     title: '恢复默认目录',
-                    startAction: const Icon(Icons.restore_rounded,
+                    startAction: Icon(Icons.restore_rounded,
                         color: AppColors.textTertiary, size: 22),
                     onClick: _resetDownloadDir,
                   ),
@@ -416,8 +446,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   MiuixArrowPreference(
                     title: '下载歌词',
                     summary: '${_lyricMode.label} · ${_lyricMode.description}',
-                    startAction: const Icon(Icons.lyrics_rounded,
-                        color: AppColors.magenta, size: 22),
+                    startAction: Icon(Icons.lyrics_rounded,
+                        color: AppColors.accentAlt, size: 22),
                     onClick: () =>
                         setState(() => _showLyricModeSheet = true),
                   ),
@@ -425,8 +455,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   MiuixSwitchPreference(
                     title: '下载封面',
                     summary: '取最高分辨率原图，写入音频文件内嵌标签',
-                    startAction: const Icon(Icons.image_rounded,
-                        color: AppColors.cyan, size: 22),
+                    startAction: Icon(Icons.image_rounded,
+                        color: AppColors.accent, size: 22),
                     value: _saveCover,
                     onChanged: _toggleSaveCover,
                   ),
@@ -434,7 +464,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             const SizedBox(height: 6),
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 4),
               child: Text(
                 '歌词与封面的保存方式：优先写入音频文件内部（MP3 → ID3v2 USLT/APIC，'
@@ -454,8 +484,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   MiuixArrowPreference(
                     title: '清理缓存',
                     summary: '当前占用 $_cacheSize',
-                    startAction: const Icon(Icons.cleaning_services_rounded,
-                        color: AppColors.cyan, size: 22),
+                    startAction: Icon(Icons.cleaning_services_rounded,
+                        color: AppColors.accent, size: 22),
                     onClick: _prepareClearCache,
                   ),
                   const MiuixHorizontalDivider(),
@@ -469,7 +499,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   const MiuixHorizontalDivider(),
                   MiuixArrowPreference(
                     title: '恢复默认缓存目录',
-                    startAction: const Icon(Icons.restore_rounded,
+                    startAction: Icon(Icons.restore_rounded,
                         color: AppColors.textTertiary, size: 22),
                     onClick: _resetCacheDir,
                   ),
@@ -477,8 +507,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   MiuixArrowPreference(
                     title: '内存图片缓存上限',
                     summary: '$_cacheMemoryMb MB',
-                    startAction: const Icon(Icons.memory_rounded,
-                        color: AppColors.magenta, size: 22),
+                    startAction: Icon(Icons.memory_rounded,
+                        color: AppColors.accentAlt, size: 22),
                     onClick: () =>
                         setState(() => _showCacheLimitSheet = true),
                   ),
@@ -486,7 +516,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             const SizedBox(height: 6),
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 4),
               child: Text(
                 '封面在 App 内是通过内存缓存加载的（不落盘），所以「清理缓存」清的是'
@@ -508,8 +538,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   summary:
                       '${_lyricStyle.fontSize.toStringAsFixed(0)} px · '
                       '${_lyricStyle.alignLeft ? '左对齐' : '居中'}',
-                  startAction: const Icon(Icons.format_size_rounded,
-                      color: AppColors.cyan, size: 22),
+                  startAction: Icon(Icons.format_size_rounded,
+                      color: AppColors.accent, size: 22),
                   onClick: () =>
                       setState(() => _showLyricStyleSheet = true),
                 ),
@@ -531,7 +561,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           ? Icons.verified_rounded
                           : Icons.person_outline,
                       color: AppServices.instance.qq.isLoggedIn()
-                          ? AppColors.cyan
+                          ? AppColors.accent
                           : AppColors.textTertiary,
                       size: 22,
                     ),
@@ -551,7 +581,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           ? Icons.verified_rounded
                           : Icons.person_outline,
                       color: AppServices.instance.netease.isLoggedIn()
-                          ? AppColors.magenta
+                          ? AppColors.accentAlt
                           : AppColors.textTertiary,
                       size: 22,
                     ),
@@ -597,7 +627,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             const SizedBox(height: 6),
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 4),
               child: Text(
                 'Android 端还需在手机上装好抓包工具的 CA（设置 → 安全 → 凭据），'
@@ -635,7 +665,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   MiuixArrowPreference(
                     title: '免责声明',
                     summary: '点击查看全文',
-                    startAction: const Icon(Icons.gavel_rounded,
+                    startAction: Icon(Icons.gavel_rounded,
                         color: AppColors.warning, size: 22),
                     onClick: () => showAgreementReader(
                       context,
@@ -646,8 +676,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   MiuixArrowPreference(
                     title: '使用协议',
                     summary: '点击查看全文',
-                    startAction: const Icon(Icons.article_rounded,
-                        color: AppColors.magenta, size: 22),
+                    startAction: Icon(Icons.article_rounded,
+                        color: AppColors.accentAlt, size: 22),
                     onClick: () => showAgreementReader(
                       context,
                       initial: AgreementTab.terms,
@@ -731,13 +761,13 @@ class _SettingsPageState extends State<SettingsPage> {
                       e.detail,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 11, color: AppColors.textTertiary),
                     ),
                   ),
               ],
               const SizedBox(height: 4),
-              const Text(
+              Text(
                 '会清空：内存里的封面缓存，以及缓存目录下的'
                 'audio_cache / http_cache / logs / decrypt'
                 '（含日志导出与解密时的文件副本）。\n'
@@ -782,7 +812,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: SingleChildScrollView(
                   child: _updateInfo == null ||
                           _updateInfo!.body.trim().isEmpty
-                      ? const Text('该版本没有提供更新说明。',
+                      ? Text('该版本没有提供更新说明。',
                           style: TextStyle(
                               fontSize: 12, color: AppColors.textTertiary))
                       : MarkdownBody(
@@ -798,7 +828,7 @@ class _SettingsPageState extends State<SettingsPage> {
                               fit: BoxFit.contain,
                               errorBuilder: (context, error, stack) => Text(
                                 alt?.isNotEmpty == true ? alt! : '[图片]',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 11,
                                     color: AppColors.textTertiary),
                               ),
@@ -925,7 +955,7 @@ class _LyricModeTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.cyan.withValues(alpha: 0.12)
+              ? AppColors.accent.withValues(alpha: 0.12)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
         ),
@@ -936,7 +966,7 @@ class _LyricModeTile extends StatelessWidget {
                   ? Icons.radio_button_checked_rounded
                   : Icons.radio_button_unchecked_rounded,
               size: 18,
-              color: selected ? AppColors.cyan : AppColors.textTertiary,
+              color: selected ? AppColors.accent : AppColors.textTertiary,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -950,14 +980,14 @@ class _LyricModeTile extends StatelessWidget {
                       fontWeight:
                           selected ? FontWeight.w700 : FontWeight.w500,
                       color: selected
-                          ? AppColors.cyan
+                          ? AppColors.accent
                           : AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     mode.description,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 11, color: AppColors.textTertiary),
                   ),
                 ],
@@ -1007,7 +1037,7 @@ class _QualitySheet<T> extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                 decoration: BoxDecoration(
                   color: selected
-                      ? AppColors.cyan.withValues(alpha: 0.12)
+                      ? AppColors.accent.withValues(alpha: 0.12)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1019,7 +1049,7 @@ class _QualitySheet<T> extends StatelessWidget {
                           : Icons.audiotrack_rounded,
                       size: 18,
                       color: selected
-                          ? AppColors.cyan
+                          ? AppColors.accent
                           : AppColors.textTertiary,
                     ),
                     const SizedBox(width: 12),
@@ -1032,7 +1062,7 @@ class _QualitySheet<T> extends StatelessWidget {
                               ? FontWeight.w700
                               : FontWeight.w500,
                           color: selected
-                              ? AppColors.cyan
+                              ? AppColors.accent
                               : AppColors.textPrimary,
                         ),
                       ),
