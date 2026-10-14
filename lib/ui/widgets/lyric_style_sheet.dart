@@ -90,7 +90,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
               children: [
                 _sectionLabel('字号', Icons.format_size_rounded, AppColors.accent,
                     '${_fontSize.toStringAsFixed(0)} px'),
-                MiuixSlider(
+                SizedBox(width: double.infinity, child: MiuixSlider(
                   value: _fontSize,
                   min: LyricSettings.minFontSize,
                   max: LyricSettings.maxFontSize,
@@ -101,10 +101,10 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                     setState(() => _fontSize = v);
                     s.setFontSize(v);
                   },
-                ),
+                )),
                 _sectionLabel('当前行放大', Icons.zoom_out_map_rounded,
                     AppColors.accentAlt, '${_activeScale.toStringAsFixed(2)}×'),
-                MiuixSlider(
+                SizedBox(width: double.infinity, child: MiuixSlider(
                   value: _activeScale,
                   min: LyricSettings.minActiveScale,
                   max: LyricSettings.maxActiveScale,
@@ -113,7 +113,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                     setState(() => _activeScale = v);
                     s.setActiveScale(v);
                   },
-                ),
+                )),
                 Padding(
                   padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                   child: Text(
@@ -129,7 +129,7 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                     Icons.format_bold_rounded,
                     AppColors.violet,
                     '${s.weight} · ${_weightNames[((s.weight - LyricSettings.minWeight) / 100).round().clamp(0, _weightNames.length - 1)]}'),
-                MiuixSlider(
+                SizedBox(width: double.infinity, child: MiuixSlider(
                   value: s.weight.toDouble(),
                   min: LyricSettings.minWeight.toDouble(),
                   max: LyricSettings.maxWeight.toDouble(),
@@ -137,16 +137,16 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                           LyricSettings.minWeight) ~/
                       100,
                   onValueChanged: (v) => s.setWeight(v.round()),
-                ),
+                )),
                 _sectionLabel('歌词卡片圆角', Icons.rounded_corner_rounded,
                     AppColors.aqua, '${s.corner.toStringAsFixed(0)} px'),
-                MiuixSlider(
+                SizedBox(width: double.infinity, child: MiuixSlider(
                   value: s.corner,
                   min: LyricSettings.minCorner,
                   max: LyricSettings.maxCorner,
                   steps: 40,
                   onValueChanged: (v) => s.setCorner(v),
-                ),
+                )),
                 Padding(
                   padding: EdgeInsets.fromLTRB(20, 6, 20, 8),
                   child: Row(

@@ -135,6 +135,29 @@ class PlayerController {
     if (_player != null) return;
     _player = Player();
 
+    // v2.2.9-fix2：显式配置变速音频滤镜。
+    //
+    // libmpv 0.38+ 变速走 scaletempo2 滤镜，其默认 **max-speed=4**——
+    // 超过 4 倍速时音频直接静音（用户反馈「选择倍速播放后没有声音」，
+    // 点 5.0x 预设必现）。放宽到 0.01 ~ 50 全区间；旧版 mpv 没有
+    // scaletempo2 滤镜时这条 setProperty 失败被吞掉，回落默认行为
+    // （自动 scaletempo，本身不限速，同样不出问题）。
+    //
+    // media_kit 的 setRate（pitch 配置关闭时）只写 `speed` 属性、
+    // 不覆盖 `af`，这里的配置对整个播放周期有效。
+    unawaited(Future(() async {
+      try {
+        final p = _player!.platform;
+        if (p is NativePlayer) {
+          await p.setProperty(
+              'af', 'scaletempo2=min-speed=0.01:max-speed=50');
+          AppLog.i('PlayerController', 'scaletempo2 变速滤镜已配置（0.01~50x）');
+        }
+      } catch (e) {
+        AppLog.w('PlayerController', '配置变速滤镜失败（回落默认）: $e');
+      }
+    }));
+
     // native 边界回调统一包 try-catch：media_kit 在 release 下回调里抛出的
     // 异常（典型为 null check）会冒泡成 FATAL 闪退，这里降级为 ERROR 日志。
     _player!.stream.playing.listen((playing) {

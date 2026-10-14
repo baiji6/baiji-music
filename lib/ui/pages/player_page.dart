@@ -1279,12 +1279,17 @@ class _RateSheetState extends State<_RateSheet> {
                   ),
               ],
             ),
-            MiuixSlider(
-              value: _posOf(_rate).clamp(0.0, 1.0),
-              min: 0.0,
-              max: 1.0,
-              steps: 0,
-              onValueChanged: (v) => _apply(_rateOf(v)),
+            // CustomPaint 无子节点时在松约束（Column）下会缩成 0 宽——
+            // 必须 SizedBox 强制撑满，否则滑杆整个不可见（v2.2.9-fix2）。
+            SizedBox(
+              width: double.infinity,
+              child: MiuixSlider(
+                value: _posOf(_rate).clamp(0.0, 1.0),
+                min: 0.0,
+                max: 1.0,
+                steps: 0,
+                onValueChanged: (v) => _apply(_rateOf(v)),
+              ),
             ),
             Padding(
               padding: const EdgeInsets.only(bottom: 6),

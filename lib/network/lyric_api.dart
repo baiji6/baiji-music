@@ -4,7 +4,8 @@
 /// 请求 `music.musichallSong.PlayLyricInfo` / `GetPlayLyricInfo`，取 `lyric`
 /// （QRC，可能是加密密文）、`trans`（译文）、`roma`（罗马音）。
 ///
-/// 网易云侧走 `POST /api/song/lyric`，同一次响应里同时可能带 `lrc`（逐行）、
+/// 网易云侧走 `POST /api/song/lyric/v1`（v1 接口才返回 `yrc` 逐字，
+/// 且需登录 Cookie），同一次响应里同时可能带 `lrc`（逐行）、
 /// `yrc`（**逐字**）、`tlyric`（译文）、`romalrc`（罗马音）。有 `yrc` 时优先用它。
 library;
 
@@ -113,15 +114,20 @@ class LyricApi {
 
   /// 网易云歌词。
   ///
-  /// 参数取 `lv=0 / kv=0 / tv=0 / rv=0 / yv=0`：实测传 `-1` 会拿不到内容。
-  /// 响应中 `yrc` 为逐字歌词（YRC 格式），`lrc` 为逐行；两者都存在时优先 `yrc`，
-  /// 因为它信息量更大且能被 [LyricParser] 渲染成卡拉 OK 效果。
+  /// **必须走 `/song/lyric/v1`**（v2.2.9-fix2）：老接口 `/song/lyric`
+  /// 无论什么参数都**不会**返回 `yrc`（逐字），这就是"有逐字歌词的歌曲
+  /// 获取到逐行歌词"的根因——实测晴天（id=186016）老接口响应里连 `yrc`
+  /// 键都没有。v1 接口在带登录 Cookie（MUSIC_U）时返回 `yrc`；
+  /// 未登录时没有 `yrc`，自动回退逐行 `lrc`。
+  ///
+  /// `cv` 为客户端版本号（社区通用值），缺了部分网关不给 v1 响应。
   static Future<Lyrics> netease(Song song) async {
     final json = await AppServices.instance.netease.postApi(
-      '${NeteaseClient.apiBase}/song/lyric',
+      '${NeteaseClient.apiBase}/song/lyric/v1',
       <String, String>{
         'id': '${song.songId}',
         'cp': 'false',
+        'cv': '4747474',
         'tv': '0',
         'lv': '0',
         'rv': '0',
