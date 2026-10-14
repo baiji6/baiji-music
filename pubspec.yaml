@@ -54,6 +54,7 @@ dependencies:
   # 注意本包同时是 flutter_miuix 的传递依赖（其平台动态取色走同一通道），
   # 提升为直接依赖不改变解析结果，只是让 import 它名正言顺。
   dynamic_color: ^1.9.0
+  ed25519_edwards: ^0.3.2
 
 dev_dependencies:
   flutter_test:

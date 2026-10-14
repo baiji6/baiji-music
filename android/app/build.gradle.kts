@@ -1,7 +1,57 @@
+import java.io.FileInputStream
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.security.cert.Certificate
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+/**
+ * 计算本次构建**实际使用**的签名证书 SHA-256 指纹（#78 签名校验）。
+ *
+ * - 配置了 ANDROID_KEYSTORE_PATH（CI 正式签名）→ 读正式 keystore；
+ * - 否则回退 debug keystore（本地出包）——指纹跟随实际签名，始终自洽。
+ *
+ * 指纹注入 BuildConfig.SIGN_CERT_SHA256，运行时由 MainActivity 读取
+ * 当前 APK 的签名证书与之比对：重打包 / 换签的 APK 指纹必然对不上。
+ * 纯 JVM API（KeyStore + MessageDigest），不依赖 keytool 输出解析。
+ */
+fun signingCertSha256(): String {
+    val ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+    val ksFile: File
+    val ksPass: String
+    val ksAlias: String
+    if (!ksPath.isNullOrBlank()) {
+        ksFile = File(ksPath)
+        ksPass = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+        ksAlias = System.getenv("ANDROID_KEY_ALIAS") ?: ""
+    } else {
+        ksFile = File(System.getProperty("user.home"), ".android/debug.keystore")
+        ksPass = "android"
+        ksAlias = "androiddebugkey"
+    }
+    if (!ksFile.exists()) return ""
+    // .jks 与 .pkcs12 两种容器都试；别名给不准就取第一个证书
+    for (type in listOf("JKS", "PKCS12")) {
+        try {
+            val ks = KeyStore.getInstance(type)
+            FileInputStream(ksFile).use { ks.load(it, ksPass.toCharArray()) }
+            val alias = if (ksAlias.isNotEmpty() && ks.containsAlias(ksAlias))
+                ksAlias
+            else
+                ks.aliases().nextElement()
+            val cert: Certificate = ks.getCertificate(alias) ?: continue
+            return MessageDigest.getInstance("SHA-256")
+                .digest(cert.encoded)
+                .joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) {
+            // 换下一种容器类型再试
+        }
+    }
+    return ""
 }
 
 android {
@@ -50,6 +100,15 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // #78 签名校验：把实际签名证书的 SHA-256 锚进原生代码。
+        // 为空（keystore 不可读）时运行时跳过校验而不是误杀。
+        buildConfigField("String", "SIGN_CERT_SHA256", "\"${signingCertSha256()}\"")
+    }
+
+    buildFeatures {
+        // AGP 9 默认关闭 BuildConfig 生成，签名指纹锚定需要它
+        buildConfig = true
     }
 
     buildTypes {

@@ -14,6 +14,7 @@ import 'core/capture_trust.dart';
 import 'core/dev_mode.dart';
 import 'core/kv_store.dart';
 import 'core/lyric_settings.dart';
+import 'core/signature_guard.dart';
 import 'core/theme_controller.dart';
 import 'core/ui_settings.dart';
 import 'core/update_checker.dart';
@@ -22,6 +23,7 @@ import 'theme/app_theme.dart';
 import 'ui/pages/discover_home.dart';
 import 'ui/pages/library_home.dart';
 import 'ui/pages/search_home.dart';
+import 'ui/pages/tamper_block_page.dart';
 import 'ui/shell.dart';
 import 'ui/widgets/agreement_dialog.dart';
 import 'ui/widgets/app_snackbar.dart';
@@ -49,6 +51,19 @@ Future<void> main() async {
   await AppLog.instance.initFileSink();
   AppLog.i('App', '白姬音乐启动');
   _installCrashGuards();
+  // #78 签名校验：release 构建先验签再进正常 UI。
+  // Android 比对构建期锚定的证书指纹；桌面端验签文件完整性清单；
+  // 失败 = 安装包被篡改，只给拦截页，不执行任何业务代码。
+  final signature = await SignatureGuard.check();
+  if (signature.tampered) {
+    AppLog.f('SignatureGuard', '签名校验失败：${signature.detail}');
+    AppLog.instance.flushSync();
+    runZonedGuarded(() {
+      runApp(TamperBlockApp(result: signature));
+    }, _onUncaughtZoneError);
+    return;
+  }
+  AppLog.i('SignatureGuard', signature.detail);
   // 异步未捕获异常的最后一层兜底：zone 内 runApp，崩前同步刷盘。
   runZonedGuarded(() {
     runApp(const BaijiMusicApp());

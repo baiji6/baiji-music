@@ -39,6 +39,15 @@ env:
   # Dart 混淆参数（五端通用核心防逆向）
   OBF_ARGS: --obfuscate --split-debug-info=build/out/debug-info --tree-shake-icons
 
+# ==============================================================================
+# 桌面端完整性签名（#78 签名校验）
+# secret INTEGRITY_SIGN_KEY_PEM（ed25519 PKCS#8 PEM）存在时：
+#   - 构建命令追加 --dart-define=BAIJI_CI_BUILD=true（应用侧据此要求
+#     官方产物必须带完整性清单，堵住「删清单绕过校验」）；
+#   - 打包前用 tools/integrity_sign.py 生成并签名 integrity.manifest。
+# secret 未配置时跳过签名（应用侧缺清单 → 放行，与旧产物一致）。
+# ==============================================================================
+
 jobs:
   # ---------------------------------------------------------------- Android
   android:
@@ -200,8 +209,25 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      # 完整性签名私钥（ed25519 PEM）。没有配置 secret 时 has_key=false，
+      # 构建不加 BAIJI_CI_BUILD 标记、也不生成清单。
+      - name: Integrity signing key
+        id: integrity
+        env:
+          KEY_PEM: ${{ secrets.INTEGRITY_SIGN_KEY_PEM }}
+        run: |
+          if [ -n "$KEY_PEM" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+            mkdir -p build/out
+            printf '%s' "$KEY_PEM" > build/out/integrity-key.pem
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build macOS Release
-        run: flutter build macos --release ${{ env.OBF_ARGS }}
+        run: >-
+          flutter build macos --release ${{ env.OBF_ARGS }}
+          ${{ steps.integrity.outputs.has_key == 'true' && '--dart-define=BAIJI_CI_BUILD=true' || '' }}
 
       # 符号剥离：等价于 Xcode STRIP_INSTALLED_PRODUCT
       - name: Strip symbols
@@ -209,6 +235,16 @@ jobs:
           find build/macos/Build/Products/Release -type f -perm -111 | while read BIN; do
             strip -x "$BIN" 2>/dev/null || true
           done
+
+      # 完整性清单（覆盖整个 .app/Contents，exe 在 Contents/MacOS 下，
+      # 清单放在 Contents 根——应用侧会从 exe 目录向上找清单）
+      - name: Sign integrity manifest
+        if: steps.integrity.outputs.has_key == 'true'
+        run: |
+          APP=$(find build/macos/Build/Products/Release -maxdepth 1 -name "*.app" | head -1)
+          [ -n "$APP" ] || { echo "::error::no .app found"; exit 1; }
+          python3 tools/integrity_sign.py "$APP/Contents" \
+            build/out/integrity-key.pem "${{ env.APP_VERSION }}"
 
       # 制作 .dmg（UDZO 压缩镜像，含 /Applications 拖拽入口）
       - name: Package dmg
@@ -252,8 +288,25 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      # 完整性签名私钥（ed25519 PEM）。没有配置 secret 时 has_key=false。
+      - name: Integrity signing key
+        id: integrity
+        env:
+          KEY_PEM: ${{ secrets.INTEGRITY_SIGN_KEY_PEM }}
+        shell: pwsh
+        run: |
+          if ($env:KEY_PEM) {
+            "has_key=true" | Out-File -Append -FilePath $env:GITHUB_OUTPUT -Encoding utf8NoBOM
+            New-Item -ItemType Directory -Force -Path build/out | Out-Null
+            [IO.File]::WriteAllText("build/out/integrity-key.pem", $env:KEY_PEM)
+          } else {
+            "has_key=false" | Out-File -Append -FilePath $env:GITHUB_OUTPUT -Encoding utf8NoBOM
+          }
+
       - name: Build Windows Release
-        run: flutter build windows --release ${{ env.OBF_ARGS }}
+        run: >-
+          flutter build windows --release ${{ env.OBF_ARGS }}
+          ${{ steps.integrity.outputs.has_key == 'true' && '--dart-define=BAIJI_CI_BUILD=true' || '' }}
 
       # 下载 UPX Windows 版并加壳所有可执行文件
       - name: UPX pack
@@ -265,6 +318,14 @@ jobs:
           foreach ($e in $exes) {
             .\upx-4.2.4-win64\upx.exe --best -f $e.FullName
           }
+
+      # 完整性清单（加壳后、打包前；与 exe 同目录，覆盖整个 Release 目录）
+      - name: Sign integrity manifest
+        if: steps.integrity.outputs.has_key == 'true'
+        shell: pwsh
+        run: |
+          python tools/integrity_sign.py build/windows/x64/runner/Release `
+            build/out/integrity-key.pem "${{ env.APP_VERSION }}"
 
       # 绿色版 zip（内含 exe 与运行库）
       - name: Package zip
@@ -319,8 +380,24 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      # 完整性签名私钥（ed25519 PEM）。没有配置 secret 时 has_key=false。
+      - name: Integrity signing key
+        id: integrity
+        env:
+          KEY_PEM: ${{ secrets.INTEGRITY_SIGN_KEY_PEM }}
+        run: |
+          if [ -n "$KEY_PEM" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+            mkdir -p build/out
+            printf '%s' "$KEY_PEM" > build/out/integrity-key.pem
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build Linux Release
-        run: flutter build linux --release ${{ env.OBF_ARGS }}
+        run: >-
+          flutter build linux --release ${{ env.OBF_ARGS }}
+          ${{ steps.integrity.outputs.has_key == 'true' && '--dart-define=BAIJI_CI_BUILD=true' || '' }}
 
       # 使用仓库固化的 UPX 二进制加壳
       - name: UPX pack
@@ -329,6 +406,14 @@ jobs:
           find build/linux/x64/release/bundle -type f -perm -111 | while read BIN; do
             ./tools/upx/upx-linux-x64 --best -f "$BIN" || true
           done
+
+      # 完整性清单（加壳后、打 deb 前；bundle 原样装入 /usr/share/baiji_music，
+      # 运行时 /proc/self/exe 指向真实路径，exe 目录即 bundle 目录）
+      - name: Sign integrity manifest
+        if: steps.integrity.outputs.has_key == 'true'
+        run: |
+          python3 tools/integrity_sign.py build/linux/x64/release/bundle \
+            build/out/integrity-key.pem "${{ env.APP_VERSION }}"
 
       # 组装 .deb 安装包（脚本见 tools/package-linux-deb.sh）
       - name: Package deb
