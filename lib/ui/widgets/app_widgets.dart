@@ -3,6 +3,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/ui_settings.dart';
+import 'app_localizations.dart';
 import '../../theme/app_theme.dart';
 
 /// 更新日志的 Markdown 排版：字号压到 12~13，整体偏灰，和 App 暗色玻璃
@@ -452,6 +453,7 @@ class AppTextField extends StatelessWidget {
     this.cornerRadius = 14,
     this.insideMargin =
         const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    this.error = false,
   });
 
   final TextEditingController? controller;
@@ -478,9 +480,12 @@ class AppTextField extends StatelessWidget {
   final double cornerRadius;
   final EdgeInsets insideMargin;
 
+  /// 错误态：边框切换为强调红（如密码错误、密钥校验失败）。
+  final bool error;
+
   @override
   Widget build(BuildContext context) {
-    return MiuixTextField(
+    final field = MiuixTextField(
       controller: controller,
       focusNode: focusNode,
       onChanged: onChanged,
@@ -507,8 +512,28 @@ class AppTextField extends StatelessWidget {
       colors: MiuixTextFieldColors(
         backgroundColor: AppColors.surfaceGlass,
         labelColor: AppColors.textTertiary,
-        borderColor: AppColors.strokeGlass,
+        borderColor: error ? AppColors.danger : AppColors.strokeGlass,
       ),
+    );
+    // TextField 依赖 MaterialLocalizations（选择菜单的「复制/全选」文案）。
+    // 弹窗内容挂在 MaterialApp 之外的 popup host 上，祖先链里没有
+    // Localizations，缺了它 TextField 会在 build 期抛异常、被替换成
+    // RenderErrorBox——无约束下 100000px 高的灰色大块，正是用户截图里
+    // 「撑满整个弹窗的输入框」。这里在缺失时补齐全语言 delegates；
+    // 页面内已有 MaterialApp 提供时不动，避免覆盖系统语言。
+    // 注意不能用 DefaultMaterialLocalizations.delegate——它只声明支持
+    // en，中文 locale 下会被 _loadAll 跳过，等于没补。
+    if (Localizations.of<MaterialLocalizations>(context, MaterialLocalizations) !=
+        null) {
+      return field;
+    }
+    return Localizations(
+      locale: const Locale('zh', 'CN'),
+      delegates: const [
+        AppZhMaterialLocalizationsDelegate(),
+        AppWidgetsLocalizationsDelegate(),
+      ],
+      child: field,
     );
   }
 }

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:baiji_music/core/lyric_settings.dart';
 import 'package:baiji_music/data/history_store.dart';
+import 'package:baiji_music/download/download_extras.dart';
 import 'package:baiji_music/download/download_manager.dart';
 import 'package:baiji_music/download/download_task.dart';
 import 'package:baiji_music/lyrics/karaoke_fill.dart';
@@ -17,6 +18,7 @@ import 'package:baiji_music/core/album_saver.dart';
 import 'package:baiji_music/ui/widgets/app_snackbar.dart';
 import 'package:baiji_music/ui/widgets/app_widgets.dart';
 import 'package:baiji_music/ui/widgets/cover_image.dart';
+import 'package:baiji_music/ui/widgets/download_options_sheet.dart';
 import 'package:baiji_music/ui/widgets/lyric_style_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
@@ -247,8 +249,11 @@ class _PlayerPageState extends State<PlayerPage> {
     });
   }
 
-  /// 第二步：音质已选好，落库并加入下载队列。
-  Future<void> _onDownloadQualityPicked(Object picked) async {
+  /// 第二步：音质与歌词粒度都已选好，落库并加入下载队列。
+  ///
+  /// [lyric] 是本次下载临时选择的歌词粒度（null = 跟随全局设置）。
+  Future<void> _onDownloadQualityPicked(
+      Object picked, LyricDownloadMode lyric) async {
     final s = _pendingDownloadSong;
     setState(() {
       _showDownloadQualitySheet = false;
@@ -259,11 +264,11 @@ class _PlayerPageState extends State<PlayerPage> {
     if (s.isNetease) {
       final q = picked as NeteaseQuality;
       await dm.saveNeQuality(q);
-      await _runDownload(s, qq: dm.qqQuality, ne: q);
+      await _runDownload(s, qq: dm.qqQuality, ne: q, lyric: lyric);
     } else {
       final q = picked as Quality;
       await dm.saveQqQuality(q);
-      await _runDownload(s, qq: q, ne: dm.neQuality);
+      await _runDownload(s, qq: q, ne: dm.neQuality, lyric: lyric);
     }
   }
 
@@ -273,10 +278,16 @@ class _PlayerPageState extends State<PlayerPage> {
     Song song, {
     required Quality qq,
     required NeteaseQuality ne,
+    LyricDownloadMode? lyric,
   }) async {
     if (!mounted) return;
     _showSnack('已加入下载队列');
-    final path = await runManagedDownload(song, qqQuality: qq, neQuality: ne);
+    final path = await runManagedDownload(
+      song,
+      qqQuality: qq,
+      neQuality: ne,
+      lyricMode: lyric,
+    );
     if (!mounted) return;
     if (path == null) {
       _showSnack('下载失败，可在下载管理查看原因', isError: true);
@@ -360,33 +371,35 @@ class _PlayerPageState extends State<PlayerPage> {
             onDismiss: () => setState(() => _showAudioSpecSheet = false),
           ),
         ),
-        // 下载音质（按平台）
+        // 下载选项：歌词粒度（默认逐字，无逐字回退逐行）+ 音质（按平台）
         MiuixOverlayBottomSheet(
           show: _showDownloadQualitySheet,
           title: song != null && song.isNetease
-              ? '下载音质 · 网易云音乐'
-              : '下载音质 · QQ 音乐',
+              ? '下载 · 网易云音乐'
+              : '下载 · QQ 音乐',
           backgroundColor: AppColors.bg2,
           onDismissRequest: () => setState(() {
             _showDownloadQualitySheet = false;
             _pendingDownloadSong = null;
           }),
           content: song != null && song.isNetease
-              ? _QualitySheet<NeteaseQuality>(
+              ? DownloadOptionsSheet<NeteaseQuality>(
                   options: NeteaseQuality.downloadOptions,
                   current: DownloadManager.instance.neQuality,
                   label: (q) => q.label,
                   subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
-                  onSelect: (q) => _onDownloadQualityPicked(q),
+                  lyricMode: DownloadExtras.lyricMode,
+                  onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
                 )
-              : _QualitySheet<Quality>(
+              : DownloadOptionsSheet<Quality>(
                   options: Quality.downloadOptions,
                   current: DownloadManager.instance.qqQuality,
                   label: (q) => q.label,
                   subtitle: (q) => q.bitrate > 0
                       ? '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}'
                       : q.ext.replaceFirst('.', '').toUpperCase(),
-                  onSelect: (q) => _onDownloadQualityPicked(q),
+                  lyricMode: DownloadExtras.lyricMode,
+                  onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
                 ),
         ),
         // 播放音质切换（按平台）

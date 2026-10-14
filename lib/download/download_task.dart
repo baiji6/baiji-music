@@ -330,10 +330,15 @@ class DownloadTaskRegistry {
 ///
 /// 返回落盘路径；失败返回 null。**不要**再自己写 UI 进度，
 /// 进度已经进了 [DownloadTaskRegistry]。
+///
+/// [lyricMode] 为本次下载临时选择的歌词粒度（下载弹层里勾的）；
+/// 传 null 用全局设置。选了逐字但没有逐字数据时自动回退逐行，
+/// 见 [DownloadExtras.resolveLyricMode]。
 Future<String?> runManagedDownload(
   Song song, {
   required Quality qqQuality,
   required NeteaseQuality neQuality,
+  LyricDownloadMode? lyricMode,
 }) async {
   final reg = DownloadTaskRegistry.instance;
   final task = reg.enqueue(song);
@@ -381,7 +386,11 @@ Future<String?> runManagedDownload(
     // 歌词 / 封面属于附加信息，失败不回滚音频
     String extras = '';
     try {
-      extras = await DownloadExtras.attach(filePath: path, song: song);
+      extras = await DownloadExtras.attach(
+        filePath: path,
+        song: song,
+        lyricMode: lyricMode,
+      );
     } catch (e) {
       AppLog.w('DownloadTaskRegistry', '写入歌词/封面失败: $e');
     }

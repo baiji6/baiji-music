@@ -5,6 +5,8 @@ import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_logger.dart';
 import '../../data/history_store.dart';
+import '../../download/download_extras.dart';
+import '../../download/download_manager.dart';
 import '../../download/download_task.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
@@ -13,6 +15,7 @@ import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
+import '../widgets/download_options_sheet.dart';
 
 /// 搜索页：霓虹搜索框 + 音源切换 + 搜索结果列表 + 搜索历史。
 class SearchHome extends StatefulWidget {
@@ -52,6 +55,10 @@ class _SearchHomeState extends State<SearchHome> {
   /// 歌曲操作弹层（收藏 / 下载 / 播放）显隐与目标歌曲。
   bool _showActionSheet = false;
   Song? _actionSong;
+
+  /// 下载选项弹层（歌词粒度 + 音质）显隐与目标歌曲。
+  bool _showDownloadSheet = false;
+  Song? _pendingDownloadSong;
 
   /// 能否继续往后翻：前面还有已缓存的页，或当前页之后仍可能有内容。
   bool get _hasMore => _page < _maxPage || _lastPageFull;
@@ -265,14 +272,51 @@ class _SearchHomeState extends State<SearchHome> {
     showAppSnack(msg);
   }
 
-  /// 下载单曲。进度与结果统一交给全局任务队列，本页只弹提示；
+  /// 下载单曲：先弹选项（歌词粒度 + 音质），确认后入队。
+  ///
+  /// 进度与结果统一交给全局任务队列，本页只弹提示；
   /// 想看进度条请去「下载管理」页。
-  Future<void> _downloadSong(Song song) async {
+  void _downloadSong(Song song) {
+    setState(() {
+      _pendingDownloadSong = song;
+      _showDownloadSheet = true;
+    });
+  }
+
+  /// 音质与歌词粒度都已选好：落库并加入下载队列。
+  ///
+  /// [lyric] 为本次下载临时选择的歌词粒度（默认逐字；
+  /// 没有逐字数据时下载管线会自动回退逐行）。
+  Future<void> _onDownloadPicked(
+      Object picked, LyricDownloadMode lyric) async {
+    final song = _pendingDownloadSong;
+    setState(() {
+      _showDownloadSheet = false;
+      _pendingDownloadSong = null;
+    });
+    if (song == null) return;
+
+    final dm = DownloadManager.instance;
+    final Quality qq;
+    final NeteaseQuality ne;
+    if (song.isNetease) {
+      final q = picked as NeteaseQuality;
+      await dm.saveNeQuality(q);
+      qq = dm.qqQuality;
+      ne = q;
+    } else {
+      final q = picked as Quality;
+      await dm.saveQqQuality(q);
+      qq = q;
+      ne = dm.neQuality;
+    }
+
     _showSnack('已加入下载队列');
     final path = await runManagedDownload(
       song,
-      qqQuality: PlayerController.instance.currentQuality,
-      neQuality: PlayerController.instance.currentNeteaseQuality,
+      qqQuality: qq,
+      neQuality: ne,
+      lyricMode: lyric,
     );
     if (!mounted) return;
     if (path == null) {
@@ -353,7 +397,42 @@ class _SearchHomeState extends State<SearchHome> {
           ),
         ),
         _buildActionSheet(),
+        _buildDownloadSheet(),
       ],
+    );
+  }
+
+  /// 下载选项弹层：歌词粒度（默认逐字，无逐字回退逐行）+ 音质（按平台）。
+  Widget _buildDownloadSheet() {
+    final song = _pendingDownloadSong;
+    final netease = song != null && song.isNetease;
+    return MiuixOverlayBottomSheet(
+      show: _showDownloadSheet && song != null,
+      title: netease ? '下载 · 网易云音乐' : '下载 · QQ 音乐',
+      backgroundColor: AppColors.bg2,
+      onDismissRequest: () => setState(() {
+        _showDownloadSheet = false;
+        _pendingDownloadSong = null;
+      }),
+      content: netease
+          ? DownloadOptionsSheet<NeteaseQuality>(
+              options: NeteaseQuality.downloadOptions,
+              current: DownloadManager.instance.neQuality,
+              label: (q) => q.label,
+              subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
+              lyricMode: DownloadExtras.lyricMode,
+              onConfirm: _onDownloadPicked,
+            )
+          : DownloadOptionsSheet<Quality>(
+              options: Quality.downloadOptions,
+              current: DownloadManager.instance.qqQuality,
+              label: (q) => q.label,
+              subtitle: (q) => q.bitrate > 0
+                  ? '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}'
+                  : q.ext.replaceFirst('.', '').toUpperCase(),
+              lyricMode: DownloadExtras.lyricMode,
+              onConfirm: _onDownloadPicked,
+            ),
     );
   }
 

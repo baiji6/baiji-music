@@ -78,4 +78,16 @@ void main() {
         isNot(contains('<')));
     expect(LyricSerializer.toLrc(src, wordLevel: true), contains('<00:12.34>'));
   });
+
+  test('整份歌词都没有逐字数据 → 逐字输出退化为逐行（#77 回退语义）', () {
+    final lineOnly = Lyrics(lines: <LyricLine>[
+      const LyricLine(startMs: 12340, endMs: 15600, text: '窗外的麻雀'),
+      const LyricLine(startMs: 20000, endMs: 24000, text: '在电线杆上多嘴'),
+    ]);
+    // 选了逐字但服务端只给逐行歌词时，落盘的必须是合法逐行 LRC，
+    // 而不是带空逐字标记的残次品。
+    expect(LyricSerializer.toWordLrc(lineOnly),
+        LyricSerializer.toLineLrc(lineOnly));
+    expect(LyricSerializer.toWordLrc(lineOnly), isNot(contains('<')));
+  });
 }

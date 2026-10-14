@@ -13,6 +13,7 @@ import 'package:baiji_music/core/lyric_settings.dart';
 import 'package:baiji_music/core/theme_controller.dart';
 import 'package:baiji_music/core/ui_settings.dart';
 import 'package:baiji_music/data/history_store.dart';
+import 'package:baiji_music/download/download_extras.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/ui/pages/about_page.dart';
@@ -26,6 +27,7 @@ import 'package:baiji_music/ui/pages/search_home.dart';
 import 'package:baiji_music/ui/pages/settings_page.dart';
 import 'package:baiji_music/ui/pages/toolbox_page.dart';
 import 'package:baiji_music/ui/shell.dart';
+import 'package:baiji_music/ui/widgets/download_options_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -232,6 +234,129 @@ void main() {
       final bg = AppColors.bg1;
       expect((bg.r + bg.g + bg.b) / 3, greaterThan(0.8),
           reason: '亮色 palette 的 bg1 应为近白，实际: $bg');
+    });
+  });
+
+  // v2.2.9 #76 回归：弹窗内容挂在 MaterialApp 之外的 popup host 上，
+  // 缺 MaterialLocalizations 时 TextField build 期抛异常、被 RenderErrorBox
+  // 替换——无高度约束下是 100000px 的灰色大块，把整个弹窗撑爆
+  // （用户截图：密钥管理各平台填写框 / 抓包代理框全是巨型灰块）。
+  // AppTextField 现在会在缺失时自动补齐中文本地化。
+  group('弹窗输入框高度回归（#76：不再被 RenderErrorBox 撑爆）', () {
+    /// 打开页面 → 点击入口 → settle → 断言所有 TextField 高度正常
+    /// （<100px）且无 MaterialLocalizations 缺失异常。
+    Future<void> openDialogAndExpectFieldsSane(
+        WidgetTester tester, Widget page, String tapText) async {
+      final e0 = await pumpAndCatch(tester, page);
+      final s0 = e0?.toString() ?? '';
+      expect(e0 == null || s0.contains('RenderFlex overflowed by 0.8'), isTrue,
+          reason: '${page.runtimeType} build 抛异常: $e0');
+      await tester.tap(find.text(tapText));
+      for (var i = 0; i < 60; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (!tester.binding.hasScheduledFrame) break;
+      }
+      final fields = find.byType(TextField);
+      expect(fields, findsWidgets, reason: '点击「$tapText」后应弹出输入框');
+      for (var i = 0; i < fields.evaluate().length; i++) {
+        final h = tester.renderObject<RenderBox>(fields.at(i)).size.height;
+        expect(h, lessThan(100),
+            reason: 'TextField[$i] 高度 $h 异常（疑似 RenderErrorBox 撑爆）');
+      }
+      final e = tester.takeException();
+      final s = e?.toString() ?? '';
+      expect(e == null || s.contains('RenderFlex overflowed by 0.8'), isTrue,
+          reason: '弹窗交互抛异常: $e');
+      expect(s, isNot(contains('MaterialLocalizations')),
+          reason: 'TextField 缺少 MaterialLocalizations 祖先');
+    }
+
+    testWidgets('关于页密码弹窗', (tester) async {
+      final e0 = await pumpAndCatch(tester, const AboutPage());
+      expect(e0, isNull);
+      final versionText = find.textContaining('v2.');
+      for (var i = 0; i < 10; i++) {
+        await tester.tap(versionText);
+        await tester.pump(const Duration(milliseconds: 30));
+      }
+      for (var i = 0; i < 60; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (!tester.binding.hasScheduledFrame) break;
+      }
+      expect(find.text('开启开发者模式'), findsOneWidget);
+      final fields = find.byType(TextField);
+      expect(fields, findsOneWidget);
+      expect(tester.renderObject<RenderBox>(fields).size.height, lessThan(100));
+      final e = tester.takeException();
+      final s = e?.toString() ?? '';
+      expect(e == null || s.contains('RenderFlex overflowed by 0.8'), isTrue,
+          reason: '密码弹窗抛异常: $e');
+      expect(s, isNot(contains('MaterialLocalizations')));
+    });
+
+    testWidgets('密钥管理页 QQ 手动填写弹窗', (tester) async {
+      await openDialogAndExpectFieldsSane(
+          tester, const DecryptKeysPage(), '手动填写');
+    });
+  });
+
+  // 下载选项弹层（#77）：歌词粒度 + 音质二合一。
+  // 契约：默认逐字；可改选逐行/不下载；点音质行把
+  // (音质, 歌词粒度) 回传给调用方，由下载管线落盘
+  // （选了逐字但没有逐字数据时管线自动回退逐行）。
+  group('下载选项弹层（#77：歌词粒度 + 音质）', () {
+    testWidgets('默认逐字，改选逐行后点音质带回正确粒度', (tester) async {
+      Object? pickedQuality;
+      LyricDownloadMode? pickedLyric;
+      await pumpAndCatch(
+        tester,
+        Scaffold(
+          body: DownloadOptionsSheet<String>(
+            options: const ['音质A', '音质B'],
+            current: '音质A',
+            label: (v) => v,
+            lyricMode: DownloadExtras.lyricMode,
+            onConfirm: (q, lyric) {
+              pickedQuality = q;
+              pickedLyric = lyric;
+            },
+          ),
+        ),
+      );
+
+      // 三个歌词粒度都在，且默认勾选「逐字歌词」
+      expect(find.text('歌词（LRC）'), findsOneWidget);
+      expect(find.text('不下载'), findsOneWidget);
+      expect(find.text('逐行歌词'), findsOneWidget);
+      expect(find.text('逐字歌词'), findsOneWidget);
+      expect(DownloadExtras.lyricMode, LyricDownloadMode.word);
+
+      // 改选「逐行歌词」后点音质 → 回调拿到逐行
+      await tester.tap(find.text('逐行歌词'));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.text('音质B'));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(pickedQuality, '音质B');
+      expect(pickedLyric, LyricDownloadMode.line);
+    });
+
+    testWidgets('不改选择直接点音质 → 回调粒度跟随全局默认（逐字）', (tester) async {
+      LyricDownloadMode? pickedLyric;
+      await pumpAndCatch(
+        tester,
+        Scaffold(
+          body: DownloadOptionsSheet<String>(
+            options: const ['唯一音质'],
+            current: '唯一音质',
+            label: (v) => v,
+            lyricMode: DownloadExtras.lyricMode,
+            onConfirm: (_, lyric) => pickedLyric = lyric,
+          ),
+        ),
+      );
+      await tester.tap(find.text('唯一音质'));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(pickedLyric, LyricDownloadMode.word);
     });
   });
 }

@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import '../core/app_logger.dart';
 import '../core/cover_url.dart';
 import '../core/kv_store.dart';
+import '../lyrics/lyric_model.dart';
 import '../lyrics/lyric_serializer.dart';
 import '../metadata/audio_tagger.dart';
 import '../models/models.dart';
@@ -20,6 +21,10 @@ enum LyricDownloadMode {
   line,
 
   /// 逐字歌词：增强 LRC（行首时间 + 行内每字时间），支持卡拉 OK 染色。
+  ///
+  /// **自动回退**：歌曲没有逐字时间轴时（[Lyrics.hasWordTiming] 为 false），
+  /// 实际落盘的是逐行 LRC——见 [DownloadExtras.resolveLyricMode]。
+  /// 用户侧的表述即「默认逐字，没有逐字就逐行」。
   word,
 }
 
@@ -33,7 +38,7 @@ extension LyricDownloadModeX on LyricDownloadMode {
   String get description => switch (this) {
         LyricDownloadMode.off => '只保存音频文件',
         LyricDownloadMode.line => 'LRC 时间轴，兼容性最好',
-        LyricDownloadMode.word => '保留每个字的演唱时间',
+        LyricDownloadMode.word => '保留每个字的演唱时间；无逐字数据时自动存为逐行',
       };
 }
 
@@ -56,11 +61,25 @@ class DownloadExtras {
     for (final m in LyricDownloadMode.values) {
       if (m.name == raw) return m;
     }
-    return LyricDownloadMode.line;
+    // 默认逐字：信息量最大，且没有逐字数据时会自动回退逐行
+    // （见 [resolveLyricMode]），不会出现"选了逐字却什么都没存到"。
+    return LyricDownloadMode.word;
   }
 
   static Future<void> setLyricMode(LyricDownloadMode m) =>
       KvStore.instance.setString('$_prefs:$_kLyric', m.name);
+
+  /// 把「请求的歌词模式」折算成「实际能落地的模式」。
+  ///
+  /// 选了逐字但服务端只给了逐行歌词（很多老歌 / 纯音乐只有 LRC），
+  /// 就退而求其次存逐行——总比什么都没有强。纯函数，便于单测。
+  static LyricDownloadMode resolveLyricMode(
+      LyricDownloadMode requested, Lyrics lyrics) {
+    if (requested == LyricDownloadMode.word && !lyrics.hasWordTiming) {
+      return LyricDownloadMode.line;
+    }
+    return requested;
+  }
 
   /// 是否把封面写入音频文件（外挂 .jpg 仅在内嵌不支持时兜底）。
   static bool get saveCover =>
@@ -98,26 +117,38 @@ class DownloadExtras {
 
   /// 下载完成后补齐歌词 / 封面，并写入音频文件内部标签。
   ///
-  /// 返回一行人类可读的结果（用于 Toast / SnackBar）；
+  /// 返回一行人类可读的结果（用于 Toast / SnackBar / 下载列表副标题）；
   /// 两个开关都关闭时返回空串，表示无需做任何事。
+  ///
+  /// [lyricMode] 为本次下载的临时选择（下载弹层里勾的），
+  /// 传 null 时用全局设置 [lyricMode]。
   ///
   /// 任何一步失败都不影响已下载的音频文件——内嵌失败会退回外挂文件，
   /// 外挂文件写入失败也只是少一个附件。
   static Future<String> attach({
     required String filePath,
     required Song song,
+    LyricDownloadMode? lyricMode,
   }) async {
-    final mode = lyricMode;
+    final requested = lyricMode ?? DownloadExtras.lyricMode;
     final wantCover = saveCover;
-    if (mode == LyricDownloadMode.off && !wantCover) return '';
+    if (requested == LyricDownloadMode.off && !wantCover) return '';
 
     String? lrc;
-    if (mode != LyricDownloadMode.off) {
+    // 实际落盘的歌词粒度（请求逐字但没有逐字数据时是「逐行」）。
+    String? lyricOutcome;
+    if (requested != LyricDownloadMode.off) {
       try {
         final lyrics = await LyricApi.of(song);
         if (lyrics.isNotEmpty) {
+          final mode = resolveLyricMode(requested, lyrics);
+          if (mode != requested) {
+            AppLog.i('DownloadExtras',
+                '${song.name} 无逐字歌词，回退为逐行 LRC');
+          }
           lrc = LyricSerializer.toLrc(
               lyrics, wordLevel: mode == LyricDownloadMode.word);
+          lyricOutcome = mode == LyricDownloadMode.word ? '逐字' : '逐行';
         }
       } catch (e) {
         AppLog.w('DownloadExtras', '获取歌词失败: $e');
@@ -150,14 +181,21 @@ class DownloadExtras {
     // 用户在下载目录里看不到任何东西，也没法把封面单独拿去用。
     final sidecars = await _writeSidecars(filePath, song, lrc, cover);
 
+    // 结果文案带上实际写入的物件（如「逐字歌词 + 封面」），
+    // 下载列表里能直接看出这次到底存了什么。
+    final parts = <String>[
+      if (lyricOutcome != null) '$lyricOutcome歌词',
+      if (cover != null) '封面',
+    ].join(' + ');
+
     if (result.error != null) {
       // 内嵌失败时全靠外挂，至少不丢歌词和封面
       final suffix = sidecars.isEmpty ? '' : '（已存为外挂文件）';
-      return '已下载$suffix · ${result.error}';
+      return '已下载（$parts）$suffix · ${result.error}';
     }
     return sidecars.isEmpty
-        ? '已下载（歌词/封面已写入元数据）'
-        : '已下载（歌词/封面已内嵌 + 同名外挂文件）';
+        ? '已下载（$parts已写入元数据）'
+        : '已下载（$parts已内嵌 + 同名外挂文件）';
   }
 
   /// 写入同名 `.lrc` 与 `.jpg`。

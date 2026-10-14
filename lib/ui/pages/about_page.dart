@@ -32,6 +32,9 @@ class _AboutPageState extends State<AboutPage> {
   /// 密码是否错误（仅用于输入框红框提示，不拦截提交）。
   bool _passwordError = false;
 
+  /// 密码可见性（小眼睛切换）。
+  bool _obscurePassword = true;
+
   final _passwordController = TextEditingController();
 
   @override
@@ -213,68 +216,33 @@ class _AboutPageState extends State<AboutPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 密码输入：玻璃容器 + 无边框 TextField。
-            // 不用 MiuixTextField——它在弹窗 content 里会把输入区撑到
-            // 满高（label 浮顶 + 巨大灰块），且与全 App 弹窗语言不统一。
-            // TextField 需要 MaterialLocalizations：本弹层挂在 MaterialApp
-            // 之外的 popup host 上，用 Localizations.override 补齐（否则
-            // 直接抛 "No MaterialLocalizations found"）。
-            Localizations.override(
-              context: context,
-              delegates: const [DefaultMaterialLocalizations.delegate],
-              child: Material(
-                type: MaterialType.transparency,
-                // MiuixOverlayDialog 手机布局 maxHeight 是 infinity，
-                // TextField 在无高度约束的 Column 里会把面板撑爆
-                // （真机上就是截图里那个占满弹窗的灰色大块）——定高解决。
-                child: SizedBox(
-                  height: 52,
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceGlass,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: _passwordError
-                            ? AppColors.danger
-                            : AppColors.strokeGlass,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.lock_outline_rounded,
-                            size: 18, color: AppColors.textTertiary),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: TextField(
-                            controller: _passwordController,
-                            autofocus: true,
-                            obscureText: true,
-                            cursorColor: AppColors.accent,
-                            style: TextStyle(
-                              fontSize: 15,
-                              letterSpacing: 2,
-                              color: AppColors.textPrimary,
-                            ),
-                            decoration: InputDecoration(
-                              border: InputBorder.none,
-                              isDense: true,
-                              hintText: '请输入密码',
-                              hintStyle: TextStyle(
-                                fontSize: 13,
-                                letterSpacing: 1,
-                                color: AppColors.textTertiary,
-                              ),
-                            ),
-                            onSubmitted: (_) => _submitPassword(),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+            // 密码输入：统一用 AppTextField（玻璃底 + 浮动标签 + 强调色光标）。
+            // 它内部已处理弹窗挂在 popup host 上缺少 MaterialLocalizations
+            // 的问题（v2.2.9 前这里是手绘 TextField + Localizations.override
+            // + 定高 52 的兜底，根因是缺本地化被 RenderErrorBox 撑爆）。
+            AppTextField(
+              controller: _passwordController,
+              autofocus: true,
+              label: '密码',
+              useLabelAsPlaceholder: true,
+              obscureText: _obscurePassword,
+              error: _passwordError,
+              textStyle: TextStyle(
+                  fontSize: 15, letterSpacing: 2, color: AppColors.textPrimary),
+              leadingIcon: Icon(Icons.lock_outline_rounded,
+                  size: 18, color: AppColors.textTertiary),
+              trailingIcon: MiuixIconButton(
+                onPressed: () =>
+                    setState(() => _obscurePassword = !_obscurePassword),
+                child: Icon(
+                  _obscurePassword
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  size: 18,
+                  color: AppColors.textTertiary,
                 ),
               ),
+              onSubmitted: (_) => _submitPassword(),
             ),
             const SizedBox(height: 18),
             Row(
