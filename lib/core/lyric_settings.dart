@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
@@ -105,6 +107,46 @@ class LyricSettings extends ChangeNotifier {
 
   /// 非当前行颜色。未自定义时跟随主题。
   Color get inactiveColor => _inactiveCustom ?? AppColors.lyricInactive;
+
+  // ===== 可读性保障（#80 逐行歌词高亮隐身回归） =====
+
+  /// 深底上的亮字（内置纸色）。
+  static const Color textOnDark = Color(0xFFF2F5FF);
+
+  /// 浅底上的墨字（内置墨色）。
+  static const Color inkOnLight = Color(0xFF12233F);
+
+  /// 大号粗体文本的可读下限（WCAG 大字号对比度）。
+  static const double minReadableContrast = 3.0;
+
+  /// 确保 [fg] 在歌词背景 [bg] 上看得见；对比度不足时回退到
+  /// 与背景明暗相对的内置墨色 / 纸色。
+  ///
+  /// 背景：三色是「深色主题下调的」就跟着深底走，可一旦切到浅色主题，
+  /// 自定义的浅色字（典型：当前行白字）对比度会跌到约 1.5:1——
+  /// 逐字歌词还有绿色填充兜底，**逐行歌词的当前行整个颜色就是未唱色**，
+  /// 直接隐身（用户视频实测：浅底上当前行 #D1D0D3 vs 背景 #FCFBFE）。
+  /// 纯函数，便于单测。
+  static Color ensureReadable(Color fg, Color bg) {
+    final lf = fg.computeLuminance();
+    final lb = bg.computeLuminance();
+    final brighter = math.max(lf, lb);
+    final darker = math.min(lf, lb);
+    final contrast = (brighter + 0.05) / (darker + 0.05);
+    if (contrast >= minReadableContrast) return fg;
+    return lb > 0.5 ? inkOnLight : textOnDark;
+  }
+
+  /// 当前行未唱色的可读版本（歌词区背景近似为 [AppColors.bg1]）。
+  Color get readableUnsungColor =>
+      ensureReadable(unsungColor, AppColors.bg1);
+
+  /// 非当前行颜色的可读版本。
+  Color get readableInactiveColor =>
+      ensureReadable(inactiveColor, AppColors.bg1);
+
+  /// 已唱色的可读版本。
+  Color get readableSungColor => ensureReadable(sungColor, AppColors.bg1);
 
   /// 应用启动时调用一次，从本地存储恢复设置。
   Future<void> load() async {

@@ -106,4 +106,59 @@ void main() {
       expect(s.sungColor, LyricSettings.defaultSungColor);
     });
   });
+
+  // #80 逐行歌词高亮隐身回归：浅色主题下深色调的浅色字对比度不足，
+  // 当前行整个隐身。ensureReadable 要在不可读时自动回退、可读时原样保留。
+  group('LyricSettings 可读性保障（#80）', () {
+    test('浅底 + 浅色字 → 回退墨色（视频实测 1.5:1 隐身场景）', () {
+      const bg = Color(0xFFFCFBFE);
+      // 视频里的隐身当前行色
+      expect(LyricSettings.ensureReadable(const Color(0xFFD1D0D3), bg),
+          LyricSettings.inkOnLight);
+      // 深色调的默认未唱色（近白）
+      expect(LyricSettings.ensureReadable(const Color(0xFFF2F5FF), bg),
+          LyricSettings.inkOnLight);
+      // 纯白字
+      expect(LyricSettings.ensureReadable(Colors.white, bg),
+          LyricSettings.inkOnLight);
+    });
+
+    test('深底 + 深色字 → 回退纸色', () {
+      const bg = Color(0xFF0A0F1E);
+      expect(LyricSettings.ensureReadable(const Color(0xFF101B2E), bg),
+          LyricSettings.textOnDark);
+    });
+
+    test('对比度足够时原样保留自定义色', () {
+      const bg = Color(0xFFFCFBFE);
+      // 默认非当前行灰蓝（≈5:1）保留
+      expect(LyricSettings.ensureReadable(const Color(0xFF5A6686), bg),
+          const Color(0xFF5A6686));
+      // 深底上默认荧光黄绿 / 亮白都保留
+      const darkBg = Color(0xFF0A0F1E);
+      expect(LyricSettings.ensureReadable(const Color(0xFFA8F685), darkBg),
+          const Color(0xFFA8F685));
+      expect(LyricSettings.ensureReadable(const Color(0xFFF2F5FF), darkBg),
+          const Color(0xFFF2F5FF));
+    });
+
+    test('readableXxx 跟随当前色板：默认三色始终可读不被改写', () {
+      final s = LyricSettings.instance;
+      // 测试环境默认深色板：三色默认值在深底上全部可读，应原样返回
+      expect(s.readableUnsungColor, s.unsungColor);
+      expect(s.readableInactiveColor, s.inactiveColor);
+      expect(s.readableSungColor, s.sungColor);
+    });
+
+    test('自定义浅色未唱色在深色板下保留、语义上等价于浅底回退墨色', () async {
+      final s = LyricSettings.instance;
+      await s.setUnsungColor(Colors.white);
+      // 当前（深色板）bg1 上白字可读 → 保留
+      expect(s.readableUnsungColor, Colors.white);
+      // 同一个自定义白字放到浅底 → 不可读，回退墨色
+      expect(LyricSettings.ensureReadable(Colors.white, const Color(0xFFFFFFFF)),
+          LyricSettings.inkOnLight);
+      await s.resetColors();
+    });
+  });
 }

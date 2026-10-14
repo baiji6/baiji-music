@@ -1519,8 +1519,11 @@ class _LyricViewState extends State<_LyricView>
     final height = isActive ? 1.32 : 1.45;
 
     if (!line.isWordLevel) {
-      final color =
-          isActive ? settings.unsungColor : settings.inactiveColor;
+      // 可读性保障：自定义浅色字切到浅色主题后对比度不足时自动回退
+      // 主题墨色，否则当前行整个隐身（#80 视频实测 1.5:1）。
+      final color = isActive
+          ? settings.readableUnsungColor
+          : settings.readableInactiveColor;
       return Text(
         line.displayText,
         textAlign: settings.textAlign,
@@ -1546,7 +1549,7 @@ class _LyricViewState extends State<_LyricView>
           fontSize: size,
           height: height,
           fontWeight: weight,
-          color: settings.inactiveColor,
+          color: settings.readableInactiveColor,
         ),
       );
     }
@@ -1851,12 +1854,19 @@ class _KaraokeLineState extends State<_KaraokeLine> {
         ],
       );
 
+  /// 未唱色的可读版本：自定义浅色字在浅色主题下会隐身，
+  /// 与逐行歌词当前行同源的问题（#80），统一走对比度保障。
+  Color get _readableUnsung =>
+      LyricSettings.instance.readableUnsungColor;
+
+  Color get _readableSung => LyricSettings.instance.readableSungColor;
+
   /// 用 TextPainter 量每个字的水平区间。文本/字号/宽度不变时直接复用，
   /// 避免每帧重排版——播放期间这里只在进度 tick 里被调用。
   void _measure(double maxWidth) {
     if (_wordSpans != null && _laidWidth == maxWidth) return;
     final painter = TextPainter(
-      text: _span(LyricSettings.instance.unsungColor),
+      text: _span(_readableUnsung),
       textAlign: widget.align,
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: maxWidth);
@@ -1914,16 +1924,16 @@ class _KaraokeLineState extends State<_KaraokeLine> {
     if (spans == null || _contentWidth <= 0) return null;
 
     // 已唱 / 未唱色来自 LyricSettings（默认荧光黄绿 + 亮白，可在设置里
-    // 自定义）。分段逻辑在 KaraokeFill 里，那里是纯函数，有独立单测。
-    final settings = LyricSettings.instance;
+    // 自定义），经对比度保障后使用。分段逻辑在 KaraokeFill 里，
+    // 那里是纯函数，有独立单测。
     final built = KaraokeFill.build(
       wordSpans: spans,
       ratios: [
         for (final w in widget.line.words) w.progressAt(posMs),
       ],
       width: _contentWidth,
-      sung: settings.sungColor,
-      unsung: settings.unsungColor,
+      sung: _readableSung,
+      unsung: _readableUnsung,
     );
     if (built == null) return null;
     return LinearGradient(
@@ -1948,7 +1958,7 @@ class _KaraokeLineState extends State<_KaraokeLine> {
             final gradient = _buildGradient(posMs);
             final child = RichText(
               textAlign: widget.align,
-              text: _span(LyricSettings.instance.unsungColor),
+              text: _span(_readableUnsung),
             );
             if (gradient == null) return child;
             return ShaderMask(
