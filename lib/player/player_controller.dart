@@ -41,6 +41,7 @@ class PlayerController {
   static const String _defaultQualityKey = 'default_quality';
   static const String _neteaseQualityKey = 'default_netease_quality';
   static const String _playModeKey = 'play_mode';
+  static const String _rateKey = 'play_rate';
 
   Player? _player;
   Song? _currentSong;
@@ -62,6 +63,36 @@ class PlayerController {
 
   PlayMode _playMode = PlayMode.sequential;
   PlayMode get playMode => _playMode;
+
+  // ===== 倍速播放（0.01x ~ 50x 无级） =====
+
+  /// 倍速下限。libmpv 的 speed 属性原生支持 0.01~100，
+  /// 上限取用户要求的 50（再高已无听感意义且容易触发解码噪声）。
+  static const double minRate = 0.01;
+  static const double maxRate = 50.0;
+
+  double _rate = 1.0;
+
+  /// 当前倍速（记忆持久化，跨歌曲与重启生效）。
+  double get rate => _rate;
+
+  /// 倍率 → 滑杆位置 0~1（对数刻度）。
+  ///
+  /// 线性刻度下 1.0x 只占全程约 2% 行程，滑杆没法用；对数刻度让
+  /// 1.0x 落在约 46% 处，低/高倍速两端都有足够的可调行程。
+  static double rateToPos(double rate) {
+    final r = rate.clamp(minRate, maxRate);
+    return log(r / minRate) / log(maxRate / minRate);
+  }
+
+  /// 滑杆位置 0~1 → 倍率（对数刻度，[rateToPos] 的逆映射）。
+  static double posToRate(double pos) =>
+      minRate * pow(maxRate / minRate, pos.clamp(0.0, 1.0));
+
+  final StreamController<double> _rateStream = StreamController.broadcast();
+
+  /// 倍速变化（拖动滑杆 / 点预设时连续推送）。
+  Stream<double> get onRateChanged => _rateStream.stream;
 
   final _rng = Random();
 
@@ -178,6 +209,15 @@ class PlayerController {
     try {
       await _player!.open(Media(url));
       await _player!.play();
+      // open() 会把 libmpv 的 speed 重置回 1.0（media_kit 默认参数），
+      // 每次开播后必须重放记忆倍速，否则切歌后倍速悄悄丢掉。
+      if (_rate != 1.0) {
+        try {
+          await _player!.setRate(_rate);
+        } catch (e) {
+          AppLog.w('PlayerController', '恢复倍速失败: $e');
+        }
+      }
       AppLog.i('PlayerController', '播放: $url');
     } catch (e) {
       AppLog.e('PlayerController', '播放失败: $e');
@@ -261,6 +301,27 @@ class PlayerController {
   void notifyState() {
     if (_player != null) {
       _playState.add(_player!.state.playing);
+    }
+  }
+
+  // ===== 倍速控制 =====
+
+  /// 设置播放倍速（0.01~50 无级），持久化并广播。
+  ///
+  /// 播放器未创建时只记值——[_playUrlInternal] 开播后会重放记忆倍速。
+  Future<void> setRate(double r) async {
+    final clamped = r.clamp(minRate, maxRate);
+    if (clamped == _rate && _player == null) return;
+    _rate = clamped;
+    KvStore.instance.setString(_rateKey, clamped.toStringAsFixed(4));
+    if (!_rateStream.isClosed) _rateStream.add(clamped);
+    final p = _player;
+    if (p != null) {
+      try {
+        await p.setRate(clamped);
+      } catch (e) {
+        AppLog.w('PlayerController', '设置倍速失败: $e');
+      }
     }
   }
 
@@ -447,6 +508,12 @@ class PlayerController {
         (m) => m.name == savedMode,
         orElse: () => PlayMode.sequential,
       );
+    }
+
+    final savedRate = KvStore.instance.getString(_rateKey);
+    if (savedRate != null) {
+      final r = double.tryParse(savedRate);
+      if (r != null) _rate = r.clamp(minRate, maxRate);
     }
   }
 

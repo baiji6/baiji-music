@@ -78,6 +78,13 @@ class _PlayerPageState extends State<PlayerPage> {
   StreamSubscription<Quality?>? _qualitySub;
   StreamSubscription<NeteaseQuality?>? _neQualitySub;
   StreamSubscription<bool>? _playSub;
+  StreamSubscription<double>? _rateSub;
+
+  /// 当前倍速（0.01~50 无级，按钮常显、弹层可调）。
+  double _rate = 1.0;
+
+  /// 倍速调节弹层显隐。
+  bool _showRateSheet = false;
 
   @override
   void initState() {
@@ -87,6 +94,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _actualQq = _player.actualQqQuality;
     _actualNe = _player.actualNeteaseQuality;
     _playing = _player.isPlaying;
+    _rate = _player.rate;
     _syncFavorite();
     _loadLyrics();
     _syncDownloadProgress();
@@ -124,6 +132,11 @@ class _PlayerPageState extends State<PlayerPage> {
       if (!mounted) return;
       setState(() => _playing = playing);
     });
+
+    _rateSub = _player.onRateChanged.listen((r) {
+      if (!mounted) return;
+      setState(() => _rate = r);
+    });
   }
 
   @override
@@ -132,6 +145,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _qualitySub?.cancel();
     _neQualitySub?.cancel();
     _playSub?.cancel();
+    _rateSub?.cancel();
     _taskSub?.cancel();
     _pages.dispose();
     super.dispose();
@@ -402,6 +416,17 @@ class _PlayerPageState extends State<PlayerPage> {
                   onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
                 ),
         ),
+        // 倍速调节（0.01~50 无级滑杆 + 常用预设）
+        MiuixOverlayBottomSheet(
+          show: _showRateSheet,
+          title: '倍速播放',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () => setState(() => _showRateSheet = false),
+          content: _RateSheet(
+            rate: _rate,
+            onDismiss: () => setState(() => _showRateSheet = false),
+          ),
+        ),
         // 播放音质切换（按平台）
         MiuixOverlayBottomSheet(
           show: _showPlayQualitySheet,
@@ -532,6 +557,17 @@ class _PlayerPageState extends State<PlayerPage> {
             actualNe: _actualNe,
             onOpenSheet: () =>
                 setState(() => _showPlayQualitySheet = true),
+          ),
+          const SizedBox(width: 12),
+          // 倍速（0.01~50 无级）：图标按钮与「音频规格」同款；
+          // 非 1.0x 时高亮，当前值在弹层顶部大字显示
+          MiuixIconButton(
+            onPressed: _song == null
+                ? null
+                : () => setState(() => _showRateSheet = true),
+            child: Icon(Icons.speed_rounded,
+                size: 21,
+                color: _rate != 1.0 ? AppColors.accent : AppColors.textSecondary),
           ),
           const SizedBox(width: 12),
           // 音频规格（采样率 / 比特率 / 声道 / 编码）
@@ -1167,6 +1203,140 @@ class _QualityButton extends StatelessWidget {
       );
 }
 
+// ==================== 倍速调节面板 ====================
+
+/// 倍速调节：0.01~50 无级滑杆（对数刻度）+ 常用预设。
+///
+/// 线性刻度下 1.0x 会挤在最左端约 2% 的行程里没法用，所以滑杆位置
+/// 与倍率之间走**对数映射**：pos = ln(rate/min) / ln(max/min)，
+/// 1.0x 落在约 46% 行程处，低倍速区间与高倍速区间都有足够的可调行程。
+/// 拖动过程中实时生效（libmpv 改 speed 是无损操作，连续调节无爆音）。
+class _RateSheet extends StatefulWidget {
+  const _RateSheet({required this.rate, required this.onDismiss});
+
+  final double rate;
+  final VoidCallback onDismiss;
+
+  @override
+  State<_RateSheet> createState() => _RateSheetState();
+}
+
+class _RateSheetState extends State<_RateSheet> {
+  late double _rate = widget.rate;
+
+  static const _presets = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 5.0];
+
+  double _posOf(double rate) => PlayerController.rateToPos(rate);
+
+  double _rateOf(double pos) => PlayerController.posToRate(pos);
+
+  static String _formatRate(double r) =>
+      r == r.roundToDouble() ? r.toStringAsFixed(0) : r.toStringAsFixed(2);
+
+  Future<void> _apply(double r) async {
+    final clamped =
+        r.clamp(PlayerController.minRate, PlayerController.maxRate);
+    setState(() => _rate = clamped);
+    await PlayerController.instance.setRate(clamped);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _rate != 1.0;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.speed_rounded,
+                    size: 18,
+                    color: active ? AppColors.accent : AppColors.textSecondary),
+                const SizedBox(width: 8),
+                Text(
+                  '${_formatRate(_rate)}x',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color:
+                        active ? AppColors.accent : AppColors.textPrimary,
+                  ),
+                ),
+                const Spacer(),
+                // 一键回正常速度
+                if (active)
+                  MiuixTextButton(
+                    '恢复 1.0x',
+                    onPressed: () async {
+                      await _apply(1.0);
+                      widget.onDismiss();
+                    },
+                    textStyle: TextStyle(color: AppColors.accent),
+                  ),
+              ],
+            ),
+            MiuixSlider(
+              value: _posOf(_rate).clamp(0.0, 1.0),
+              min: 0.0,
+              max: 1.0,
+              steps: 0,
+              onValueChanged: (v) => _apply(_rateOf(v)),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                '${PlayerController.minRate.toStringAsFixed(2)}x ~ ${PlayerController.maxRate.toStringAsFixed(0)}x 无级调节；'
+                '拖动即时生效，倍速会被记住（含下次启动）。',
+                style:
+                    TextStyle(fontSize: 11, color: AppColors.textTertiary),
+              ),
+            ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final p in _presets)
+                  MiuixPressable(
+                    onPressed: () => _apply(p),
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 13, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: _rate == p
+                            ? AppColors.accent.withValues(alpha: 0.15)
+                            : AppColors.surfaceGlass,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                            color: _rate == p
+                                ? AppColors.accent
+                                : AppColors.strokeGlass),
+                      ),
+                      child: Text(
+                        '${_formatRate(p)}x',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: _rate == p
+                              ? AppColors.accent
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ==================== 下载按钮 ====================
 
 /// 下载入口（封面下方的胶囊按钮）：下载中变为进度环 + 百分比。
@@ -1444,9 +1614,15 @@ class _LyricViewState extends State<_LyricView>
   }
 
   /// 在真实进度上叠加墙钟走时，得到逐帧连续的播放位置（毫秒）。
+  ///
+  /// 倍速播放时音频时间轴按 rate 流失，墙钟插值必须同倍率外推，
+  /// 否则 2x 下歌词播放头会明显滞后于实际歌声。
   int _smoothMs() {
     if (!_playing) return _anchorMs;
-    final est = _anchorMs + DateTime.now().difference(_anchorAt).inMilliseconds;
+    final wallElapsed =
+        DateTime.now().difference(_anchorAt).inMilliseconds;
+    final est =
+        _anchorMs + (wallElapsed * PlayerController.instance.rate).round();
     final total = PlayerController.instance.duration.inMilliseconds;
     if (total > 0 && est > total) return total;
     return est < 0 ? 0 : est;
