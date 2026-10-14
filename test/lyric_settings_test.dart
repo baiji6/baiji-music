@@ -1,6 +1,7 @@
 // LyricSettings 新字段（字重 / 圆角 / 三色）的契约测试。
 import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/core/lyric_settings.dart';
+import 'package:baiji_music/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -158,6 +159,40 @@ void main() {
       // 同一个自定义白字放到浅底 → 不可读，回退墨色
       expect(LyricSettings.ensureReadable(Colors.white, const Color(0xFFFFFFFF)),
           LyricSettings.inkOnLight);
+      await s.resetColors();
+    });
+
+    // v2.2.9-fix1 回归：首发的对比度保障把不可读的已唱/未唱色兜到
+    // 同一个墨色，填充渐变两端同色 → 卡拉 OK 染色整个隐形。
+    test('浅底 + 深色调已唱/未唱都不可读 → 已唱回退主题绿，与未唱墨色不同', () async {
+      final s = LyricSettings.instance;
+      // 模拟深色主题下调的两把浅色，切到浅色板（测试默认深色板，
+      // 直接用 ensureReadable 的浅底语义 + 分层回退语义验证）
+      await s.setSungColor(const Color(0xFFF2F5FF)); // 浅色"已唱"
+      await s.setUnsungColor(const Color(0xFFD1D0D3)); // 浅色"未唱"
+      final bg = const Color(0xFFFCFBFE); // 浅底
+      // 各自按主题默认色回退：已唱 → 绿（浅色板 karaoke），
+      // 未唱 → 墨（浅色板 lyricUnsung）。两者必然不同色。
+      final sung = LyricSettings.resolveReadableForTest(
+          s.sungColor, const Color(0xFF0E9E52), bg);
+      final unsung = LyricSettings.resolveReadableForTest(
+          s.unsungColor, const Color(0xFF12233F), bg);
+      expect(sung, isNot(unsung),
+          reason: '已唱/未唱回退后必须不同色，否则卡拉 OK 染色隐形');
+      expect(sung, const Color(0xFF0E9E52));
+      expect(unsung, const Color(0xFF12233F));
+      await s.resetColors();
+    });
+
+    test('已唱色与未唱色解析后同色 → 强制主题已唱色拉开层次', () async {
+      final s = LyricSettings.instance;
+      // 深色板下两把都设为可读的白：各自可读、却彼此相同
+      await s.setSungColor(Colors.white);
+      await s.setUnsungColor(Colors.white);
+      // 未唱保留白色；已唱检测到与未唱同色 → 强制主题绿
+      expect(s.readableUnsungColor, Colors.white);
+      expect(s.readableSungColor, AppColors.karaoke);
+      expect(s.readableSungColor, isNot(s.readableUnsungColor));
       await s.resetColors();
     });
   });

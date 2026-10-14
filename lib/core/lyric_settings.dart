@@ -108,7 +108,7 @@ class LyricSettings extends ChangeNotifier {
   /// 非当前行颜色。未自定义时跟随主题。
   Color get inactiveColor => _inactiveCustom ?? AppColors.lyricInactive;
 
-  // ===== 可读性保障（#80 逐行歌词高亮隐身回归） =====
+  // ===== 可读性保障（#80 逐行歌词高亮隐身回归 / v2.2.9-fix1 逐字染色回归） =====
 
   /// 深底上的亮字（内置纸色）。
   static const Color textOnDark = Color(0xFFF2F5FF);
@@ -116,37 +116,79 @@ class LyricSettings extends ChangeNotifier {
   /// 浅底上的墨字（内置墨色）。
   static const Color inkOnLight = Color(0xFF12233F);
 
-  /// 大号粗体文本的可读下限（WCAG 大字号对比度）。
+  /// 大号粗体文本的可读下限（WCAG 大字号下限）。
   static const double minReadableContrast = 3.0;
 
-  /// 确保 [fg] 在歌词背景 [bg] 上看得见；对比度不足时回退到
+  /// [fg] 与 [bg] 的 WCAG 对比度。
+  static double contrastOf(Color fg, Color bg) {
+    final lf = fg.computeLuminance();
+    final lb = bg.computeLuminance();
+    return (math.max(lf, lb) + 0.05) / (math.min(lf, lb) + 0.05);
+  }
+
+  /// 确保 [fg] 在歌词背景 [AppColors.bg1] 上看得见；对比度不足时回退到
   /// 与背景明暗相对的内置墨色 / 纸色。
   ///
   /// 背景：三色是「深色主题下调的」就跟着深底走，可一旦切到浅色主题，
   /// 自定义的浅色字（典型：当前行白字）对比度会跌到约 1.5:1——
-  /// 逐字歌词还有绿色填充兜底，**逐行歌词的当前行整个颜色就是未唱色**，
-  /// 直接隐身（用户视频实测：浅底上当前行 #D1D0D3 vs 背景 #FCFBFE）。
+  /// **逐行歌词的当前行整个颜色就是未唱色**，直接隐身
+  /// （用户视频实测：浅底上当前行 #D1D0D3 vs 背景 #FCFBFE）。
   /// 纯函数，便于单测。
   static Color ensureReadable(Color fg, Color bg) {
-    final lf = fg.computeLuminance();
     final lb = bg.computeLuminance();
-    final brighter = math.max(lf, lb);
-    final darker = math.min(lf, lb);
-    final contrast = (brighter + 0.05) / (darker + 0.05);
-    if (contrast >= minReadableContrast) return fg;
-    return lb > 0.5 ? inkOnLight : textOnDark;
+    return contrastOf(fg, bg) >= minReadableContrast
+        ? fg
+        : (lb > 0.5 ? inkOnLight : textOnDark);
   }
+
+  /// 可读色解析（分主题三色统一入口）：
+  ///
+  /// 1. 自定义色可读 → 原样保留；
+  /// 2. 不可读 → 回退**当前主题的默认色**（已唱=绿 / 未唱=墨或纸，
+  ///    彼此天生不同色）；
+  /// 3. 主题默认也不可读（莫奈取色产出怪色等）→ 墨/纸兜底。
+  ///
+  /// v2.2.9 首发的实现把不可读的三色**全部**兜到同一个墨/纸色——
+  /// 逐字歌词的填充渐变两端（已唱/未唱）随之同色，卡拉 OK 染色整个
+  /// 隐形（用户反馈：逐行好了逐字又没了）。分层回退保证已唱/未唱
+  /// 永远拉开色差。
+  static Color _resolveReadable(Color custom, Color themedFallback,
+      {Color? bg}) {
+    final b = bg ?? AppColors.bg1;
+    if (contrastOf(custom, b) >= minReadableContrast) return custom;
+    if (contrastOf(themedFallback, b) >= minReadableContrast) {
+      return themedFallback;
+    }
+    return b.computeLuminance() > 0.5 ? inkOnLight : textOnDark;
+  }
+
+  /// [_resolveReadable] 的测试入口（注入背景色，绕过全局色板）。
+  @visibleForTesting
+  static Color resolveReadableForTest(
+          Color custom, Color themedFallback, Color bg) =>
+      _resolveReadable(custom, themedFallback, bg: bg);
 
   /// 当前行未唱色的可读版本（歌词区背景近似为 [AppColors.bg1]）。
   Color get readableUnsungColor =>
-      ensureReadable(unsungColor, AppColors.bg1);
+      _resolveReadable(unsungColor, AppColors.lyricUnsung);
 
   /// 非当前行颜色的可读版本。
   Color get readableInactiveColor =>
-      ensureReadable(inactiveColor, AppColors.bg1);
+      _resolveReadable(inactiveColor, AppColors.lyricInactive);
 
   /// 已唱色的可读版本。
-  Color get readableSungColor => ensureReadable(sungColor, AppColors.bg1);
+  ///
+  /// 额外保证与解析后的未唱色**不同色**：两者相同时填充渐变两端一致，
+  /// 逐字染色完全隐形。碰撞时强制用主题已唱色（绿色系，与任何墨/纸
+  /// 底色都拉开）。
+  Color get readableSungColor {
+    final s = _resolveReadable(sungColor, AppColors.karaoke);
+    if (s == readableUnsungColor) {
+      final themed = AppColors.karaoke;
+      if (themed != s) return themed;
+    }
+    return s;
+  }
 
   /// 应用启动时调用一次，从本地存储恢复设置。
   Future<void> load() async {
