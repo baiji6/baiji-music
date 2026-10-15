@@ -98,7 +98,9 @@ class LyricApi {
     // `lyric` 是逐行 LRC，`qrc` 是逐字 QRC。fix4 之前先取 `lyric`，
     // 导致有逐字歌词的歌全部按逐行渲染（用户反馈「QQ 还是逐行歌词」）。
     // 只有拿不到 qrc 时才退回逐行 lyric。
-    final main = _str(data['qrc']) ?? _str(data['lyric']) ?? '';
+    final qrc = _str(data['qrc']);
+    final lrc = _str(data['lyric']) ?? '';
+    final main = qrc ?? lrc;
     final trans = _str(data['trans']) ?? '';
     final roma = _str(data['roma']) ?? '';
 
@@ -107,11 +109,22 @@ class LyricApi {
       return Lyrics.empty;
     }
 
-    return LyricParser.parse(
+    var lyrics = LyricParser.parse(
       main,
       translation: trans.isEmpty ? null : trans,
       romanization: roma.isEmpty ? null : roma,
     );
+    // 兜底：qrc 拿到了但解析失败（密文异常/格式变化）时，
+    // 再用逐行 lyric 试一次——宁可逐行也不能没有歌词。
+    if (lyrics.isEmpty && qrc != null && lrc.isNotEmpty) {
+      AppLog.w('LyricApi', 'QQ qrc 解析为空，回退逐行 lyric song=${song.name}');
+      lyrics = LyricParser.parse(
+        lrc,
+        translation: trans.isEmpty ? null : trans,
+        romanization: roma.isEmpty ? null : roma,
+      );
+    }
+    return lyrics;
   }
 
   // ==================== 网易云 ====================
