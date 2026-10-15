@@ -12,6 +12,8 @@ import '../metadata/audio_tagger.dart';
 import '../models/models.dart';
 import '../network/lyric_api.dart';
 
+import 'download_manager.dart';
+
 /// 下载歌曲时「歌词」的处理方式。
 enum LyricDownloadMode {
   /// 不下载歌词。
@@ -87,6 +89,50 @@ class DownloadExtras {
 
   static Future<void> setSaveCover(bool v) =>
       KvStore.instance.setBool('$_prefs:$_kCover', v);
+
+  /// 只下载歌词文件，不下载音乐。
+  ///
+  /// 用于「下载歌词」这个**独立动作**（下载选项弹层的歌词区点击）：
+  /// 拉歌词 → 折算粒度（选了逐字但没有逐字数据时回退逐行）→
+  /// 以外挂 `.lrc` 落盘到下载目录。同名文件已存在时自动加
+  /// ` (1)` / ` (2)` 去重，不覆盖已有文件。
+  ///
+  /// 返回 `(路径, 实际粒度)`；任何一步失败返回 null（无歌词、写盘失败等）。
+  static Future<({String path, LyricDownloadMode mode})?> downloadLyricOnly(
+    Song song, {
+    LyricDownloadMode? lyricMode,
+  }) async {
+    final requested = lyricMode ?? DownloadExtras.lyricMode;
+    // 主动点「下载歌词」却全局关着歌词时，按逐字处理——
+    // 这个动作本身就是"我要歌词"的最强表达。
+    final effective =
+        requested == LyricDownloadMode.off ? LyricDownloadMode.word : requested;
+    try {
+      final lyrics = await LyricApi.of(song);
+      if (lyrics.isEmpty) {
+        AppLog.i('DownloadExtras', '${song.name} 无歌词可下载');
+        return null;
+      }
+      final mode = resolveLyricMode(effective, lyrics);
+      final lrc = LyricSerializer.toLrc(
+          lyrics, wordLevel: mode == LyricDownloadMode.word);
+      if (lrc.isEmpty) return null;
+
+      final dir = await DownloadManager.instance.getDownloadDir();
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      final base =
+          '${DownloadManager.sanitize(song.singer)} - ${DownloadManager.sanitize(song.name)}';
+      // 已存在则自动加 (1)/(2) 去重，不覆盖用户已有的歌词文件
+      final target = DownloadManager.uniqueTarget(dir, base, '.lrc');
+      await target.writeAsString(lrc, flush: true);
+      AppLog.i('DownloadExtras',
+          '仅歌词下载完成: ${target.path} (${mode.label})');
+      return (path: target.path, mode: mode);
+    } catch (e) {
+      AppLog.w('DownloadExtras', '仅下载歌词失败: $e');
+      return null;
+    }
+  }
 
   /// 下载封面原图字节；失败返回 null。
   static Future<Uint8List?> fetchCover(Song song) async {

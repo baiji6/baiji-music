@@ -118,11 +118,13 @@ class LyricApi {
   /// 无论什么参数都**不会**返回 `yrc`（逐字），这就是"有逐字歌词的歌曲
   /// 获取到逐行歌词"的根因——实测晴天（id=186016）老接口响应里连 `yrc`
   /// 键都没有。v1 接口在带登录 Cookie（MUSIC_U）时返回 `yrc`；
-  /// 未登录时没有 `yrc`，自动回退逐行 `lrc`。
+  /// 未登录时没有 `yrc`，`lrc` 是**混合格式**（JSON 制作信息行 + 经典
+  /// LRC 行），由 [LyricParser] 的混合分支解析成逐行歌词。
   ///
   /// `cv` 为客户端版本号（社区通用值），缺了部分网关不给 v1 响应。
   static Future<Lyrics> netease(Song song) async {
-    final json = await AppServices.instance.netease.postApi(
+    final client = AppServices.instance.netease;
+    final json = await client.postApi(
       '${NeteaseClient.apiBase}/song/lyric/v1',
       <String, String>{
         'id': '${song.songId}',
@@ -147,11 +149,19 @@ class LyricApi {
     final romalrc = pick('romalrc');
     final klyric = pick('klyric');
 
-    // 优先逐字；没有则退回逐行；再退回（韩语）音译。
+    // 优先逐字；没有则退回逐行（v1 未登录时是混合格式）；
+    // 再退回（韩语）音译。
     final content = yrc.isNotEmpty ? yrc : (lrc.isNotEmpty ? lrc : klyric);
     if (content.isEmpty) {
       AppLog.i('LyricApi', '网易云歌词为空 song=${song.name}');
       return Lyrics.empty;
+    }
+
+    if (yrc.isEmpty && !client.isLoggedIn()) {
+      // 未登录拿不到 yrc（逐字），只能给逐行——这是服务端限制，
+      // 不是解析问题。记日志 + 由 UI 提示去登录。
+      AppLog.i('LyricApi',
+          '网易云未登录，${song.name} 只有逐行歌词（登录后可得逐字）');
     }
 
     return LyricParser.parse(

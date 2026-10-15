@@ -12,9 +12,11 @@ import 'package:baiji_music/lyrics/lyric_model.dart';
 import 'package:baiji_music/metadata/audio_spec.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/lyric_api.dart';
+import 'package:baiji_music/network/music_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/core/album_saver.dart';
+import 'package:baiji_music/ui/pages/netease_login_page.dart';
 import 'package:baiji_music/ui/widgets/app_snackbar.dart';
 import 'package:baiji_music/ui/widgets/app_widgets.dart';
 import 'package:baiji_music/ui/widgets/cover_image.dart';
@@ -64,6 +66,10 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 当前歌曲的歌词Future（切歌时重建）。
   Future<Lyrics>? _lyricsFuture;
   String _lyricsKey = '';
+
+  /// 「网易云未登录只有逐行歌词」提示条是否已被用户手动关闭（切歌不复位，
+  /// 同一首歌反复关掉再打开不该又弹出来；换歌自然由 key 重建整个视图）。
+  bool _neLoginHintDismissed = false;
 
   // ===== Miuix 声明式弹层的显隐 =====
   bool _showLyricStyleSheet = false;
@@ -311,6 +317,25 @@ class _PlayerPageState extends State<PlayerPage> {
     _showSnack('下载完成: $name');
   }
 
+  /// 下载弹层里点歌词行：只下载歌词文件，不下载音乐。
+  Future<void> _onLyricOnlyPicked(LyricDownloadMode mode) async {
+    final s = _pendingDownloadSong ?? _song;
+    setState(() {
+      _showDownloadQualitySheet = false;
+      _pendingDownloadSong = null;
+    });
+    if (s == null) return;
+    _showSnack('正在下载歌词…');
+    final r = await DownloadExtras.downloadLyricOnly(s, lyricMode: mode);
+    if (!mounted) return;
+    if (r == null) {
+      _showSnack('歌词下载失败（无歌词资源或写入失败）', isError: true);
+      return;
+    }
+    final name = r.path.split(Platform.pathSeparator).last;
+    _showSnack('歌词已下载: $name（${r.mode.label}）');
+  }
+
   /// 弹出音质选择底部弹层，返回用户选择的音质（取消返回 null）。
   ///
   /// 用 [isScrollControlled] + 固定 72% 高度 + [ListView.builder]，
@@ -404,6 +429,7 @@ class _PlayerPageState extends State<PlayerPage> {
                   subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
                   lyricMode: DownloadExtras.lyricMode,
                   onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
+                  onLyricOnly: _onLyricOnlyPicked,
                 )
               : DownloadOptionsSheet<Quality>(
                   options: Quality.downloadOptions,
@@ -414,6 +440,7 @@ class _PlayerPageState extends State<PlayerPage> {
                       : q.ext.replaceFirst('.', '').toUpperCase(),
                   lyricMode: DownloadExtras.lyricMode,
                   onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
+                  onLyricOnly: _onLyricOnlyPicked,
                 ),
         ),
         // 倍速调节（0.01~50 无级滑杆 + 常用预设）
@@ -679,6 +706,14 @@ class _PlayerPageState extends State<PlayerPage> {
                 style: TextStyle(color: AppColors.textTertiary, fontSize: 13)),
           );
         }
+        // 网易云未登录时服务端只给逐行歌词（yrc 需要登录），
+        // 这里给一条可关闭的提示，引导去登录拿逐字歌词。
+        final song = _song;
+        final showNeHint = song != null &&
+            song.isNetease &&
+            !MusicApi.isLoggedIn(song.source) &&
+            !lyrics.hasWordTiming &&
+            !_neLoginHintDismissed;
         return ClipRRect(
           borderRadius: BorderRadius.circular(corner),
           child: DecoratedBox(
@@ -687,15 +722,66 @@ class _PlayerPageState extends State<PlayerPage> {
               borderRadius: BorderRadius.circular(corner),
               border: Border.all(color: AppColors.strokeGlass),
             ),
-            child: _LyricView(
-              key: ValueKey(_lyricsKey),
-              lyrics: lyrics,
-              onSeek: _seekTo,
-              padFactor: padFactor,
+            child: Column(
+              children: [
+                if (showNeHint) _buildNeteaseLoginHint(),
+                Expanded(
+                  child: _LyricView(
+                    key: ValueKey(_lyricsKey),
+                    lyrics: lyrics,
+                    onSeek: _seekTo,
+                    padFactor: padFactor,
+                  ),
+                ),
+              ],
             ),
           ),
         );
       },
+    );
+  }
+
+  /// 网易云未登录提示条：说明为什么只有逐行歌词，并提供去登录入口。
+  Widget _buildNeteaseLoginHint() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
+      child: Row(
+        children: [
+          Icon(Icons.lyrics_outlined,
+              size: 15, color: AppColors.textTertiary),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text('网易云未登录：仅逐行歌词，登录后显示逐字染色',
+                style: TextStyle(
+                    color: AppColors.textSecondary, fontSize: 12)),
+          ),
+          GestureDetector(
+            onTap: () {
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const NeteaseLoginPage()));
+            },
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              child: Text('去登录',
+                  style: TextStyle(
+                      color: AppColors.accent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+            ),
+          ),
+          GestureDetector(
+            onTap: () =>
+                setState(() => _neLoginHintDismissed = true),
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Icon(Icons.close,
+                  size: 15, color: AppColors.textTertiary),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

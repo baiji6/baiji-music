@@ -383,22 +383,31 @@ class _LogEntryCardState extends State<_LogEntryCard> {
                 : AppColors.strokeGlass,
           ),
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        // 用 Stack + Positioned 画级别色条，而不是 Row 的 stretch：
+        // stretch 在垂直方向无界约束（嵌套滚动/无界高列表）下会炸
+        // "BoxConstraints forces an infinite height"，且 IntrinsicHeight
+        // 包一层在长日志列表里每条都要跑一遍 intrinsic，太贵。
+        child: Stack(
           children: [
-            // 级别色条
-            Container(
-              width: 3,
-              decoration: BoxDecoration(
-                color: widget.color,
-                borderRadius: const BorderRadius.horizontal(
-                  left: Radius.circular(11),
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              child: Container(
+                width: 3,
+                decoration: BoxDecoration(
+                  color: widget.color,
+                  borderRadius: const BorderRadius.horizontal(
+                    left: Radius.circular(11),
+                  ),
                 ),
               ),
             ),
-            Expanded(
+                       // 内容：宽度撑满 Stack（Stack 宽度由父容器确定、有界）
+            SizedBox(
+              width: double.infinity,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 12, 9),
+                padding: const EdgeInsets.fromLTRB(13, 8, 12, 9),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -407,10 +416,10 @@ class _LogEntryCardState extends State<_LogEntryCard> {
                         Text(
                           timeText,
                           style: TextStyle(
-                            fontSize: 10,
-                            color: AppColors.textTertiary,
-                            fontFamily: 'monospace',
-                          ),
+                              fontSize: 10,
+                              color: AppColors.textTertiary,
+                              fontFamily: 'monospace',
+                            ),
                         ),
                         const SizedBox(width: 6),
                         // 级别徽章

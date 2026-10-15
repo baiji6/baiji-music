@@ -4,13 +4,13 @@ import 'package:flutter_miuix/miuix.dart';
 import '../../download/download_extras.dart';
 import '../../theme/app_theme.dart';
 
-/// 下载选项弹层内容：**歌词粒度 + 音质**二合一。
+/// 下载选项弹层内容：**歌词 + 音质**二合一。
 ///
 /// 用于播放页与搜索页的下载入口（QQ 音乐 / 网易云通用）：
-/// - 顶部选歌词：不下载 / 逐行歌词 / 逐字歌词，默认跟随全局设置
-///   （全局默认为逐字，且没有逐字数据时自动回退逐行，见
-///   [DownloadExtras.resolveLyricMode]）；
-/// - 下面点音质行即确认下载，与旧版「点音质即下载」的交互一致。
+/// - 顶部歌词区点某一行 = **只下载歌词文件**（独立动作，不下载音乐），
+///   同时该行成为选中态；没有逐字数据时逐字项自动回退逐行落盘；
+/// - 下面音质区点某一行 = 下载音乐，并**自动附带**当前选中的歌词与封面
+///   （歌词粒度即上面选中的那行）。
 ///
 /// 泛型 [T] 对应平台音质档（QQ 音质 / 网易云音质），
 /// 由调用方传入选项列表与展示方式。
@@ -22,6 +22,7 @@ class DownloadOptionsSheet<T> extends StatefulWidget {
     required this.label,
     required this.lyricMode,
     required this.onConfirm,
+    required this.onLyricOnly,
     this.subtitle,
   });
 
@@ -35,6 +36,9 @@ class DownloadOptionsSheet<T> extends StatefulWidget {
 
   /// 点音质行确认：带回所选音质与歌词粒度。
   final void Function(T quality, LyricDownloadMode lyricMode) onConfirm;
+
+  /// 点歌词行（逐行/逐字）：只下载歌词文件，不下载音乐。
+  final void Function(LyricDownloadMode mode) onLyricOnly;
 
   @override
   State<DownloadOptionsSheet<T>> createState() =>
@@ -54,17 +58,23 @@ class _DownloadOptionsSheetState<T> extends State<DownloadOptionsSheet<T>> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(12, 6, 12, 18),
           children: [
-            _SectionLabel('歌词（LRC）'),
+            const _SectionLabel('歌词 · 点此只下载歌词'),
             for (final m in LyricDownloadMode.values)
               _LyricOptionRow(
                 mode: m,
                 selected: m == _lyric,
-                onTap: () => setState(() => _lyric = m),
+                onTap: () {
+                  setState(() => _lyric = m);
+                  // 「不下载」只是取消选中态；逐行/逐字即独立下载歌词文件
+                  if (m != LyricDownloadMode.off) {
+                    widget.onLyricOnly(m);
+                  }
+                },
               ),
             const SizedBox(height: 10),
             Divider(color: AppColors.strokeGlass, height: 1),
             const SizedBox(height: 10),
-            const _SectionLabel('音质'),
+            const _SectionLabel('下载音乐 · 自动附带所选歌词与封面'),
             for (final q in widget.options)
               _QualityRow<T>(
                 value: q,
@@ -100,7 +110,8 @@ class _SectionLabel extends StatelessWidget {
       );
 }
 
-/// 歌词粒度单选行。逐字项带「无逐字自动回退逐行」的说明。
+/// 歌词粒度单选行。逐字项带「无逐字自动回退逐行」的说明；
+/// 点击即触发独立歌词下载，行尾的「仅下载」徽标提示这一语义。
 class _LyricOptionRow extends StatelessWidget {
   const _LyricOptionRow({
     required this.mode,
@@ -159,6 +170,18 @@ class _LyricOptionRow extends StatelessWidget {
                 ],
               ),
             ),
+            if (mode != LyricDownloadMode.off)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.strokeGlass,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text('仅下载',
+                    style: TextStyle(
+                        fontSize: 10, color: AppColors.textSecondary)),
+              ),
           ],
         ),
       ),

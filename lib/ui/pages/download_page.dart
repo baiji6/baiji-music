@@ -12,6 +12,7 @@ import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/cover_image.dart';
 
 /// 下载管理页：显示下载任务队列（进行中 + 历史），点完成项可直接播放。
 ///
@@ -164,6 +165,13 @@ class _DownloadPageState extends State<DownloadPage> {
     } catch (e) {
       showAppSnack('删除失败: $e');
     }
+    // 暂停任务的 .part 残片一并删掉，不然下载目录会留下隐形垃圾
+    if (task.partPath.isNotEmpty) {
+      try {
+        final p = File(task.partPath);
+        if (await p.exists()) await p.delete();
+      } catch (_) {/* 残片删不掉无所谓 */}
+    }
     // 顺带删掉同名的歌词/封面外挂文件
     final stem = task.filePath.contains('.')
         ? task.filePath.substring(0, task.filePath.lastIndexOf('.'))
@@ -179,12 +187,31 @@ class _DownloadPageState extends State<DownloadPage> {
     setState(() => _tasks = DownloadTaskRegistry.instance.tasks);
   }
 
-  Future<void> _retry(DownloadTask task) async {
-    showAppSnack('重新下载: ${task.song.name}');
+  /// 继续下载：从暂停任务的 `.part` 断点续传（HTTP Range）。
+  Future<void> _resume(DownloadTask task) async {
+    if (!task.canResume) {
+      showAppSnack('续传残片已丢失，请重新下载');
+      return;
+    }
+    showAppSnack('继续下载: ${task.song.name}');
     unawaited(runManagedDownload(
       task.song,
       qqQuality: DownloadManager.instance.qqQuality,
       neQuality: DownloadManager.instance.neQuality,
+      resumeTaskId: task.id,
+    ));
+  }
+
+  Future<void> _retry(DownloadTask task) async {
+    showAppSnack('重新下载: ${task.song.name}');
+    // 有残片就续传，没有才从头下
+    final canResume = task.partPath.isNotEmpty &&
+        DownloadTaskRegistry.fileExists(task.partPath);
+    unawaited(runManagedDownload(
+      task.song,
+      qqQuality: DownloadManager.instance.qqQuality,
+      neQuality: DownloadManager.instance.neQuality,
+      resumeTaskId: canResume ? task.id : null,
     ));
   }
 
@@ -198,9 +225,19 @@ class _DownloadPageState extends State<DownloadPage> {
     for (final t in DownloadTaskRegistry.instance.tasks) {
       if (t.state.isActive) continue;
       try {
-        final f = File(t.filePath);
-        if (await f.exists()) await f.delete();
+        if (t.filePath.isNotEmpty) {
+          final f = File(t.filePath);
+          if (await f.exists()) await f.delete();
+        }
+        if (t.partPath.isNotEmpty) {
+          final p = File(t.partPath);
+          if (await p.exists()) await p.delete();
+        }
       } catch (_) {}
+    }
+    // 暂停态任务（残片已删）也一并无痕移除
+    for (final t in DownloadTaskRegistry.instance.tasks.toList()) {
+      if (t.state.isPaused) DownloadTaskRegistry.instance.remove(t.id);
     }
     DownloadTaskRegistry.instance.clearFinished();
     await _mergeDiskFiles();
@@ -209,6 +246,22 @@ class _DownloadPageState extends State<DownloadPage> {
   }
 
   String _fileName(File f) => f.path.split(Platform.pathSeparator).last;
+
+  /// 任务所属分组：0 = 进行中，1 = 已暂停，2 = 已完成。
+  int _groupOf(DownloadTask t) {
+    if (t.state.isActive) return 0;
+    if (t.state.isPaused) return 1;
+    return 2;
+  }
+
+  String _groupHeader(
+      DownloadTask t, int activeN, int pausedN, int finishedN) {
+    return switch (_groupOf(t)) {
+      0 => '进行中（$activeN）',
+      1 => '已暂停（$pausedN）',
+      _ => '已完成（$finishedN）',
+    };
+  }
 
   String _fmtBytes(int bytes) {
     if (bytes <= 0) return '0 B';
@@ -228,6 +281,7 @@ class _DownloadPageState extends State<DownloadPage> {
   @override
   Widget build(BuildContext context) {
     final active = _tasks.where((t) => t.state.isActive).toList();
+    final paused = _tasks.where((t) => t.state.isPaused).toList();
     final finished = _tasks.where((t) => t.state.isTerminal).toList();
 
     final body = _tasks.isEmpty
@@ -243,14 +297,10 @@ class _DownloadPageState extends State<DownloadPage> {
             itemCount: _tasks.length,
             itemBuilder: (ctx, i) {
               final t = _tasks[i];
-              // 分组标题：进行中 / 已完成
-              final showHeader = i == 0 ||
-                  _tasks[i - 1].state.isActive != t.state.isActive;
-              final header = showHeader
-                  ? (t.state.isActive
-                      ? '进行中（${active.length}）'
-                      : '已完成（${finished.length}）')
-                  : null;
+              // 分组标题：进行中 / 已暂停 / 已完成
+              final prev = i == 0 ? null : _tasks[i - 1];
+              final groupChanged = prev == null || _groupOf(prev) != _groupOf(t);
+              final header = groupChanged ? _groupHeader(t, active.length, paused.length, finished.length) : null;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -302,6 +352,7 @@ class _DownloadPageState extends State<DownloadPage> {
   Widget _taskTile(DownloadTask t) {
     final failed = t.state == DownloadTaskState.failed;
     final done = t.state == DownloadTaskState.done;
+    final paused = t.state == DownloadTaskState.paused;
     final ratio = t.ratio;
 
     return GlassCard(
@@ -314,26 +365,8 @@ class _DownloadPageState extends State<DownloadPage> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  gradient: failed
-                      ? LinearGradient(
-                          colors: [AppColors.danger, Colors.transparent])
-                      : const LinearGradient(colors: AppColors.neonGradient),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  done
-                      ? Icons.check_rounded
-                      : failed
-                          ? Icons.error_outline_rounded
-                          : Icons.music_note_rounded,
-                  color: Colors.white,
-                  size: 22,
-                ),
-              ),
+              // 歌曲封面：已完成用文件内嵌封面，进行中/暂停用网络封面
+              _taskCover(t, done: done, failed: failed),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -359,8 +392,8 @@ class _DownloadPageState extends State<DownloadPage> {
                           fontSize: 12, color: AppColors.textTertiary),
                     ),
                     const SizedBox(height: 4),
-                    // 进度条：只有进行中任务需要
-                    if (t.state.isActive)
+                    // 进度条：进行中与已暂停任务都需要（暂停显示断点进度）
+                    if (t.state.isActive || paused)
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -368,7 +401,7 @@ class _DownloadPageState extends State<DownloadPage> {
                             children: [
                               Expanded(
                                 child: MiuixLinearProgressIndicator(
-                                  progress: ratio,
+                                  progress: paused ? (ratio ?? 0) : ratio,
                                   height: 4,
                                 ),
                               ),
@@ -387,7 +420,8 @@ class _DownloadPageState extends State<DownloadPage> {
                             [
                               if (t.received > 0)
                                 '${_fmtBytes(t.received)}${t.total > 0 ? ' / ${_fmtBytes(t.total)}' : ''}',
-                              if (_fmtSpeed(t.bytesPerSecond).isNotEmpty)
+                              if (paused) '点右侧继续续传',
+                              if (!paused && _fmtSpeed(t.bytesPerSecond).isNotEmpty)
                                 _fmtSpeed(t.bytesPerSecond),
                             ].join(' · '),
                             style: TextStyle(
@@ -423,11 +457,57 @@ class _DownloadPageState extends State<DownloadPage> {
     );
   }
 
+  /// 任务封面：已完成 → 读文件内嵌封面（不依赖网络）；其余 → 网络封面。
+  Widget _taskCover(DownloadTask t, {required bool done, required bool failed}) {
+    final song = done && DownloadTaskRegistry.fileExists(t.filePath)
+        ? downloadedSongOf(t)
+        : t.song;
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: CoverImage(
+          song: song,
+          size: 44,
+          radius: 12,
+          memCacheWidth: 132,
+        ),
+      ),
+    );
+  }
+
   Widget _trailing(DownloadTask t) {
     if (t.state.isActive) {
-      return const Padding(
-        padding: EdgeInsets.only(right: 8, top: 12),
-        child: MiuixCircularProgressIndicator(strokeWidth: 2, size: 20),
+      // 暂停：取消当前传输，保留 .part 残片供续传
+      return Padding(
+        padding: const EdgeInsets.only(right: 4, top: 6),
+        child: MiuixIconButton(
+          onPressed: () {
+            DownloadTaskRegistry.instance.requestPause(t.id);
+            showAppSnack('已暂停: ${t.song.name}');
+          },
+          child: Icon(Icons.pause_rounded,
+              color: AppColors.accent, size: 22),
+        ),
+      );
+    }
+    if (t.state == DownloadTaskState.paused) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 继续：从 .part 断点续传（HTTP Range）
+          MiuixIconButton(
+            onPressed: () => _resume(t),
+            child: Icon(Icons.play_circle_fill_rounded,
+                color: AppColors.accent, size: 26),
+          ),
+          MiuixIconButton(
+            onPressed: () => _deleteFile(t),
+            child: Icon(Icons.close_rounded,
+                color: AppColors.textTertiary, size: 18),
+          ),
+        ],
       );
     }
     if (t.state == DownloadTaskState.failed) {

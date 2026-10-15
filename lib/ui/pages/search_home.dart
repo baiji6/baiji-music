@@ -261,11 +261,27 @@ class _SearchHomeState extends State<SearchHome> {
         final isFav = HistoryStore.isFavorite(song.mid);
         HistoryStore.toggleFavorite(song);
         showAppSnack(isFav ? '已取消收藏' : '已收藏');
+      case 'lyric':
+        _downloadLyricOnly(song, DownloadExtras.lyricMode);
       case 'download':
         _downloadSong(song);
       case 'play':
         _playSong(song);
     }
+  }
+
+  /// 只下载歌词文件（不下载音乐）。[mode] 为歌词粒度，
+  /// 全局设置为「不下载」时调用方应传逐字/逐行。
+  Future<void> _downloadLyricOnly(Song song, LyricDownloadMode mode) async {
+    _showSnack('正在下载歌词…');
+    final r = await DownloadExtras.downloadLyricOnly(song, lyricMode: mode);
+    if (!mounted) return;
+    if (r == null) {
+      _showSnack('歌词下载失败（无歌词资源或写入失败）', isError: true);
+      return;
+    }
+    final name = r.path.split(Platform.pathSeparator).last;
+    _showSnack('歌词已下载: $name（${r.mode.label}）');
   }
 
   void _showSnack(String msg, {bool isError = false}) {
@@ -422,6 +438,14 @@ class _SearchHomeState extends State<SearchHome> {
               subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
               lyricMode: DownloadExtras.lyricMode,
               onConfirm: _onDownloadPicked,
+              onLyricOnly: (mode) {
+                final s = _pendingDownloadSong;
+                setState(() {
+                  _showDownloadSheet = false;
+                  _pendingDownloadSong = null;
+                });
+                if (s != null) _downloadLyricOnly(s, mode);
+              },
             )
           : DownloadOptionsSheet<Quality>(
               options: Quality.downloadOptions,
@@ -432,6 +456,14 @@ class _SearchHomeState extends State<SearchHome> {
                   : q.ext.replaceFirst('.', '').toUpperCase(),
               lyricMode: DownloadExtras.lyricMode,
               onConfirm: _onDownloadPicked,
+              onLyricOnly: (mode) {
+                final s = _pendingDownloadSong;
+                setState(() {
+                  _showDownloadSheet = false;
+                  _pendingDownloadSong = null;
+                });
+                if (s != null) _downloadLyricOnly(s, mode);
+              },
             ),
     );
   }
@@ -472,6 +504,12 @@ class _SearchHomeState extends State<SearchHome> {
             label: '下载',
             color: AppColors.accent,
             onTap: () => _runSongAction('download'),
+          ),
+          _SheetActionRow(
+            icon: Icons.lyrics_outlined,
+            label: '仅下载歌词',
+            color: AppColors.accent,
+            onTap: () => _runSongAction('lyric'),
           ),
           _SheetActionRow(
             icon: Icons.play_circle_outline_rounded,

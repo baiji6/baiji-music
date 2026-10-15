@@ -1,11 +1,13 @@
 /// 歌词解析引擎。
 ///
-/// 支持五种来源格式，并能自动识别与自动解密：
+/// 支持六种来源格式，并能自动识别与自动解密：
 /// - **普通 LRC**：`[mm:ss.xx]整句`
 /// - **增强 LRC**：`[mm:ss.xx]<mm:ss.xx>字<mm:ss.xx>字`（逐字）
 /// - **QRC**：`[起始ms,持续ms]字(偏移,持续)字...`（QQ 逐字，可加密）
 /// - **YRC**：`[行起始ms,行时长ms](字起始ms,字时长ms,0)字...`（网易云逐字）
 /// - **TTML**：`<p begin=".." end="..">` / 内含 `<span>` 逐音节（Apple Music）
+/// - **网易云混合格式**：JSON 行（`{"t":ms,"c":[{"tx":".."}]}`）与经典 LRC
+///   行混排（v1 接口未登录时 `lrc` 的形态）
 ///
 /// 加密内容处理（对齐 Lyrico-Plugins 的 `qq/source.js`）：
 /// - QQ QRC：hex → 3DES 解密 → zlib inflate，见 [qrcDecrypt]
@@ -46,9 +48,15 @@ class LyricParser {
     Lyrics? parsed;
     final trimmed = content.trimLeft();
 
-    // TTML / YRC / QRC / LRC 择优：按各自的特征标签判断。
+    // TTML / 网易云 JSON+LRC 混合 / YRC / QRC / LRC 择优：按各自的特征标签判断。
     if (_looksLikeTtml(trimmed)) {
       parsed = _parseTtml(content);
+    }
+    if ((parsed == null || parsed.isEmpty) && _looksLikeNeteaseJsonLrc(trimmed)) {
+      // 网易云 v1 未登录时的形态：JSON 头（制作信息，带 t 时间戳）+
+      // 经典 LRC 尾。不走这个分支的话 JSON 头会被整体丢弃，
+      // 只剩 LRC 尾——用户看到的就是「有逐字歌词的歌却是逐行」。
+      parsed = _parseNeteaseJsonLrc(content);
     }
     if ((parsed == null || parsed.isEmpty) && _looksLikeYrc(content)) {
       parsed = _parseYrc(content);
@@ -283,6 +291,108 @@ class LyricParser {
       text.contains('<tt') ||
       RegExp(r'<p\s[^>]*begin\s*=', caseSensitive: false).hasMatch(text) ||
       (text.contains('ttml') && text.contains('<p'));
+
+  /// 网易云 v1 歌词接口（未登录）返回的**混合格式**：
+  /// 头部若干行 JSON（制作信息，每行一个对象），尾部接经典 LRC。
+  ///
+  /// ```text
+  /// {"t":0,"c":[{"tx":"作词: "},{"tx":"周杰伦"}]}
+  /// {"t":1000,"c":[{"tx":"作曲: "},{"tx":"周杰伦"}]}
+  /// [00:28.950]故事的小黄花
+  /// [00:32.380]从出生那年就飘着
+  /// ```
+  ///
+  /// 老接口（`/song/lyric`）只会返回纯 LRC；v1 未登录时 `yrc`（逐字）为
+  /// null，`lrc` 变成这种混合体。若不走专门分支，JSON 头会被
+  /// [_parseLrc] 静默丢弃，只剩 LRC 尾——歌词能显示但永远逐行。
+  static bool _looksLikeNeteaseJsonLrc(String text) {
+    final t = text.trimLeft();
+    if (!t.startsWith('{')) return false;
+    return t.contains('"c":') && t.contains('"tx":');
+  }
+
+  /// 解析网易云混合格式：JSON 头按 `t` 时间戳转成歌词行，LRC 尾按原有
+  /// 能力解析（可能是增强 LRC 逐字）。两者合并后统一按时间排序，
+  /// 并用「下一行起点 - 10ms」补齐 JSON 行的结束时间。
+  static Lyrics _parseNeteaseJsonLrc(String text) {
+    final jsonLines = <String>[];
+    final lrcBuf = StringBuffer();
+
+    for (final raw in const LineSplitter().convert(text)) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      if (line.startsWith('{')) {
+        jsonLines.add(line);
+      } else {
+        lrcBuf.writeln(raw);
+      }
+    }
+
+    final out = <LyricLine>[];
+    for (final jl in jsonLines) {
+      final entry = _decodeNeteaseJsonLine(jl);
+      if (entry == null) continue;
+      // JSON 行只有起始时间，结束时间先占位，下面统一按邻行补齐
+      out.add(LyricLine(startMs: entry.$1, endMs: entry.$1 + 2000, text: entry.$2));
+    }
+
+    final lrcText = lrcBuf.toString();
+    if (lrcText.trim().isNotEmpty) {
+      out.addAll(_parseLrc(lrcText).lines);
+    }
+
+    if (out.isEmpty) return Lyrics.empty;
+    out.sort((a, b) => a.startMs.compareTo(b.startMs));
+
+    // 统一结束时间：一行唱到下一行开始前（留 10ms 缓冲）。
+    // 对逐字行取其原值与邻行起点中较小者，避免把行尾掐进字时间轴里。
+    for (var i = 0; i < out.length - 1; i++) {
+      final l = out[i];
+      final next = out[i + 1].startMs - 10;
+      if (next <= l.startMs) continue;
+      final end = (l.endMs > l.startMs && l.endMs < next) ? l.endMs : next;
+      if (end == l.endMs) continue;
+      out[i] = LyricLine(
+        startMs: l.startMs,
+        endMs: end,
+        text: l.text,
+        words: l.words,
+        translation: l.translation,
+        romanization: l.romanization,
+      );
+    }
+
+    return Lyrics(
+      lines: out,
+      hasWordTiming: out.any((l) => l.isWordLevel),
+    );
+  }
+
+  /// 解出一行网易云 JSON 歌词：`(起始毫秒, 文本)`；格式不符返回 null。
+  ///
+  /// 文本取所有 `tx` 片段拼接（`li` / `or` 等链接字段忽略）。
+  static (int, String)? _decodeNeteaseJsonLine(String line) {
+    try {
+      final obj = jsonDecode(line);
+      if (obj is! Map) return null;
+      final t = obj['t'];
+      if (t is! num) return null;
+      final c = obj['c'];
+      if (c is! List) return null;
+      final sb = StringBuffer();
+      for (final frag in c) {
+        if (frag is Map) {
+          final tx = frag['tx'];
+          if (tx is String) sb.write(tx);
+        }
+      }
+      final text = sb.toString().trim();
+      if (text.isEmpty) return null;
+      return (t.toInt(), text);
+    } catch (_) {
+      return null;
+    }
+  }
 
   // ==================== LRC（普通 + 增强逐字） ====================
 

@@ -64,6 +64,10 @@ class AudioTagger {
   /// [lyrics] 为完整 LRC 文本（见 `LyricSerializer`）；为空则不写歌词。
   /// [cover] 为封面包；为空则不写封面。
   /// [title]/[artist]/[album] 可选，用于补齐基础标签。
+  ///
+  /// 注意：**即使歌词与封面都为空**，只要基础标签非空就仍然会写
+  /// （用户关掉"下载歌词/封面"时，下载的文件也不该在播放器里显示
+  /// 成无名曲目——QQ/网易云直链文件本身常常没有任何元数据）。
   static Future<TagWriteResult> embed({
     required File file,
     String? lyrics,
@@ -73,16 +77,17 @@ class AudioTagger {
     String? album,
   }) async {
     final text = lyrics?.trim() ?? '';
-    if (text.isEmpty && cover == null) return const TagWriteResult();
-    if (!file.existsSync()) {
-      return const TagWriteResult(error: '音频文件不存在');
-    }
-
     final tags = <String, String>{
       if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
       if (artist != null && artist.trim().isNotEmpty) 'artist': artist.trim(),
       if (album != null && album.trim().isNotEmpty) 'album': album.trim(),
     };
+    if (text.isEmpty && cover == null && tags.isEmpty) {
+      return const TagWriteResult();
+    }
+    if (!file.existsSync()) {
+      return const TagWriteResult(error: '音频文件不存在');
+    }
 
     RandomAccessFile? raf;
     try {

@@ -300,14 +300,16 @@ void main() {
     });
   });
 
-  // 下载选项弹层（#77）：歌词粒度 + 音质二合一。
-  // 契约：默认逐字；可改选逐行/不下载；点音质行把
-  // (音质, 歌词粒度) 回传给调用方，由下载管线落盘
-  // （选了逐字但没有逐字数据时管线自动回退逐行）。
-  group('下载选项弹层（#77：歌词粒度 + 音质）', () {
+  // 下载选项弹层（#77/#90）：歌词区 + 音质区二合一。
+  // 契约（#90 起）：
+  // - 歌词区点某行 = **只下载歌词**（独立动作，不下载音乐），
+  //   同时该行成为选中态；「不下载」行只改选中、不触发下载；
+  // - 音质区点某行 = 下载音乐，自动附带当前选中的歌词与封面。
+  group('下载选项弹层（歌词独立下载 + 音质下载音乐）', () {
     testWidgets('默认逐字，改选逐行后点音质带回正确粒度', (tester) async {
       Object? pickedQuality;
       LyricDownloadMode? pickedLyric;
+      LyricDownloadMode? lyricOnlyMode;
       await pumpAndCatch(
         tester,
         Scaffold(
@@ -320,20 +322,27 @@ void main() {
               pickedQuality = q;
               pickedLyric = lyric;
             },
+            onLyricOnly: (mode) => lyricOnlyMode = mode,
           ),
         ),
       );
 
       // 三个歌词粒度都在，且默认勾选「逐字歌词」
-      expect(find.text('歌词（LRC）'), findsOneWidget);
+      expect(find.text('歌词 · 点此只下载歌词'), findsOneWidget);
       expect(find.text('不下载'), findsOneWidget);
       expect(find.text('逐行歌词'), findsOneWidget);
       expect(find.text('逐字歌词'), findsOneWidget);
+      // 歌词行带「仅下载」徽标，「不下载」行没有
+      expect(find.text('仅下载'), findsNWidgets(2));
       expect(DownloadExtras.lyricMode, LyricDownloadMode.word);
 
-      // 改选「逐行歌词」后点音质 → 回调拿到逐行
+      // 改选「逐行歌词」→ 触发独立歌词下载（不下载音乐）
       await tester.tap(find.text('逐行歌词'));
       await tester.pump(const Duration(milliseconds: 100));
+      expect(lyricOnlyMode, LyricDownloadMode.line);
+      expect(pickedQuality, isNull); // 没有走音质下载
+
+      // 再点音质 → 回调拿到逐行（音乐下载附带所选歌词）
       await tester.tap(find.text('音质B'));
       await tester.pump(const Duration(milliseconds: 100));
       expect(pickedQuality, '音质B');
@@ -351,12 +360,38 @@ void main() {
             label: (v) => v,
             lyricMode: DownloadExtras.lyricMode,
             onConfirm: (_, lyric) => pickedLyric = lyric,
+            onLyricOnly: (_) {},
           ),
         ),
       );
       await tester.tap(find.text('唯一音质'));
       await tester.pump(const Duration(milliseconds: 100));
       expect(pickedLyric, LyricDownloadMode.word);
+    });
+
+    testWidgets('点「不下载」只改选中态，不触发歌词下载', (tester) async {
+      LyricDownloadMode? lyricOnlyMode;
+      LyricDownloadMode? pickedLyric;
+      await pumpAndCatch(
+        tester,
+        Scaffold(
+          body: DownloadOptionsSheet<String>(
+            options: const ['唯一音质'],
+            current: '唯一音质',
+            label: (v) => v,
+            lyricMode: LyricDownloadMode.word,
+            onConfirm: (_, lyric) => pickedLyric = lyric,
+            onLyricOnly: (mode) => lyricOnlyMode = mode,
+          ),
+        ),
+      );
+      await tester.tap(find.text('不下载'));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(lyricOnlyMode, isNull);
+      // 再点音质 → 附带关闭（不下载歌词）
+      await tester.tap(find.text('唯一音质'));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(pickedLyric, LyricDownloadMode.off);
     });
   });
 }

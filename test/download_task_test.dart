@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:baiji_music/download/download_task.dart';
+import 'package:dio/dio.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -24,6 +25,16 @@ void main() {
       expect(DownloadTaskState.queued.isTerminal, isFalse);
       expect(DownloadTaskState.downloading.isTerminal, isFalse);
       expect(DownloadTaskState.finalizing.isTerminal, isFalse);
+    });
+
+    test('暂停态：既不是终态也不是活跃', () {
+      expect(DownloadTaskState.paused.isTerminal, isFalse);
+      expect(DownloadTaskState.paused.isActive, isFalse);
+      expect(DownloadTaskState.paused.isPaused, isTrue);
+      // 其余状态都不是暂停
+      for (final s in DownloadTaskState.values) {
+        if (s != DownloadTaskState.paused) expect(s.isPaused, isFalse);
+      }
     });
 
     test('每个状态都有中文标签', () {
@@ -100,6 +111,72 @@ void main() {
       expect(back.song.name, '晴天');
       expect(back.filePath, '/m/晴天.mp3');
       expect(back.qualityLabel, 'SQ 无损');
+    });
+
+    test('暂停态原样恢复（partPath 也在）', () {
+      final dir = Directory.systemTemp.createTempSync('dlp');
+      final part = File('${dir.path}/song.mp3.part')
+        ..writeAsBytesSync([1, 2, 3]);
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      final t = DownloadTask(
+        id: 'p',
+        song: _song('暂停曲'),
+        state: DownloadTaskState.paused,
+        createdAt: 100,
+        received: 3,
+        total: 10,
+        partPath: part.path,
+      );
+      final back = DownloadTask.fromJson(t.toJson());
+      expect(back, isNotNull);
+      expect(back!.state, DownloadTaskState.paused);
+      expect(back.partPath, part.path);
+      expect(back.canResume, isTrue);
+    });
+
+    test('暂停态但残片文件没了 → 降级为失败', () {
+      final t = DownloadTask(
+        id: 'p',
+        song: _song('暂停曲'),
+        state: DownloadTaskState.paused,
+        createdAt: 100,
+        received: 3,
+        total: 10,
+        partPath: '/nonexistent/gone.part',
+      );
+      final back = DownloadTask.fromJson(t.toJson());
+      expect(back, isNotNull);
+      expect(back!.state, DownloadTaskState.failed);
+      expect(back.canResume, isFalse);
+    });
+
+    test('活跃态持久化数据 → 按失败恢复（进程被杀不可信）', () {
+      final t = DownloadTask(
+        id: 'd',
+        song: _song('被杀曲'),
+        state: DownloadTaskState.downloading,
+        createdAt: 100,
+        received: 5,
+        total: 10,
+        partPath: '/x.part',
+      );
+      final back = DownloadTask.fromJson(t.toJson());
+      expect(back!.state, DownloadTaskState.failed);
+    });
+
+    test('canResume：非暂停态一律 false', () {
+      for (final s in DownloadTaskState.values) {
+        if (s == DownloadTaskState.paused) continue;
+        final t = DownloadTask(
+          id: 'x',
+          song: _song('x'),
+          state: s,
+          createdAt: 0,
+          partPath: '/whatever.part',
+        );
+        expect(t.canResume, isFalse, reason: 'state=$s');
+      }
     });
 
     test('缺文件路径 → null', () {
@@ -208,6 +285,47 @@ void main() {
       reg.remove(done.id);
       reg.update(active.id, (x) => x.copyWith(state: DownloadTaskState.failed));
       reg.remove(active.id);
+    });
+
+    test('暂停的任务可被移除，并允许点继续', () {
+      final reg = DownloadTaskRegistry.instance;
+      final t = reg.enqueue(_song('暂停中', mid: 'pz'));
+      reg.update(t.id, (x) => x.copyWith(state: DownloadTaskState.paused, partPath: '/tmp/x.part'));
+      // 暂停态不在活跃集合里
+      expect(reg.activeTasks.any((e) => e.id == t.id), isFalse);
+      // 可以移除（不等同于进行中的强制先取消）
+      expect(reg.remove(t.id), isTrue);
+    });
+
+    test('requestPause / requestCancel 下发到绑定的令牌', () {
+      final reg = DownloadTaskRegistry.instance;
+      final t = reg.enqueue(_song('令牌曲', mid: 'tk'));
+      final token = CancelToken();
+      reg.bindToken(t.id, token);
+      reg.requestPause(t.id);
+      expect(token.isCancelled, isTrue);
+      // dio 把 reason 包进 DioException.error
+      expect(token.cancelError?.error, kDownloadPauseSignal);
+      reg.unbindToken(t.id);
+
+      final t2 = reg.enqueue(_song('令牌曲2', mid: 'tk2'));
+      final token2 = CancelToken();
+      reg.bindToken(t2.id, token2);
+      reg.requestCancel(t2.id);
+      expect(token2.isCancelled, isTrue);
+      expect(token2.cancelError?.error, kDownloadCancelSignal);
+      reg.unbindToken(t2.id);
+      reg.update(t2.id, (x) => x.copyWith(state: DownloadTaskState.canceled));
+      reg.remove(t2.id);
+    });
+
+    test('未绑定令牌时 requestPause 不抛异常', () {
+      final reg = DownloadTaskRegistry.instance;
+      final t = reg.enqueue(_song('无令牌', mid: 'nt'));
+      expect(() => reg.requestPause(t.id), returnsNormally);
+      expect(() => reg.requestCancel(t.id), returnsNormally);
+      reg.update(t.id, (x) => x.copyWith(state: DownloadTaskState.canceled));
+      reg.remove(t.id);
     });
   });
 }
