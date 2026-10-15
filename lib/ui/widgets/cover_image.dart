@@ -82,6 +82,10 @@ class _CoverImageState extends State<CoverImage> {
   /// 本地歌曲的内嵌封面（异步读入）；读完前显示占位。
   Uint8List? _localBytes;
 
+  /// 本地封面的读取状态：loading 期间不回退网络（避免闪一下网络图），
+  /// ready 且字节为空才说明文件确实没有内嵌封面。
+  bool _localReady = false;
+
   @override
   void initState() {
     super.initState();
@@ -94,9 +98,11 @@ class _CoverImageState extends State<CoverImage> {
     super.didUpdateWidget(old);
     if (old.song.mid != widget.song.mid ||
         old.song.cover != widget.song.cover ||
-        old.song.albumMid != widget.song.albumMid) {
+        old.song.albumMid != widget.song.albumMid ||
+        old.song.localPath != widget.song.localPath) {
       _reset();
       _localBytes = null;
+      _localReady = false;
       _resolveLocal();
     }
   }
@@ -116,14 +122,20 @@ class _CoverImageState extends State<CoverImage> {
     final hit = LocalCoverCache.lookup(path);
     if (hit.$1) {
       if (!mounted) return;
-      setState(() => _localBytes = hit.$2);
+      setState(() {
+        _localBytes = hit.$2;
+        _localReady = true;
+      });
       return;
     }
 
     final bytes = await LocalScanner.readCover(song);
     LocalCoverCache.put(path, bytes);
     if (!mounted) return;
-    setState(() => _localBytes = bytes);
+    setState(() {
+      _localBytes = bytes;
+      _localReady = true;
+    });
   }
 
   /// 加载失败：切到下一档。必须延到帧后再 setState（errorBuilder 处于 build 阶段）。
@@ -147,25 +159,33 @@ class _CoverImageState extends State<CoverImage> {
 
   @override
   Widget build(BuildContext context) {
-    // 本地歌曲：用文件里解出的封面字节；读不到（或还没读完）则显示占位。
+    // 本地歌曲：用文件里解出的封面字节；还在读时显示占位。
     if (widget.song.isLocal) {
       final bytes = _localBytes;
-      if (bytes == null) return _placeholder();
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(widget.radius ?? widget.size * 0.18),
-        child: SizedBox(
-          width: widget.size,
-          height: widget.size,
-          child: Image.memory(
-            bytes,
-            fit: widget.fit,
-            filterQuality: FilterQuality.medium,
-            cacheWidth: widget.memCacheWidth ?? (widget.size * 3).round(),
-            gaplessPlayback: true,
-            errorBuilder: (_, e, s) => _placeholder(),
+      if (bytes != null) {
+        return ClipRRect(
+          borderRadius:
+              BorderRadius.circular(widget.radius ?? widget.size * 0.18),
+          child: SizedBox(
+            width: widget.size,
+            height: widget.size,
+            child: Image.memory(
+              bytes,
+              fit: widget.fit,
+              filterQuality: FilterQuality.medium,
+              cacheWidth: widget.memCacheWidth ?? (widget.size * 3).round(),
+              gaplessPlayback: true,
+              errorBuilder: (_, e, s) => _placeholder(),
+            ),
           ),
-        ),
-      );
+        );
+      }
+      // 内嵌封面确认不存在（而非还在读）时**回退网络封面**——
+      // 下载完成后任务列表把歌切成本地源，若文件内嵌失败（老版本
+      // 写入就有 bug）直接灰占位，就是用户看到的「下载后封面消失」。
+      // 歌曲本身带着网络封面地址，不该浪费。
+      if (!_localReady || _candidates.isEmpty) return _placeholder();
+      // fall through：走下方网络封面渲染
     }
 
     if (_candidates.isEmpty) return _placeholder();
