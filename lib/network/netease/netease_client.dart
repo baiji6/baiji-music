@@ -106,8 +106,8 @@ class NeteaseClient {
 
   /// 网页版接口 GET。
   Future<Map<String, dynamic>> getApi(String apiUrl) async {
-    final resp = await _dio.get(apiUrl,
-        options: Options(headers: _baseHeaders(), validateStatus: (_) => true));
+    final resp = await _retry(() => _dio.get(apiUrl,
+        options: Options(headers: _baseHeaders(), validateStatus: (_) => true)));
     return _decode(resp, apiUrl);
   }
 
@@ -118,11 +118,32 @@ class NeteaseClient {
         'Content-Type': 'application/x-www-form-urlencoded',
       };
 
+  /// 连接类失败的轻量重试（最多 2 次尝试，间隔 600ms）。
+  ///
+  /// 线上日志里网易云歌词接口出现过 `connection timeout`（10-16 00:22:03），
+  /// 一次失败用户就彻底拿不到歌词。超时/连接错误多是瞬时抖动，
+  /// 重试一次大概率成功；4xx/5xx 与解析错误不重试（重试无意义）。
+  Future<T> _retry<T>(Future<T> Function() op) async {
+    for (var attempt = 0;; attempt++) {
+      try {
+        return await op();
+      } on DioException catch (e) {
+        final transient = e.type == DioExceptionType.connectionTimeout ||
+            e.type == DioExceptionType.receiveTimeout ||
+            e.type == DioExceptionType.sendTimeout ||
+            e.type == DioExceptionType.connectionError;
+        if (!transient || attempt >= 1) rethrow;
+        AppLog.d('NeteaseClient', '请求失败，600ms 后重试: ${e.type}');
+        await Future.delayed(const Duration(milliseconds: 600));
+      }
+    }
+  }
+
   Future<Map<String, dynamic>> _postForm(
       String body, String url, {bool isJson = false}) async {
-    final resp = await _dio.post(url,
+    final resp = await _retry(() => _dio.post(url,
         data: body,
-        options: Options(headers: _baseHeaders(), validateStatus: (_) => true));
+        options: Options(headers: _baseHeaders(), validateStatus: (_) => true)));
     return _decode(resp, url);
   }
 

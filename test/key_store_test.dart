@@ -5,12 +5,16 @@ import 'package:baiji_music/decrypt/key_store.dart';
 import 'package:baiji_music/decrypt/kgm.dart';
 import 'package:baiji_music/decrypt/qmc_footer.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 密钥按平台隔离的行为约束。
 ///
 /// 核心不变量：**同一串密钥在不同平台下是两条独立记录，查找时绝不串味。**
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  // fix4 起 importText 也会落盘（此前只改内存，导入的密钥重启即丢），
+  // 用内存态 SharedPreferences 接住 save()。
+  SharedPreferences.setMockInitialValues(<String, String>{});
 
   group('DecryptKeyEntry JSON', () {
     test('toJson 带平台字段', () {
@@ -70,29 +74,29 @@ void main() {
       ]);
     });
 
-    test('逐行 ekey 全部归到指定平台', () {
-      final n = keys.importText('k1\nk2\nk3',
+    test('逐行 ekey 全部归到指定平台', () async {
+      final n = await keys.importText('k1\nk2\nk3',
           platform: DecryptPlatform.kugou);
       expect(n, 3);
       expect(keys.countOf(DecryptPlatform.kugou), 3);
       expect(keys.countOf(DecryptPlatform.qqMusic), 1);
     });
 
-    test('QQ 的文件名,ekey 两段式', () {
-      keys.importText('songA.mp3,ekeyA', platform: DecryptPlatform.qqMusic);
+    test('QQ 的文件名,ekey 两段式', () async {
+      await keys.importText('songA.mp3,ekeyA', platform: DecryptPlatform.qqMusic);
       expect(keys.lookupByFileName('songA.mp3', DecryptPlatform.qqMusic),
           'ekeyA');
     });
 
-    test('酷狗的 audioHash,ekey 两段式', () {
-      keys.importText('aabbccdd,ekeyA', platform: DecryptPlatform.kugou);
+    test('酷狗的 audioHash,ekey 两段式', () async {
+      await keys.importText('aabbccdd,ekeyA', platform: DecryptPlatform.kugou);
       expect(keys.lookupByMatchKey('aabbccdd', DecryptPlatform.kugou),
           'ekeyA');
     });
 
-    test('同名密钥在两个平台下各存一份，互不覆盖', () {
-      keys.importText('shared', platform: DecryptPlatform.kuwo);
-      keys.importText('shared', platform: DecryptPlatform.qingting);
+    test('同名密钥在两个平台下各存一份，互不覆盖', () async {
+      await keys.importText('shared', platform: DecryptPlatform.kuwo);
+      await keys.importText('shared', platform: DecryptPlatform.qingting);
       expect(keys.countOf(DecryptPlatform.kuwo), 1);
       expect(keys.countOf(DecryptPlatform.qingting), 1);
       // 酷我缺匹配键（没有 rid-quality），拿不到就是拿不到——上游同理
@@ -101,8 +105,8 @@ void main() {
       expect(keys.anyEkeyOf(DecryptPlatform.qingting), 'shared');
     });
 
-    test('# 注释与空行被跳过', () {
-      final n = keys.importText('# 注释\n\nreal\n  \n',
+    test('# 注释与空行被跳过', () async {
+      final n = await keys.importText('# 注释\n\nreal\n  \n',
           platform: DecryptPlatform.migu);
       expect(n, 1);
     });
@@ -409,31 +413,31 @@ void main() {
       keys = _keysOf([]);
     });
 
-    test('QQ：文件名,ekey', () {
-      keys.importText('a.mp3,E1', platform: DecryptPlatform.qqMusic);
+    test('QQ：文件名,ekey', () async {
+      await keys.importText('a.mp3,E1', platform: DecryptPlatform.qqMusic);
       expect(keys.lookupByMatchKey('a.mp3', DecryptPlatform.qqMusic), 'E1');
     });
 
-    test('酷狗：audioHash,ekey', () {
-      keys.importText('deadbeef,E2', platform: DecryptPlatform.kugou);
+    test('酷狗：audioHash,ekey', () async {
+      await keys.importText('deadbeef,E2', platform: DecryptPlatform.kugou);
       expect(keys.lookupByMatchKey('deadbeef', DecryptPlatform.kugou), 'E2');
     });
 
-    test('酷我：rid-quality,ekey 被拆成两个字段', () {
-      keys.importText('1001-128,E3', platform: DecryptPlatform.kuwo);
+    test('酷我：rid-quality,ekey 被拆成两个字段', () async {
+      await keys.importText('1001-128,E3', platform: DecryptPlatform.kuwo);
       final e = keys.entriesOf(DecryptPlatform.kuwo).single;
       expect(e.resourceId, 1001);
       expect(e.qualityId, 128);
       expect(e.matchKey, '1001-128');
     });
 
-    test('酷我：非数字的匹配键退化成整体存储，不丢数据', () {
-      keys.importText('weird-key,E4', platform: DecryptPlatform.kuwo);
+    test('酷我：非数字的匹配键退化成整体存储，不丢数据', () async {
+      await keys.importText('weird-key,E4', platform: DecryptPlatform.kuwo);
       expect(keys.entriesOf(DecryptPlatform.kuwo).single.value, 'E4');
     });
 
-    test('只有 ekey 时没有匹配键', () {
-      keys.importText('LONGEKEY', platform: DecryptPlatform.kugou);
+    test('只有 ekey 时没有匹配键', () async {
+      await keys.importText('LONGEKEY', platform: DecryptPlatform.kugou);
       expect(keys.entriesOf(DecryptPlatform.kugou).single.hasMatchKey, isFalse);
     });
 
@@ -443,6 +447,61 @@ void main() {
       final back = DecryptKeyEntry.fromJson(e.toJson());
       expect(back.audioHash, 'ff00');
       expect(back.matchKey, 'ff00');
+    });
+  });
+
+  group('fix4：importText 落盘与判重', () {
+    // 用户反馈「导入密钥后解密失败」：importText 此前只改内存不 save，
+    // 从密钥页返回 / 重启后 load() 读到旧数据，导入的密钥全部消失。
+    test('导入后重新 load 能读回（落盘）', () async {
+      final keys = _keysOf([]);
+      await keys.importText('songA.qmc,ekeyA\nsongB.qmc,ekeyB',
+          platform: DecryptPlatform.qqMusic);
+
+      final reloaded = await DecryptKeys.load();
+      expect(reloaded.countOf(DecryptPlatform.qqMusic), 2);
+      expect(reloaded.lookupByFileName('songA.qmc', DecryptPlatform.qqMusic),
+          'ekeyA');
+      expect(reloaded.lookupByFileName('songB.qmc', DecryptPlatform.qqMusic),
+          'ekeyB');
+    });
+
+    // 同批下载的歌常用同一把 ekey；按「平台+密钥」去重会把第二首的
+    // 匹配条目吞掉，之后按文件名查表直接落空。
+    test('同一 ekey 的两条匹配键记录互不覆盖', () async {
+      final keys = _keysOf([]);
+      await keys.importText('songA.qmc,SAMEKEY', platform: DecryptPlatform.qqMusic);
+      await keys.importText('songB.qmc,SAMEKEY', platform: DecryptPlatform.qqMusic);
+
+      expect(keys.countOf(DecryptPlatform.qqMusic), 2);
+      expect(keys.lookupByFileName('songA.qmc', DecryptPlatform.qqMusic),
+          'SAMEKEY');
+      expect(keys.lookupByFileName('songB.qmc', DecryptPlatform.qqMusic),
+          'SAMEKEY');
+    });
+
+    test('add 同 ekey 不同匹配键也是两条', () async {
+      final keys = _keysOf([]);
+      await keys.add(DecryptKeyEntry(
+          value: 'K', platform: DecryptPlatform.qqMusic, mediaFilename: 'a'));
+      await keys.add(DecryptKeyEntry(
+          value: 'K', platform: DecryptPlatform.qqMusic, mediaFilename: 'b'));
+      expect(keys.countOf(DecryptPlatform.qqMusic), 2);
+    });
+
+    test('remove 带 matchKey 只删指定那条', () async {
+      final keys = _keysOf([]);
+      await keys.add(DecryptKeyEntry(
+          value: 'K', platform: DecryptPlatform.qqMusic, mediaFilename: 'a'));
+      await keys.add(DecryptKeyEntry(
+          value: 'K', platform: DecryptPlatform.qqMusic, mediaFilename: 'b'));
+      await keys.remove('K', DecryptPlatform.qqMusic, matchKey: 'a');
+      expect(keys.countOf(DecryptPlatform.qqMusic), 1);
+      expect(keys.lookupByFileName('b', DecryptPlatform.qqMusic), 'K');
+      // 关掉模糊匹配做否定断言：'a' 与剩下的 'b' 编辑距离为 1，
+      // 默认允许的模糊兜底会命中它。
+      expect(keys.lookupByFileName('a', DecryptPlatform.qqMusic,
+          allowFuzzy: false), isNull);
     });
   });
 

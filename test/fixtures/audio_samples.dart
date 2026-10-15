@@ -455,7 +455,7 @@ Uint8List buildFlac({
   out.add(_flacBlock(0, flacStreamInfo(
     sampleRate: sampleRate,
     totalSamples: totalSamples,
-  )));
+  ), last: !withComment && cover == null));
 
   if (withComment) {
     final items = <String>[];
@@ -463,7 +463,7 @@ Uint8List buildFlac({
     if (artist.isNotEmpty) items.add('ARTIST=$artist');
     if (album.isNotEmpty) items.add('ALBUM=$album');
     if (lyric.isNotEmpty) items.add('LYRICS=$lyric');
-    out.add(_flacBlock(4, vorbisCommentBlock(items)));
+    out.add(_flacBlock(4, vorbisCommentBlock(items), last: cover == null));
   }
 
   if (cover != null) {

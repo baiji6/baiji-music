@@ -79,6 +79,9 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   /// 手动填写提交后待确认（不需要密钥的平台会先弹一次提醒）。
   DecryptKeyEntry? _pendingEntry;
 
+  /// 手动填写对话框的 State 句柄：保存成功后要清空表单、关闭弹层。
+  final _manualKey = GlobalKey<_ManualKeyDialogState>();
+
   /// 导入文本对话框的输入框（页面级持有，随页面销毁）。
   final _importController = TextEditingController();
 
@@ -121,6 +124,10 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   }
 
   /// 手动填写对话框提交：不需要密钥的平台先提醒一次再入库。
+  ///
+  /// 无论走哪条路径，提交后都必须**关闭对话框并清空表单**——
+  /// 否则再次打开时输入框里还是上次的内容，用户会以为"只能填一条"
+  /// 或"没保存成功"（v2.2.9-fix4 实测反馈）。
   void _onManualSubmit(DecryptKeyEntry entry) {
     if (_platform.needsKey) {
       _saveEntry(entry);
@@ -136,6 +143,10 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   Future<void> _saveEntry(DecryptKeyEntry entry) async {
     await _keys!.add(entry);
     await _reload();
+    // 关闭手动填写弹层并清空表单：否则再次打开还是上次的内容，
+    // 用户会以为没保存上 / 只能填一条（v2.2.9-fix4 实测反馈）。
+    _manualKey.currentState?.clearForm();
+    if (mounted) setState(() => _showManualDialog = false);
     _toast('已添加到${_platform.label}');
   }
 
@@ -155,13 +166,14 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
     setState(() => _showImportTextDialog = true);
   }
 
-  void _runImportText() {
-    final count = _keys!.importText(
+  Future<void> _runImportText() async {
+    final count = await _keys!.importText(
       _importController.text,
       platform: _platform,
     );
+    if (!mounted) return;
     setState(() => _showImportTextDialog = false);
-    _reload();
+    await _reload();
     _toast('已向${_platform.label}导入 $count 条');
   }
 
@@ -273,7 +285,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
   }
 
   Future<void> _delete(DecryptKeyEntry e) async {
-    await _keys!.remove(e.value, e.platform);
+    await _keys!.remove(e.value, e.platform, matchKey: e.matchKey);
     await _reload();
   }
 
@@ -426,6 +438,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
       children: [
         // ---- 手动填写 ----
         _ManualKeyDialog(
+          key: _manualKey,
           show: _showManualDialog,
           platform: _platform,
           onDismiss: () => setState(() => _showManualDialog = false),
@@ -686,6 +699,7 @@ class _DecryptKeysPageState extends State<DecryptKeysPage> {
 /// 确认后通过 [onSubmit] 交出构造好的 [DecryptKeyEntry]（未入库）。
 class _ManualKeyDialog extends StatefulWidget {
   const _ManualKeyDialog({
+    super.key, // GlobalKey 句柄：保存成功后由页面调用 clearForm()
     required this.show,
     required this.platform,
     required this.onDismiss,
@@ -720,6 +734,28 @@ class _ManualKeyDialogState extends State<_ManualKeyDialog> {
     _rid.dispose();
     _quality.dispose();
     super.dispose();
+  }
+
+  /// 清空所有输入与错误状态。保存成功后、以及每次重新打开弹层时调用，
+  /// 保证用户看到的永远是空白表单而不是上一条的内容。
+  void clearForm() {
+    _value.clear();
+    _match.clear();
+    _rid.clear();
+    _quality.clear();
+    if (mounted) setState(() => _error = null);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ManualKeyDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 弹层从隐藏变显示 = 重新打开：表单必须重置。
+    // （弹层是页面级常驻 widget，show 只控制显隐，State 不会重建。）
+    if (!oldWidget.show && widget.show) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) clearForm();
+      });
+    }
   }
 
   /// 平台需要的匹配键字段名（用于标题与错误提示）。

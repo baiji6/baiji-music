@@ -311,9 +311,18 @@ class LyricParser {
     return t.contains('"c":') && t.contains('"tx":');
   }
 
-  /// 解析网易云混合格式：JSON 头按 `t` 时间戳转成歌词行，LRC 尾按原有
-  /// 能力解析（可能是增强 LRC 逐字）。两者合并后统一按时间排序，
-  /// 并用「下一行起点 - 10ms」补齐 JSON 行的结束时间。
+  /// 解析网易云混合格式：JSON 头按 `t` 时间戳转成歌词行，正文按**格式
+  /// 择优**解析（可能是增强 LRC 逐字 / YRC 逐字 / QRC / TTML / 经典 LRC），
+  /// 两者合并后统一按时间排序，并用「下一行起点 - 10ms」补齐 JSON 行的
+  /// 结束时间。
+  ///
+  /// **v2.2.9-fix4 根因修复**：`yrc` 字段的整体形态也是「JSON 制作信息头 +
+  /// YRC 逐字尾」（实测《后来的我们》id=422104138：3 行 JSON + 55 行
+  /// `[0,15370](0,1390,0)编...`）。旧实现把正文硬交给 [_parseLrc]——
+  /// 它只认 `[mm:ss.xx]`，YRC 的 `[起始,时长]` 行首被整体丢弃，
+  /// 结果整首歌只剩 3 行制作信息，「逐字歌词直接不显示」。
+  /// 现在正文走 [_parseBody] 特征探测，与 Lyrico 的 parseYrc 行为对齐
+  /// （其正则天然跳过 JSON 行，剩下的 YRC 尾照常解析）。
   static Lyrics _parseNeteaseJsonLrc(String text) {
     final jsonLines = <String>[];
     final lrcBuf = StringBuffer();
@@ -336,9 +345,12 @@ class LyricParser {
       out.add(LyricLine(startMs: entry.$1, endMs: entry.$1 + 2000, text: entry.$2));
     }
 
-    final lrcText = lrcBuf.toString();
-    if (lrcText.trim().isNotEmpty) {
-      out.addAll(_parseLrc(lrcText).lines);
+    final body = lrcBuf.toString();
+    var bodyHasWordTiming = false;
+    if (body.trim().isNotEmpty) {
+      final bodyLyrics = _parseBody(body);
+      out.addAll(bodyLyrics.lines);
+      bodyHasWordTiming = bodyLyrics.hasWordTiming;
     }
 
     if (out.isEmpty) return Lyrics.empty;
@@ -364,8 +376,21 @@ class LyricParser {
 
     return Lyrics(
       lines: out,
-      hasWordTiming: out.any((l) => l.isWordLevel),
+      hasWordTiming: bodyHasWordTiming || out.any((l) => l.isWordLevel),
     );
+  }
+
+  /// 混合格式的正文部分按特征择优解析。
+  ///
+  /// 顺序与 [parse] 的主链一致：TTML → YRC → QRC → LRC。
+  /// **必须先判 YRC 再判 QRC**（两者行首都是 `[数字,数字]`，靠行内字标记
+  /// 的字段数区分），LRC 放最后兜底。
+  static Lyrics _parseBody(String body) {
+    final trimmed = body.trimLeft();
+    if (_looksLikeTtml(trimmed)) return _parseTtml(body);
+    if (_looksLikeYrc(body)) return _parseYrc(body);
+    if (_looksLikeQrc(body)) return _parseQrc(body);
+    return _parseLrc(body);
   }
 
   /// 解出一行网易云 JSON 歌词：`(起始毫秒, 文本)`；格式不符返回 null。
@@ -432,6 +457,47 @@ class LyricParser {
       var cursor = 0;
       var found = false;
       final matches = _lrcTag.allMatches(line).toList();
+
+      // VERBATIM 逐字格式（Lyrico 写入音频标签的默认格式）：
+      // 一行内每个词各带一个 `[mm:ss.xx]` 时间戳，标签即词的分隔符——
+      //   [00:01.00]Moon[00:01.50]Halo[00:02.00]崩
+      // 判定：相邻两个标签之间存在非空正文（经典 LRC 的行首多标签是
+      // 紧紧挨着的，中间没有正文）。命中时把方括号标签改写成增强 LRC 的
+      // 尖括号标签，整行作为**一句**交给同一套词级解析，行首时间戳取
+      // 第一个标签。不命中时完全走原有逻辑，经典/增强 LRC 零影响。
+      var verbatim = false;
+      for (var i = 0; i < matches.length - 1; i++) {
+        if (line
+            .substring(matches[i].end, matches[i + 1].start)
+            .trim()
+            .isNotEmpty) {
+          verbatim = true;
+          break;
+        }
+      }
+      if (verbatim) {
+        final rebuilt = StringBuffer();
+        var pos = 0;
+        for (final m in matches) {
+          rebuilt.write(line.substring(pos, m.start));
+          rebuilt.write('<');
+          rebuilt.write(line.substring(m.start + 1, m.end - 1));
+          rebuilt.write('>');
+          pos = m.end;
+        }
+        rebuilt.write(line.substring(pos));
+        final mm = int.tryParse(matches.first.group(1)!) ?? 0;
+        final ss = int.tryParse(matches.first.group(2)!) ?? 0;
+        final fracRaw = matches.first.group(3) ?? '';
+        final frac = fracRaw.isEmpty ? 0 : _fracMillis(fracRaw, fracRaw.length);
+        final startMs = mm * 60000 + ss * 1000 + frac;
+        if (rebuilt.toString().trim().isNotEmpty) {
+          collected.add(_LrcEntry(startMs, rebuilt.toString()));
+        }
+        sawAny = true;
+        continue;
+      }
+
       for (final m in matches) {
         if (m.start != cursor) {
           // 时间戳前有正文：先把上一个收集的行尾截断

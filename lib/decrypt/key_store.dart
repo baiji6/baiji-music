@@ -324,19 +324,29 @@ class DecryptKeys {
     return prev[lb];
   }
 
-  /// 添加一条，**同平台**下value 相同则覆盖。
+  /// 添加一条，**同平台 + 同密钥 + 同匹配键**才覆盖。
+  ///
+  /// 匹配键必须参与判重（fix4）：同批下载的歌常用同一把 ekey，
+  /// 只按「平台+密钥」覆盖会把先加入的另一首歌的匹配条目顶掉。
   ///
   /// 跨平台不做覆盖——QQ 的 ekey 和酷狗的 fileKey 规则不同，即使字面相同
   /// 也是两条独立记录。
   Future<void> add(DecryptKeyEntry entry) async {
-    _list.removeWhere(
-        (e) => e.value == entry.value && e.platform == entry.platform);
+    _list.removeWhere((e) =>
+        e.value == entry.value &&
+        e.platform == entry.platform &&
+        e.matchKey == entry.matchKey);
     _list.add(entry);
     await save();
   }
 
-  Future<void> remove(String value, DecryptPlatform platform) async {
-    _list.removeWhere((e) => e.value == value && e.platform == platform);
+  /// 删除一条。匹配键也参与判重，避免误删同密钥的另一首匹配条目。
+  Future<void> remove(String value, DecryptPlatform platform,
+      {String? matchKey}) async {
+    _list.removeWhere((e) =>
+        e.value == value &&
+        e.platform == platform &&
+        (matchKey == null ? true : e.matchKey == matchKey));
     await save();
   }
 
@@ -351,13 +361,6 @@ class DecryptKeys {
     await save();
   }
 
-  /// 从纯文本里导入密钥。
-  ///
-  /// 支持逐行 `ekey`，以及 `mid,ekey` / `mid,filename,ekey` 两种 CSV 形式，
-  /// 自动跳过空行与以 `#` 开头的注释。
-  ///
-  /// [platform] 由调用方指定——同一段文本对不同平台的含义完全不同，
-  /// 不做自动猜测（密钥串本身看不出属于哪个平台）。
   /// 从纯文本里导入密钥，每行一条。
   ///
   /// **分隔符与字段含义随平台而变**——因为各平台的匹配键根本不同：
@@ -370,11 +373,15 @@ class DecryptKeys {
   ///
   /// [platform] 由调用方指定——同一段文本对不同平台的含义完全不同，
   /// 不做自动猜测（密钥串本身看不出属于哪个平台）。
-  int importText(
+  ///
+  /// **导入后立即落盘**（fix4）：此前只改内存不 save，用户从密钥页返回
+  /// 或重启 App 后 `load()` 读到旧数据，导入的密钥全部消失——
+  /// 即「导入密钥后解密失败」的直接根因。
+  Future<int> importText(
     String text, {
     required DecryptPlatform platform,
     KeySource source = KeySource.importedText,
-  }) {
+  }) async {
     var count = 0;
     for (final rawLine in const LineSplitter().convert(text)) {
       final line = rawLine.trim();
@@ -390,6 +397,7 @@ class DecryptKeys {
       count++;
     }
     _dedup();
+    await save();
     return count;
   }
 
@@ -434,10 +442,15 @@ class DecryptKeys {
     return found.length;
   }
 
-  /// 去重：同一条密钥只留一个（**跨平台不合并**——
-  /// 不同平台的密钥串即使字面相同也是两条独立记录）。
+  /// 去重：**同平台 + 同密钥 + 同匹配键**只留一个。
+  ///
+  /// 去重键必须带匹配键（fix4）：两首歌完全可能共用同一把 ekey
+  /// （同一个账号下载的同批歌曲），按「平台+密钥」去重会把第二首歌的
+  /// 匹配条目悄悄吞掉，之后按文件名查表直接落空。
+  /// 跨平台不合并——不同平台的密钥串即使字面相同也是两条独立记录。
   void _dedup() {
     final seen = <String>{};
-    _list.removeWhere((e) => !seen.add('${e.platform.name}\u0000${e.value}'));
+    _list.removeWhere(
+        (e) => !seen.add('${e.platform.name}\u0000${e.value}\u0000${e.matchKey ?? ''}'));
   }
 }

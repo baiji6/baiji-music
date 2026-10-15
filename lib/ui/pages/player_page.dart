@@ -16,6 +16,7 @@ import 'package:baiji_music/network/music_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/core/album_saver.dart';
+import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/ui/pages/netease_login_page.dart';
 import 'package:baiji_music/ui/widgets/app_snackbar.dart';
 import 'package:baiji_music/ui/widgets/app_widgets.dart';
@@ -23,7 +24,7 @@ import 'package:baiji_music/ui/widgets/cover_image.dart';
 import 'package:baiji_music/ui/widgets/download_options_sheet.dart';
 import 'package:baiji_music/ui/widgets/lyric_style_sheet.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart' show ValueListenable, kDebugMode, debugPrintStack;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_miuix/miuix.dart';
 
@@ -1676,11 +1677,18 @@ class _LyricViewState extends State<_LyricView>
   @override
   void didUpdateWidget(covariant _LyricView old) {
     super.didUpdateWidget(old);
-    if (old.lyrics.length != widget.lyrics.length) {
+    final lyricsChanged = !identical(old.lyrics, widget.lyrics);
+    if (lyricsChanged && old.lyrics.length != widget.lyrics.length) {
       _keys.clear();
       for (var i = 0; i < widget.lyrics.length; i++) {
         _keys.add(GlobalKey());
       }
+    }
+    if (lyricsChanged) {
+      // 换歌后 _active 必须重算：行数恰好相同的两首歌，旧行号指向
+      // 错误的行；若新歌比旧行号短，还会短暂越界。
+      _active = widget.lyrics.indexAt(PlayerController.instance.position);
+      _setAnchor(PlayerController.instance.position);
     }
   }
 
@@ -1754,15 +1762,27 @@ class _LyricViewState extends State<_LyricView>
 
   void _scrollToActive({bool animate = true}) {
     if (_userDragging) return;
+    if (!mounted) return;
     if (_active < 0 || _active >= _keys.length) return;
     final ctx = _keys[_active].currentContext;
-    if (ctx == null) return;
-    Scrollable.ensureVisible(
-      ctx,
-      alignment: 0.42,
-      duration: animate ? const Duration(milliseconds: 380) : Duration.zero,
-      curve: Curves.easeOutCubic,
-    );
+    // mounted 检查不能省：ListView 回收滑出屏幕的行时，GlobalKey 还挂着
+    // 但 Element 可能已失效——此时 findRenderObject() 返回 null，
+    // ensureVisible 内部空断言直接 FATAL（线上崩溃栈与此吻合）。
+    if (ctx == null || !ctx.mounted) return;
+    // 滚动定位是纯辅助行为：歌词行还在重建中、被卸载、或框架内部
+    // 状态 momentarily 不一致时，ensureVisible 可能抛异常——
+    // 绝不能让它拖垮整个播放页（线上 FATAL 空指针的防御点之一）。
+    try {
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.42,
+        duration: animate ? const Duration(milliseconds: 380) : Duration.zero,
+        curve: Curves.easeOutCubic,
+      );
+    } catch (e, st) {
+      AppLog.w('LyricView', '滚动定位失败（已忽略）: $e');
+      if (kDebugMode) debugPrintStack(stackTrace: st);
+    }
   }
 
   void _onUserScroll() {

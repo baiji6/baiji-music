@@ -94,7 +94,11 @@ class LyricApi {
       param: param,
     ));
 
-    final main = _str(data['lyric']) ?? _str(data['qrc']) ?? '';
+    // **qrc 优先于 lyric**：同一首歌 QQ 会同时返回两者——
+    // `lyric` 是逐行 LRC，`qrc` 是逐字 QRC。fix4 之前先取 `lyric`，
+    // 导致有逐字歌词的歌全部按逐行渲染（用户反馈「QQ 还是逐行歌词」）。
+    // 只有拿不到 qrc 时才退回逐行 lyric。
+    final main = _str(data['qrc']) ?? _str(data['lyric']) ?? '';
     final trans = _str(data['trans']) ?? '';
     final roma = _str(data['roma']) ?? '';
 

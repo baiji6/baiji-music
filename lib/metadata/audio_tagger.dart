@@ -293,8 +293,16 @@ class AudioTagger {
       }
     }
 
-    // 只去掉我们要重写的帧，其余（TXXX / PRIV / COMM 等）原样保留
-    const drop = <String>{'USLT', 'APIC', 'TIT2', 'TPE1', 'TALB'};
+    // 只去掉本次要重写的帧，其余（TXXX / PRIV / COMM 等）原样保留。
+    // 本次没提供封面/歌词/某项标签时，**保留文件里已有的对应帧**——
+    // 否则「补写标签」会把旧封面擦掉（用户反馈：下载后封面不显示）。
+    final drop = <String>{
+      if (lyrics.isNotEmpty) 'USLT',
+      if (cover != null) 'APIC',
+      if ((tags['title'] ?? '').isNotEmpty) 'TIT2',
+      if ((tags['artist'] ?? '').isNotEmpty) 'TPE1',
+      if ((tags['album'] ?? '').isNotEmpty) 'TALB',
+    };
     final frames = <_Id3Frame>[
       for (final f in preserved)
         if (!drop.contains(f.id)) f,
@@ -488,13 +496,18 @@ class AudioTagger {
       if (b.type != 4) continue; // 4 = VORBIS_COMMENT
       for (final c in _parseVorbisComment(b.data, (v) => vendor = v)) {
         final key = c.split('=').first.trim().toLowerCase();
-      if (key == 'lyrics' || key == 'unsyncedlyrics') continue;
-      if (tags.containsKey(key)) continue; // 由本次写入覆盖
-      kept.add(c);
+        // 有新歌词才替换旧歌词；没有则保留文件里已有的
+        if (lyrics.isNotEmpty &&
+            (key == 'lyrics' || key == 'unsyncedlyrics')) {
+          continue;
+        }
+        if (tags.containsKey(key)) continue; // 由本次写入覆盖
+        kept.add(c);
       }
     }
     if (lyrics.isNotEmpty) kept.add('LYRICS=$lyrics');
     for (final e in tags.entries) {
+      if (e.value.isEmpty) continue; // 空值不写，与 MP3/M4A 一致
       kept.add('${e.key.toUpperCase()}=${e.value}');
     }
 
@@ -503,7 +516,14 @@ class AudioTagger {
       for (final b in blocks)
         if (b.type == 0) b,
       _FlacBlock(4, _buildVorbisComment(vendor, kept)),
-      if (cover != null) _FlacBlock(6, _buildPictureBlock(cover)),
+      // 有新封面则替换；没有则**保留文件里已有的 PICTURE 块**——
+      // 否则「先写封面、再单独写歌词/标签」会把旧封面擦掉
+      //（用户反馈：下载中显示封面，下载后不显示）。
+      if (cover != null)
+        _FlacBlock(6, _buildPictureBlock(cover))
+      else
+        for (final b in blocks)
+          if (b.type == 6) b,
       // 其余块原样透传（跳过旧的注释 / 图片 / padding）
       for (final b in blocks)
         if (b.type != 0 && b.type != 4 && b.type != 6 && b.type != 1) b,
@@ -713,10 +733,19 @@ class AudioTagger {
             if (d.type == 'ilst') {
               for (final e
                   in _parseBoxes(moovBytes, d.payloadStart, d.payloadEnd)) {
-                if (e.type == '©lyr' || e.type == 'covr') continue;
-                if (e.type == '©nam' && tags.containsKey('title')) continue;
-                if (e.type == '©ART' && tags.containsKey('artist')) continue;
-                if (e.type == '©alb' && tags.containsKey('album')) continue;
+                // 只替换本次提供的条目；没提供歌词/封面时保留文件里
+                // 已有的，避免「补写标签把旧封面擦掉」。
+                if (e.type == '©lyr' && lyrics.isNotEmpty) continue;
+                if (e.type == 'covr' && cover != null) continue;
+                if (e.type == '©nam' && (tags['title'] ?? '').isNotEmpty) {
+                  continue;
+                }
+                if (e.type == '©ART' && (tags['artist'] ?? '').isNotEmpty) {
+                  continue;
+                }
+                if (e.type == '©alb' && (tags['album'] ?? '').isNotEmpty) {
+                  continue;
+                }
                 keptIlst.add(
                     Uint8List.sublistView(moovBytes, e.start, e.payloadEnd));
               }
@@ -989,12 +1018,19 @@ class AudioTagger {
       final c = utf8.decode(pl.sublist(pos, pos + len), allowMalformed: true);
       pos += len;
       final key = c.split('=').first.trim().toLowerCase();
-      if (key == 'lyrics' || key == 'unsyncedlyrics') continue;
+      // 只替换本次提供的条目：有新歌词才丢旧歌词，有新封面才丢旧封面；
+      // 两者都没提供时保留文件里已有的，避免「补写标签擦掉旧封面」。
+      if (lyrics.isNotEmpty &&
+          (key == 'lyrics' || key == 'unsyncedlyrics')) {
+        continue;
+      }
+      if (key == 'metadata_block_picture' && cover != null) continue;
       if (tags.containsKey(key)) continue; // 由本次写入覆盖
       kept.add(c);
     }
     if (lyrics.isNotEmpty) kept.add('LYRICS=$lyrics');
     for (final e in tags.entries) {
+      if (e.value.isEmpty) continue; // 空值不写，与 MP3/M4A 一致
       kept.add('${e.key.toUpperCase()}=${e.value}');
     }
     if (cover != null) {
