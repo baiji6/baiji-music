@@ -94,37 +94,59 @@ class LyricApi {
       param: param,
     ));
 
-    // **qrc 优先于 lyric**：同一首歌 QQ 会同时返回两者——
-    // `lyric` 是逐行 LRC，`qrc` 是逐字 QRC。fix4 之前先取 `lyric`，
-    // 导致有逐字歌词的歌全部按逐行渲染（用户反馈「QQ 还是逐行歌词」）。
-    // 只有拿不到 qrc 时才退回逐行 lyric。
+    // **逐字密文可能在 qrc 或 lyric 任何一个字段**（fix5 实测：
+    // `crypt:1` 时逐字 QRC 密文就在 `lyric` 字段里，`qrc` 反而为空，
+    // 且不同登录态/客户端版本下服务端可能改变放置位置）。
+    // 所以两个候选都解析，**优先返回带词级时间轴的结果**；
+    // 都没有词级时退回 lyric 的逐行结果——宁可逐行不能没词。
     final qrc = _str(data['qrc']);
     final lrc = _str(data['lyric']) ?? '';
-    final main = qrc ?? lrc;
     final trans = _str(data['trans']) ?? '';
     final roma = _str(data['roma']) ?? '';
 
-    if (main.isEmpty && trans.isEmpty) {
+    AppLog.d('LyricApi',
+        'QQ 歌词响应 song=${song.name} qrc=${qrc == null ? "无" : "len=${qrc.length}"} '
+        'lyric=${lrc.isEmpty ? "无" : "len=${lrc.length}"} '
+        'trans=${trans.isEmpty ? "无" : "有"} roma=${roma.isEmpty ? "无" : "有"}');
+
+    if (qrc == null && lrc.isEmpty && trans.isEmpty) {
       AppLog.i('LyricApi', 'QQ 歌词为空 song=${song.name}');
       return Lyrics.empty;
     }
 
-    var lyrics = LyricParser.parse(
-      main,
-      translation: trans.isEmpty ? null : trans,
-      romanization: roma.isEmpty ? null : roma,
-    );
-    // 兜底：qrc 拿到了但解析失败（密文异常/格式变化）时，
-    // 再用逐行 lyric 试一次——宁可逐行也不能没有歌词。
-    if (lyrics.isEmpty && qrc != null && lrc.isNotEmpty) {
-      AppLog.w('LyricApi', 'QQ qrc 解析为空，回退逐行 lyric song=${song.name}');
-      lyrics = LyricParser.parse(
+    Lyrics? fallback;
+    if (qrc != null && qrc.isNotEmpty) {
+      final ly = LyricParser.parse(
+        qrc,
+        translation: trans.isEmpty ? null : trans,
+        romanization: roma.isEmpty ? null : roma,
+      );
+      if (ly.hasWordTiming) {
+        AppLog.d('LyricApi',
+            'QQ qrc 解析出逐字歌词 song=${song.name} lines=${ly.length}');
+        return ly;
+      }
+      if (ly.isNotEmpty) fallback ??= ly;
+    }
+    if (lrc.isNotEmpty) {
+      final ly = LyricParser.parse(
         lrc,
         translation: trans.isEmpty ? null : trans,
         romanization: roma.isEmpty ? null : roma,
       );
+      if (ly.hasWordTiming) {
+        AppLog.d('LyricApi',
+            'QQ lyric 字段解析出逐字歌词（密文在 lyric） song=${song.name} lines=${ly.length}');
+        return ly;
+      }
+      if (ly.isNotEmpty) fallback ??= ly;
     }
-    return lyrics;
+    if (fallback != null) {
+      AppLog.d('LyricApi',
+          'QQ 无逐字数据，使用逐行歌词 song=${song.name} lines=${fallback.length}');
+      return fallback;
+    }
+    return Lyrics.empty;
   }
 
   // ==================== 网易云 ====================
@@ -166,6 +188,14 @@ class LyricApi {
     final romalrc = pick('romalrc');
     final klyric = pick('klyric');
 
+    // fix5 诊断日志：真机上若仍是逐行，看这里就能定位是「没拿到 yrc」
+    // 还是「拿到了没解析出来」。
+    AppLog.d('LyricApi',
+        '网易云歌词响应 song=${song.name} 登录=${client.isLoggedIn()} '
+        'yrc=${yrc.isEmpty ? "无" : "len=${yrc.length}"} '
+        'lrc=${lrc.isEmpty ? "无" : "len=${lrc.length}"} '
+        'klyric=${klyric.isEmpty ? "无" : "有"} tlyric=${tlyric.isEmpty ? "无" : "有"}');
+
     // 优先逐字；没有则退回逐行（v1 未登录时是混合格式）；
     // 再退回（韩语）音译。
     final content = yrc.isNotEmpty ? yrc : (lrc.isNotEmpty ? lrc : klyric);
@@ -174,18 +204,21 @@ class LyricApi {
       return Lyrics.empty;
     }
 
-    if (yrc.isEmpty && !client.isLoggedIn()) {
-      // 未登录拿不到 yrc（逐字），只能给逐行——这是服务端限制，
-      // 不是解析问题。记日志 + 由 UI 提示去登录。
-      AppLog.i('LyricApi',
-          '网易云未登录，${song.name} 只有逐行歌词（登录后可得逐字）');
-    }
-
-    return LyricParser.parse(
+    final parsed = LyricParser.parse(
       content,
       translation: tlyric.isEmpty ? null : tlyric,
       romanization: romalrc.isEmpty ? null : romalrc,
     );
+    if (yrc.isNotEmpty && !parsed.hasWordTiming) {
+      // 拿到了 yrc 却没解析出词级——这是解析端 bug，立即在日志里暴露
+      AppLog.w('LyricApi',
+          '网易云 yrc 有数据但解析无词级（解析端异常） song=${song.name}');
+    } else {
+      AppLog.d('LyricApi',
+          '网易云解析结果 song=${song.name} lines=${parsed.length} '
+          '词级=${parsed.hasWordTiming}');
+    }
+    return parsed;
   }
 
   /// 字段可能是字符串，也可能是嵌套 map（不同接口形态），统一取文本。
