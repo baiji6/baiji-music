@@ -2117,14 +2117,27 @@ class _KaraokeLine extends StatefulWidget {
 }
 
 class _KaraokeLineState extends State<_KaraokeLine> {
-  /// 每个字在行内的水平区间（像素）。空列表 = 该字无文本（QRC 罗马音占位）。
-  List<List<double>>? _wordSpans;
+  /// 每个字在行内的盒子（含换行时的 top/bottom）。
+  /// null = 该字无文本（QRC 罗马音占位）。
+  List<Rect?>? _wordRects;
 
-  /// 量取 [_wordSpans] 时使用的排版宽度，用于判断缓存是否失效。
+  /// 视觉行分组（借鉴 AMLL 的 per-line mask 方案）：
+  /// 换行后第二行从 x=0 重新开始，整行单一横向渐变的 stops 会乱序，
+  /// 全部被 KaraokeFill 的单调保护丢弃——**换行的行后半段永远染不上色**，
+  /// 大字号下几乎每行都换行，看起来就是「没有逐字效果」。
+  /// AMLL（倾听同款渲染库）按视觉行独立做遮罩，天然支持换行。
+  List<_KaraokeRow>? _rows;
+
+  /// 量取 [_wordRects] 时使用的排版宽度，用于判断缓存是否失效。
   double _laidWidth = -1;
 
-  /// 排版后的内容宽度（归一化 stop 用；多行换行时等于排版宽度）。
-  double _contentWidth = 0;
+  /// 量取时的颜色——LyricSettings 改色会触发整列表 rebuild，但行对象
+  /// 不变，didUpdateWidget 感知不到，必须自己比对。
+  Color? _laidSung;
+  Color? _laidUnsung;
+
+  TextPainter? _tpUnsung;
+  TextPainter? _tpSung;
 
   TextSpan _span(Color color) => TextSpan(
         children: [
@@ -2148,44 +2161,85 @@ class _KaraokeLineState extends State<_KaraokeLine> {
 
   Color get _readableSung => LyricSettings.instance.readableSungColor;
 
-  /// 用 TextPainter 量每个字的水平区间。文本/字号/宽度不变时直接复用，
-  /// 避免每帧重排版——播放期间这里只在进度 tick 里被调用。
+  /// 用 TextPainter 量每个字的盒子并按视觉行分组。
+  /// 文本/字号/宽度/颜色不变时直接复用，避免每帧重排版。
   void _measure(double maxWidth) {
-    if (_wordSpans != null && _laidWidth == maxWidth) return;
+    final sung = _readableSung;
+    final unsung = _readableUnsung;
+    if (_wordRects != null &&
+        _laidWidth == maxWidth &&
+        _laidSung == sung &&
+        _laidUnsung == unsung) {
+      return;
+    }
+
     final painter = TextPainter(
-      text: _span(_readableUnsung),
+      text: _span(unsung),
       textAlign: widget.align,
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: maxWidth);
 
-    final spans = <List<double>>[];
+    final rects = List<Rect?>.filled(widget.line.words.length, null);
     var offset = 0;
-    for (final w in widget.line.words) {
+    for (var i = 0; i < widget.line.words.length; i++) {
+      final w = widget.line.words[i];
       final len = w.text.length;
       if (len > 0) {
         final boxes = painter.getBoxesForSelection(
           TextSelection(baseOffset: offset, extentOffset: offset + len),
         );
         if (boxes.isNotEmpty) {
-          var left = double.infinity;
-          var right = double.negativeInfinity;
-          for (final b in boxes) {
-            if (b.left < left) left = b.left;
-            if (b.right > right) right = b.right;
+          var l = double.infinity, r = double.negativeInfinity;
+          var t = double.infinity, b = double.negativeInfinity;
+          for (final bx in boxes) {
+            if (bx.left < l) l = bx.left;
+            if (bx.right > r) r = bx.right;
+            if (bx.top < t) t = bx.top;
+            if (bx.bottom > b) b = bx.bottom;
           }
-          spans.add([left, right]);
-        } else {
-          spans.add(const <double>[]);
+          rects[i] = Rect.fromLTRB(l, t, r, b);
         }
-      } else {
-        spans.add(const <double>[]);
       }
       offset += len;
     }
-    _wordSpans = spans;
-    _contentWidth = painter.width;
+
+    // 按视觉行分组：top 相近（半个字高以内）的字属于同一显示行。
+    final rows = <_KaraokeRow>[];
+    final lineTolerance = widget.fontSize * 0.5;
+    final order = [
+      for (var i = 0; i < rects.length; i++)
+        if (rects[i] != null) i,
+    ]..sort((a, b) => rects[a]!.top.compareTo(rects[b]!.top));
+    for (final i in order) {
+      final rect = rects[i]!;
+      if (rows.isEmpty ||
+          (rect.top - rows.last.rect.top).abs() > lineTolerance) {
+        rows.add(_KaraokeRow(rect: rect, wordIndexes: [i]));
+      } else {
+        final last = rows.last;
+        last.wordIndexes.add(i);
+        last.rect = Rect.fromLTRB(
+          math.min(last.rect.left, rect.left),
+          math.min(last.rect.top, rect.top),
+          math.max(last.rect.right, rect.right),
+          math.max(last.rect.bottom, rect.bottom),
+        );
+      }
+    }
+
+    final sungPainter = TextPainter(
+      text: _span(sung),
+      textAlign: widget.align,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: maxWidth);
+
+    _wordRects = rects;
+    _rows = rows;
+    _tpUnsung = painter;
+    _tpSung = sungPainter;
     _laidWidth = maxWidth;
-    painter.dispose();
+    _laidSung = sung;
+    _laidUnsung = unsung;
   }
 
   @override
@@ -2196,39 +2250,24 @@ class _KaraokeLineState extends State<_KaraokeLine> {
         oldWidget.height != widget.height ||
         oldWidget.align != widget.align ||
         oldWidget.weight != widget.weight) {
-      _wordSpans = null;
+      _wordRects = null;
+      _rows = null;
+      _tpUnsung?.dispose();
+      _tpUnsung = null;
+      _tpSung?.dispose();
+      _tpSung = null;
     }
   }
 
   @override
   void dispose() {
-    _wordSpans = null;
+    _wordRects = null;
+    _rows = null;
+    _tpUnsung?.dispose();
+    _tpUnsung = null;
+    _tpSung?.dispose();
+    _tpSung = null;
     super.dispose();
-  }
-
-  Gradient? _buildGradient(int posMs) {
-    final spans = _wordSpans;
-    if (spans == null || _contentWidth <= 0) return null;
-
-    // 已唱 / 未唱色来自 LyricSettings（默认荧光黄绿 + 亮白，可在设置里
-    // 自定义），经对比度保障后使用。分段逻辑在 KaraokeFill 里，
-    // 那里是纯函数，有独立单测。
-    final built = KaraokeFill.build(
-      wordSpans: spans,
-      ratios: [
-        for (final w in widget.line.words) w.progressAt(posMs),
-      ],
-      width: _contentWidth,
-      sung: _readableSung,
-      unsung: _readableUnsung,
-    );
-    if (built == null) return null;
-    return LinearGradient(
-      colors: built.$2,
-      stops: built.$1,
-      begin: Alignment.centerLeft,
-      end: Alignment.centerRight,
-    );
   }
 
   @override
@@ -2242,20 +2281,140 @@ class _KaraokeLineState extends State<_KaraokeLine> {
                 ? constraints.maxWidth
                 : double.infinity;
             _measure(maxWidth);
-            final gradient = _buildGradient(posMs);
-            final child = RichText(
-              textAlign: widget.align,
-              text: _span(_readableUnsung),
-            );
-            if (gradient == null) return child;
-            return ShaderMask(
-              blendMode: BlendMode.srcIn,
-              shaderCallback: (bounds) => gradient.createShader(bounds),
-              child: child,
+            final tpUnsung = _tpUnsung;
+            final tpSung = _tpSung;
+            final rows = _rows;
+            final rects = _wordRects;
+            // 兜底：没量出来（无字/排版失败）时退回纯未唱色文本
+            if (tpUnsung == null ||
+                tpSung == null ||
+                rows == null ||
+                rects == null ||
+                rows.isEmpty) {
+              return RichText(
+                textAlign: widget.align,
+                text: _span(_readableUnsung),
+              );
+            }
+            final ratios = [
+              for (final w in widget.line.words) w.progressAt(posMs),
+            ];
+            return CustomPaint(
+              size: Size(
+                maxWidth.isFinite ? maxWidth : tpUnsung.width,
+                tpUnsung.height,
+              ),
+              painter: _KaraokePainter(
+                unsungPainter: tpUnsung,
+                sungPainter: tpSung,
+                rows: rows,
+                wordRects: rects,
+                ratios: ratios,
+                sungColor: _readableSung,
+              ),
             );
           },
         ),
       ),
     );
   }
+}
+
+/// 一个视觉行：同一显示行内的字下标 + 该行的盒子。
+class _KaraokeRow {
+  _KaraokeRow({required this.rect, required this.wordIndexes});
+
+  Rect rect;
+  final List<int> wordIndexes;
+}
+
+/// 逐字卡拉OK绘制器（AMLL 同款思路：底层整行未唱色，每个视觉行
+/// 叠一层已唱色，再用该行的分段渐变做 dstIn 遮罩）。
+///
+/// 遮罩渐变由 [KaraokeFill.build] 产出—— sung 传不透明白、unsung 传
+/// 全透明白，dstIn 只取 alpha：已唱段 alpha=1 保留已唱色文字，
+/// 未唱段 alpha=0 透出底层的未唱色文字，过渡带平滑扫过。
+class _KaraokePainter extends CustomPainter {
+  _KaraokePainter({
+    required this.unsungPainter,
+    required this.sungPainter,
+    required this.rows,
+    required this.wordRects,
+    required this.ratios,
+    required this.sungColor,
+  });
+
+  final TextPainter unsungPainter;
+  final TextPainter sungPainter;
+  final List<_KaraokeRow> rows;
+  final List<Rect?> wordRects;
+  final List<double> ratios;
+  final Color sungColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 1) 底层：整行未唱色
+    unsungPainter.paint(canvas, Offset.zero);
+
+    // 2) 每个视觉行叠加已唱层 + 渐变遮罩
+    const opaqueWhite = Color(0xFFFFFFFF);
+    const transparentWhite = Color(0x00FFFFFF);
+    for (final row in rows) {
+      final rowRatios = [
+        for (final i in row.wordIndexes) ratios[i],
+      ];
+      final allUnsung = rowRatios.every((r) => r <= 0);
+      if (allUnsung) continue; // 整行没唱：底层已画，省一次离屏合成
+      final allSung = rowRatios.every((r) => r >= 1);
+
+      canvas.saveLayer(row.rect.inflate(2), Paint());
+
+      if (allSung) {
+        // 整行唱完：直接画已唱层，无需遮罩
+        sungPainter.paint(canvas, Offset.zero);
+      } else {
+        // 遮罩渐变的字区间以行为基准（第二行从 0 重新开始，各自独立）
+        final spans = <List<double>>[
+          for (final i in row.wordIndexes)
+            wordRects[i] == null
+                ? const <double>[]
+                : [
+                    wordRects[i]!.left - row.rect.left,
+                    wordRects[i]!.right - row.rect.left,
+                  ],
+        ];
+        final built = KaraokeFill.build(
+          wordSpans: spans,
+          ratios: rowRatios,
+          width: row.rect.width,
+          sung: opaqueWhite,
+          unsung: transparentWhite,
+        );
+        sungPainter.paint(canvas, Offset.zero);
+        if (built != null) {
+          canvas.drawRect(
+            row.rect,
+            Paint()
+              ..blendMode = BlendMode.dstIn
+              ..shader = LinearGradient(
+                colors: built.$2,
+                stops: built.$1,
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ).createShader(row.rect),
+          );
+        }
+      }
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _KaraokePainter oldDelegate) =>
+      oldDelegate.sungColor != sungColor ||
+      oldDelegate.ratios != ratios ||
+      oldDelegate.rows != rows ||
+      oldDelegate.wordRects != wordRects ||
+      oldDelegate.unsungPainter != unsungPainter ||
+      oldDelegate.sungPainter != sungPainter;
 }

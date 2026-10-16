@@ -204,19 +204,18 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    // 当前行（active）应该走 KaraokeFill 分支：ShaderMask 里包 RichText
-    final masks = find.byType(ShaderMask);
-    expect(masks.evaluate(), isNotEmpty,
-        reason: '逐字渲染必须走 ShaderMask（KaraokeFill）分支');
-    final activeMask = masks.first;
-    expect(
-      find.descendant(
-        of: activeMask,
-        matching: find.byType(RichText),
-      ).evaluate(),
-      isNotEmpty,
-      reason: 'ShaderMask 内部应为 RichText（逐字染色文本）',
-    );
+    // 当前行（active）应该走逐字渲染分支：fix5 起为 CustomPaint +
+    // 每视觉行独立 dstIn 遮罩（AMLL 同款，换行安全），不再是整行 ShaderMask
+    final paints = find.byType(CustomPaint);
+    expect(paints.evaluate(), isNotEmpty,
+        reason: '逐字渲染必须走 CustomPaint（KaraokeFill 遮罩）分支');
+    // CustomPaint 的 painter 应该有真实的排版缓存（说明量字成功）
+    final hasKaraoke = paints.evaluate().any((el) {
+      final w = el.widget as CustomPaint;
+      return w.painter != null && w.painter.runtimeType.toString() == '_KaraokePainter';
+    });
+    expect(hasKaraoke, isTrue,
+        reason: '词级行必须由 _KaraokePainter 绘制（逐字染色）');
     dir.deleteSync(recursive: true);
   }, timeout: const Timeout(Duration(seconds: 60)));
 }

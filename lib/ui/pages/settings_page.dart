@@ -1,10 +1,16 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_miuix/miuix.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_logger.dart';
+import '../../core/backup_service.dart';
 import '../../core/cache_manager.dart';
 import '../../core/capture_trust.dart';
 import '../../core/dev_mode.dart';
@@ -60,6 +66,10 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _showQQQualitySheet = false;
   bool _showNeteaseQualitySheet = false;
   bool _showCacheLimitSheet = false;
+  bool _showBackupDialog = false;
+  bool _showBackupImportConfirm = false;
+  bool _backupBusy = false;
+  String? _backupImportPath;
 
   /// v2.2.7：歌词字重 / 界面圆角改为弹窗调节（带实时预览）。
   bool _showWeightDialog = false;
@@ -271,6 +281,95 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _showSnack(String msg, {bool isError = false}) {
     _snackbarHostState.showSnackbar(msg);
+  }
+
+  // ==================== 备份与恢复（v2.3.0） ====================
+
+  /// 导出备份：JSON 写入可管理的缓存目录后走系统分享（可存网盘/发送）。
+  Future<void> _exportBackup() async {
+    if (_backupBusy) return;
+    setState(() => _backupBusy = true);
+    try {
+      final json = BackupService.export();
+      final stamp = DateTime.now()
+          .toIso8601String()
+          .substring(0, 16)
+          .replaceAll(RegExp(r'[:T]'), '-');
+      final file = await CacheManager.cacheFile('baiji_backup_$stamp.json');
+      await file.writeAsString(json, encoding: utf8);
+      if (!mounted) return;
+      setState(() => _showBackupDialog = false);
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: '白姬音乐备份（含歌单/历史/登录态/设置，请妥善保管）',
+        subject: file.uri.pathSegments.last,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('导出备份失败: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _backupBusy = false);
+    }
+  }
+
+  /// 选择备份文件并进入确认弹层。
+  Future<void> _pickBackupFile() async {
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json', 'txt'],
+        withData: true,
+      );
+      if (res == null || res.files.isEmpty) return;
+      final f = res.files.single;
+      if (f.path == null && f.bytes == null) {
+        _showSnack('无法读取所选文件', isError: true);
+        return;
+      }
+      setState(() {
+        _backupImportPath = f.path;
+        _backupImportBytes = f.bytes;
+        _showBackupImportConfirm = true;
+      });
+    } catch (e) {
+      _showSnack('选择文件失败: $e', isError: true);
+    }
+  }
+
+  Uint8List? _backupImportBytes;
+
+  Future<void> _confirmImportBackup() async {
+    if (_backupBusy) return;
+    setState(() {
+      _backupBusy = true;
+      _showBackupImportConfirm = false;
+    });
+    try {
+      String raw;
+      final bytes = _backupImportBytes;
+      if (bytes != null && bytes.isNotEmpty) {
+        raw = utf8.decode(bytes, allowMalformed: true);
+      } else {
+        raw = await File(_backupImportPath!).readAsString();
+      }
+      final n = await BackupService.import(raw);
+      if (!mounted) return;
+      _showSnack('已恢复 $n 条数据，重启应用后全部生效');
+    } on FormatException catch (e) {
+      if (!mounted) return;
+      _showSnack('恢复失败: ${e.message}', isError: true);
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('恢复失败: $e', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _backupBusy = false;
+          _backupImportPath = null;
+          _backupImportBytes = null;
+        });
+      }
+    }
   }
 
   Future<void> _confirmClearCache() async {
@@ -582,6 +681,15 @@ MiuixArrowPreference(
                     ],
                     onClick: _checkingUpdate ? null : _checkUpdate,
                   ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '备份与恢复',
+                    summary: '导出 / 导入歌单、历史、登录态与设置（JSON）',
+                    startAction: const Icon(Icons.backup_rounded,
+                        color: AppColors.aqua, size: 22),
+                    onClick: () =>
+                        setState(() => _showBackupDialog = true),
+                  ),
                 ],
               ),
             ),
@@ -690,6 +798,77 @@ MiuixArrowPreference(
   Widget _buildDialogs() {
     return Stack(
       children: [
+        // 备份与恢复（导出 / 导入入口）
+        MiuixOverlayDialog(
+          show: _showBackupDialog,
+          title: '备份与恢复',
+          summary: '歌单、播放/搜索历史、收藏、本地音乐库、'
+              '网易云与 QQ 登录态、解密密钥库、全部个性化设置',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showBackupDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Text(
+                  '当前可备份 ${BackupService.countBackupItems()} 条数据。'
+                  '恢复为合并写回：只覆盖备份里有的键，本机其他数据保留；'
+                  '恢复后重启应用生效。',
+                  style: TextStyle(
+                      fontSize: 12,
+                      height: 1.5,
+                      color: AppColors.textTertiary),
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton(
+                    '导出备份',
+                    onPressed: _backupBusy ? null : _exportBackup,
+                  ),
+                  const SizedBox(width: 8),
+                  MiuixTextButton(
+                    '导入备份',
+                    onPressed: _backupBusy ? null : _pickBackupFile,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // 导入确认：备份文件会覆盖本机同名数据
+        MiuixOverlayDialog(
+          show: _showBackupImportConfirm,
+          title: '确认导入备份？',
+          summary: '备份里的歌单、历史、登录态与设置将覆盖本机同名数据。'
+              '该操作不可撤销，建议先「导出备份」留一份当前状态。',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showBackupImportConfirm = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton('取消', onPressed: () {
+                    setState(() => _showBackupImportConfirm = false);
+                  }),
+                  const SizedBox(width: 8),
+                  MiuixTextButton(
+                    '导入',
+                    onPressed: _backupBusy ? null : _confirmImportBackup,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
         // 歌词字重调节（实时预览：示例歌词按当前字重渲染）
         MiuixOverlayDialog(
           show: _showWeightDialog,

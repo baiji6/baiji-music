@@ -46,4 +46,40 @@ class KvStore {
   Future<void> remove(String key) => _prefs.remove(key);
 
   Future<void> clear() => _prefs.clear();
+
+  /// 全量键值快照（备份用，v2.3.0）。
+  ///
+  /// 返回所有键与对应的原始值（String/int/bool/double）。
+  /// 备份服务按白名单挑键，这里不做过滤。
+  Map<String, Object> snapshot() {
+    final out = <String, Object>{};
+    for (final key in _prefs.getKeys()) {
+      final v = _prefs.get(key);
+      if (v != null) out[key] = v;
+    }
+    return out;
+  }
+
+  /// 写回一批键值（恢复备份用）。与快照键类型不符的条目跳过。
+  Future<int> restore(Map<String, Object> kv) async {
+    var n = 0;
+    for (final e in kv.entries) {
+      final v = e.value;
+      try {
+        if (v is String) {
+          await _prefs.setString(e.key, v);
+        } else if (v is int) {
+          await _prefs.setInt(e.key, v);
+        } else if (v is bool) {
+          await _prefs.setBool(e.key, v);
+        } else if (v is double) {
+          await _prefs.setDouble(e.key, v);
+        } else {
+          continue;
+        }
+        n++;
+      } catch (_) {/* 单键失败不阻断整体恢复 */}
+    }
+    return n;
+  }
 }

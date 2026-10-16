@@ -198,9 +198,14 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    // 逐字行必须走 ShaderMask（KaraokeFill）分支
-    expect(find.byType(ShaderMask).evaluate(), isNotEmpty,
-        reason: '本地逐字歌词必须走卡拉 OK 染色渲染');
+    // 逐字行必须走 _KaraokePainter（每视觉行独立遮罩，fix5 起为 CustomPaint）
+    final karaokePaints = find.byType(CustomPaint).evaluate().where((el) {
+      final w = el.widget as CustomPaint;
+      return w.painter != null &&
+          w.painter.runtimeType.toString() == '_KaraokePainter';
+    }).toList();
+    expect(karaokePaints, isNotEmpty,
+        reason: '逐字 .lrc 必须走卡拉 OK 染色渲染');
 
     dir.deleteSync(recursive: true);
   }, timeout: const Timeout(Duration(seconds: 60)));
