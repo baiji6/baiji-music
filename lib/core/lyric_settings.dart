@@ -300,6 +300,15 @@ class LyricSettings extends ChangeNotifier {
     await KvStore.instance.remove('$_prefs:$_kInactive');
   }
 
+  /// 测试专用：直接覆写已唱 / 未唱色，不走持久化（KvStore 在单测里
+  /// 未必初始化）。逐字渲染的像素级测试用它固定红/蓝对比色。
+  @visibleForTesting
+  void setColorsForTest({Color? sung, Color? unsung}) {
+    _sungCustom = sung;
+    _unsungCustom = unsung;
+    notifyListeners();
+  }
+
   /// 系统明暗切换时由根组件调用：未自定义的三色要重新取主题默认值，
   /// 播放页的歌词列表监听本对象，推一次即可重排。
   void notifyThemeChanged() => notifyListeners();

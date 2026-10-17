@@ -212,10 +212,10 @@ void main() {
     // CustomPaint 的 painter 应该有真实的排版缓存（说明量字成功）
     final hasKaraoke = paints.evaluate().any((el) {
       final w = el.widget as CustomPaint;
-      return w.painter != null && w.painter.runtimeType.toString() == '_KaraokePainter';
+      return w.painter != null && w.painter.runtimeType.toString() == 'KaraokePainter';
     });
     expect(hasKaraoke, isTrue,
-        reason: '词级行必须由 _KaraokePainter 绘制（逐字染色）');
+        reason: '词级行必须由 KaraokePainter 绘制（逐字染色）');
     dir.deleteSync(recursive: true);
   }, timeout: const Timeout(Duration(seconds: 60)));
 }
