@@ -27,6 +27,7 @@ import 'package:baiji_music/ui/pages/player_page.dart';
 import 'package:baiji_music/ui/pages/qq_login_page.dart';
 import 'package:baiji_music/ui/pages/search_home.dart';
 import 'package:baiji_music/ui/pages/settings_page.dart';
+import 'package:baiji_music/ui/pages/song_comment_page.dart';
 import 'package:baiji_music/ui/pages/toolbox_page.dart';
 import 'package:baiji_music/ui/shell.dart';
 import 'package:baiji_music/ui/widgets/download_options_sheet.dart';
@@ -69,6 +70,18 @@ Song _song(String name, {String singer = '测试歌手'}) => Song(
       duration: 200000,
       cover: '',
       source: Source.qq,
+    );
+
+Song _neSong(String name) => Song(
+      mid: 'ne-$name',
+      songId: 123456,
+      name: name,
+      singer: '测试歌手',
+      album: '',
+      albumMid: '',
+      duration: 200000,
+      cover: '',
+      source: Source.netease,
     );
 
 /// 与 main.dart 一致的根域：MiuixTheme > PopupScope > Directionality >
@@ -120,6 +133,16 @@ void main() {
       if (!tester.binding.hasScheduledFrame) break;
     }
     return tester.takeException();
+  }
+
+  /// 排放 init 期网络请求诱发的日志落盘定时器（LogStore 1s flush timer）。
+  ///
+  /// 评论页 initState 即拉评论 → AppLog 写盘 → 排一个 1 秒 Timer；
+  /// 测试体结束前不跑完它，teardown 会断言 "A Timer is still pending"。
+  Future<void> drainLogFlushTimer(WidgetTester tester) async {
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
   }
 
   group('全页面 build 冒烟（release 闪退回归）', () {
@@ -198,6 +221,28 @@ void main() {
       expect(find.text('扫码登录'), findsOneWidget);
       expect(find.text('用网易云音乐 App 扫码（App 内「我的」页面左上角扫一扫）'),
           findsOneWidget);
+    });
+
+    // 评论页（#102）：未登录可浏览（测试环境下网络被拦截 → 走错误态），
+    // 底部输入栏显示登录引导而不是输入框。
+    testWidgets('歌曲评论页（QQ / 网易云）', (tester) async {
+      final e = await pumpAndCatch(
+          tester, SongCommentPage(song: _song('评论页冒烟')));
+      expect(e, isNull, reason: '评论页 build 抛异常: $e');
+      expect(find.text('评论'), findsOneWidget);
+      // 未登录：输入栏是登录引导
+      expect(find.text('登录后可发表评论'), findsOneWidget);
+      expect(find.text('去登录'), findsOneWidget);
+      await drainLogFlushTimer(tester);
+    });
+
+    testWidgets('歌曲评论页（网易云源）', (tester) async {
+      final e =
+          await pumpAndCatch(tester, SongCommentPage(song: _neSong('评论页冒烟')));
+      expect(e, isNull, reason: '评论页（网易云）build 抛异常: $e');
+      expect(find.text('评论'), findsOneWidget);
+      expect(find.text('登录后可发表评论'), findsOneWidget);
+      await drainLogFlushTimer(tester);
     });
   });
 

@@ -17,6 +17,7 @@ import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/core/album_saver.dart';
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/ui/pages/netease_login_page.dart';
+import 'package:baiji_music/ui/pages/song_comment_page.dart';
 import 'package:baiji_music/ui/widgets/app_snackbar.dart';
 import 'package:baiji_music/ui/widgets/app_widgets.dart';
 import 'package:baiji_music/ui/widgets/cover_image.dart';
@@ -502,6 +503,18 @@ class _PlayerPageState extends State<PlayerPage> {
             const Spacer(),
             if (song != null) _SourceChip(song: song),
             const SizedBox(width: 4),
+            // 评论（QQ / 网易云）：未登录可看，登录后可发；本地歌曲无评论
+            MiuixIconButton(
+              onPressed: () {
+                final s = song;
+                if (s == null || s.isLocal) return;
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => SongCommentPage(song: s),
+                ));
+              },
+              child: Icon(Icons.mode_comment_outlined,
+                  size: 20, color: AppColors.textSecondary),
+            ),
             // 歌词字号 / 对齐的快捷入口，不必绕到设置页
             MiuixIconButton(
               onPressed: () =>

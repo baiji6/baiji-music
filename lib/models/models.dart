@@ -492,3 +492,70 @@ class Credential {
     return 0;
   }
 }
+
+// ==================== 歌曲评论 ====================
+
+/// 一条评论（QQ / 网易云统一结构）。
+///
+/// 两个平台的原始字段差异很大（QQ 音乐用 `CmId/Nick/PubTime` 秒级时间戳，
+/// 网易云用 `commentId/nickname/time` 毫秒时间戳），统一到本模型后 UI 层
+/// 不需要关心来源，解析逻辑分别在 `qq_comment_api.dart` 与
+/// `netease_comment_api.dart` 的纯函数里，可用真实抓包样本单测。
+class Comment {
+  const Comment({
+    required this.id,
+    required this.nickname,
+    required this.avatarUrl,
+    required this.content,
+    required this.timeMs,
+    this.likeCount = 0,
+    this.liked = false,
+    this.replyCount = 0,
+    this.isHot = false,
+    this.replies = const [],
+  });
+
+  /// 评论 ID（QQ 的 CmId 形如 `1!xxxx`，网易云是数字字符串）。
+  final String id;
+
+  final String nickname;
+  final String avatarUrl;
+  final String content;
+
+  /// 发布时间（统一毫秒；QQ 服务端给的是秒，解析时已 ×1000）。
+  final int timeMs;
+
+  final int likeCount;
+
+  /// 当前账号是否已点赞（未登录时恒为 false）。
+  final bool liked;
+
+  /// 回复条数（[replies] 可能只带回部分，展示用 replyCount）。
+  final int replyCount;
+
+  final bool isHot;
+
+  /// 子评论（QQ 的 SubComments / 网易云的 beReplied，可能为空）。
+  final List<Comment> replies;
+
+  bool get hasReplies => replies.isNotEmpty;
+}
+
+/// 一页评论：热评 + 最新（网易云把置顶放在 topComments，并入 hot）。
+class CommentPage {
+  const CommentPage({
+    this.hot = const [],
+    this.latest = const [],
+    this.total = 0,
+    this.hasMore = false,
+  });
+
+  final List<Comment> hot;
+  final List<Comment> latest;
+  final int total;
+
+  /// 是否还有更多最新评论（翻页用）。
+  final bool hasMore;
+
+  bool get isEmpty => hot.isEmpty && latest.isEmpty;
+}
