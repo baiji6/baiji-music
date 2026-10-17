@@ -22,7 +22,9 @@ import 'package:baiji_music/ui/pages/decrypt_page.dart';
 import 'package:baiji_music/ui/pages/discover_home.dart';
 import 'package:baiji_music/ui/pages/library_home.dart';
 import 'package:baiji_music/ui/pages/log_page.dart';
+import 'package:baiji_music/ui/pages/netease_login_page.dart';
 import 'package:baiji_music/ui/pages/player_page.dart';
+import 'package:baiji_music/ui/pages/qq_login_page.dart';
 import 'package:baiji_music/ui/pages/search_home.dart';
 import 'package:baiji_music/ui/pages/settings_page.dart';
 import 'package:baiji_music/ui/pages/toolbox_page.dart';
@@ -175,6 +177,27 @@ void main() {
     testWidgets('播放页（无歌曲）', (tester) async {
       final e = await pumpAndCatch(tester, const PlayerPage());
       expect(e, isNull, reason: '播放页 build 抛异常: $e');
+    });
+
+    testWidgets('QQ 登录页（Cookie + ptlogin2 扫码 + 手机 App 扫码）', (tester) async {
+      final e = await pumpAndCatch(tester, const QQLoginPage());
+      expect(e, isNull, reason: 'QQ 登录页 build 抛异常: $e');
+      // 「Cookie 登录」既是卡片标题也是按钮文案，出现两次
+      expect(find.text('Cookie 登录'), findsWidgets);
+      expect(find.text('扫码登录'), findsOneWidget);
+      expect(find.text('手机 App 扫码'), findsOneWidget);
+      expect(find.text('使用 QQ 音乐 App 扫描二维码'), findsOneWidget);
+      expect(find.text('用手机上的 QQ 音乐 App 扫描，扫码后事件实时推送（不轮询）'),
+          findsOneWidget);
+    });
+
+    testWidgets('网易云登录页（Cookie + 扫码）', (tester) async {
+      final e = await pumpAndCatch(tester, const NeteaseLoginPage());
+      expect(e, isNull, reason: '网易云登录页 build 抛异常: $e');
+      expect(find.text('Cookie 登录'), findsWidgets);
+      expect(find.text('扫码登录'), findsOneWidget);
+      expect(find.text('用网易云音乐 App 扫码（App 内「我的」页面左上角扫一扫）'),
+          findsOneWidget);
     });
   });
 

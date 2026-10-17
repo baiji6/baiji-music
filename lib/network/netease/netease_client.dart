@@ -111,6 +111,13 @@ class NeteaseClient {
     return _decode(resp, apiUrl);
   }
 
+  /// 网页版接口 GET，保留原始响应（扫码登录轮询要读 Set-Cookie 里的
+  /// MUSIC_U；[getApi] 只解 JSON 会把响应头丢掉）。
+  Future<Response<dynamic>> getRaw(String apiUrl) async {
+    return _retry(() => _dio.get(apiUrl,
+        options: Options(headers: _baseHeaders(), validateStatus: (_) => true)));
+  }
+
   Map<String, String> _baseHeaders() => {
         'User-Agent': userAgent,
         'Referer': referer,
@@ -148,7 +155,16 @@ class NeteaseClient {
   }
 
   Map<String, dynamic> _decode(Response resp, String url) {
-    final text = resp.data?.toString() ?? '';
+    // Dio 的默认 responseType 是 json：响应 content-type 为 JSON 时它已经
+    // 把 body 解成 Map 了（interface3 的 eapi 接口就是这样），此时不能再
+    // 对 Map.toString() 做一次 jsonDecode（必然失败）。
+    final data = resp.data;
+    if (data is Map<String, dynamic>) {
+      AppLog.d('NeteaseClient',
+          '<<< HTTP ${resp.statusCode} $url resp=${jsonEncode(data).clip(500)}');
+      return data;
+    }
+    final text = data?.toString() ?? '';
     AppLog.d('NeteaseClient', '<<< HTTP ${resp.statusCode} $url resp=${text.clip(500)}');
     if (text.trim().isEmpty) {
       throw Exception('网易云返回空响应');

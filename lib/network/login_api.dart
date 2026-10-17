@@ -262,7 +262,7 @@ class LoginApi {
     );
     AppLog.d('BaiJiLogin',
         'QQLogin 响应 code=${data['code']} msg=${data['msg']} data=${jsonEncode(data['data']).clip(300)}');
-    final validated = _validateResult(data);
+    final validated = validateResult(data);
     return Credential.fromDict(validated);
   }
 
@@ -409,8 +409,11 @@ class LoginApi {
     return m?.group(1);
   }
 
-  /// 校验 QQLogin 返回，解包 {code, data}，抛出可读登录错误。
-  Map<String, dynamic> _validateResult(Map<String, dynamic> resp) {
+  /// 校验登录接口返回，解包 {code, data}，抛出可读登录错误。
+  ///
+  /// 公开为静态方法：手机客户端扫码换票（见 `qq_mobile_login.dart`）
+  /// 要走同一套错误码表，避免两处各写一半、码值漂移。
+  static Map<String, dynamic> validateResult(Map<String, dynamic> resp) {
     Map<String, dynamic> cur = resp;
     for (var i = 0; i < 2; i++) {
       if (cur.containsKey('code') && cur.containsKey('data')) {

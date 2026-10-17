@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter_miuix/miuix.dart';
 import '../../core/app_logger.dart';
 import '../../network/login_api.dart';
 import '../../network/music_api.dart';
+import '../../network/qq_mobile_login.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
@@ -33,6 +35,14 @@ class _QQLoginPageState extends State<QQLoginPage> {
   /// 用户离开页面后置位，用于让轮询循环尽快退出。
   bool _canceled = false;
 
+  // ================= 手机 App 扫码（MQTT 推送，见 qq_mobile_login.dart） =================
+
+  Uint8List? _mobileQrImage;
+  String? _mobileQrStatus;
+  String? _mobileQrError;
+  bool _mobileQrBusy = false;
+  StreamSubscription<QqMobileQrStatus>? _mobileQrSub;
+
   /// 单次轮询的间隔。
   static const Duration _pollInterval = Duration(seconds: 2);
 
@@ -49,6 +59,7 @@ class _QQLoginPageState extends State<QQLoginPage> {
   void dispose() {
     _canceled = true;
     _cookieController.dispose();
+    _mobileQrSub?.cancel();
     super.dispose();
   }
 
@@ -230,6 +241,90 @@ class _QQLoginPageState extends State<QQLoginPage> {
     });
   }
 
+  // ================= 手机 App 扫码 =================
+
+  /// 手机 App 扫码主流程：CreateQRCode → MQTT 订阅事件 → cookies 换票。
+  ///
+  /// 与上面的 ptlogin2 轮询是两套机制：这里的二维码由音乐登录服务器签发，
+  /// **必须用手机上的 QQ 音乐 App 扫**，事件走 MQTT 长连推送（不轮询）。
+  Future<void> _loginByMobileQr() async {
+    setState(() {
+      _mobileQrBusy = true;
+      _mobileQrError = null;
+      _mobileQrStatus = '正在获取二维码…';
+    });
+
+    final QqMobileQr qr;
+    try {
+      qr = await QqMobileLogin.createQr();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _mobileQrBusy = false;
+        _mobileQrStatus = null;
+        _mobileQrError = '获取二维码失败: $e';
+      });
+      _showSnack('获取二维码失败: $e');
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _mobileQrImage = Uint8List.fromList(qr.image);
+      _mobileQrStatus = '等待扫码…';
+    });
+
+    _mobileQrSub?.cancel();
+    _mobileQrSub = QqMobileLogin.watchQr(qr.qrcodeId).listen(
+      (s) {
+        if (!mounted) return;
+        switch (s.event) {
+          case QqMobileQrEvent.waiting:
+            setState(() => _mobileQrStatus = '等待扫码…');
+          case QqMobileQrEvent.scanned:
+            setState(() => _mobileQrStatus = '已扫描，请在手机上确认登录…');
+          case QqMobileQrEvent.canceled:
+            _mobileQrFailed('已取消登录');
+          case QqMobileQrEvent.timeout:
+            _mobileQrFailed('二维码已过期，请重新获取');
+          case QqMobileQrEvent.loginFailed:
+            _mobileQrFailed('登录失败${s.detail == null ? '' : ': ${s.detail}'}');
+          case QqMobileQrEvent.done:
+            final cred = s.credential!;
+            AppServices.instance.qq.credential = cred;
+            AppLog.i('QQLoginPage', '手机扫码登录成功 uid=${cred.musicid}');
+            _showSnack('QQ 扫码登录成功', isError: false);
+            Navigator.pop(context, true);
+        }
+      },
+      onError: (Object e) {
+        if (!mounted) return;
+        _mobileQrFailed('扫码连接失败: $e');
+      },
+    );
+  }
+
+  /// 手机扫码失败收尾：停掉订阅、展示错误。
+  void _mobileQrFailed(String msg) {
+    _mobileQrSub?.cancel();
+    _mobileQrSub = null;
+    setState(() {
+      _mobileQrBusy = false;
+      _mobileQrStatus = null;
+      _mobileQrError = msg;
+    });
+    _showSnack(msg);
+  }
+
+  /// 取消手机扫码（断开 MQTT 连接）。
+  void _cancelMobileQr() {
+    _mobileQrSub?.cancel();
+    _mobileQrSub = null;
+    setState(() {
+      _mobileQrBusy = false;
+      _mobileQrStatus = null;
+    });
+  }
+
   void _showSnack(String msg, {bool isError = true}) {
     showAppSnack(msg);
   }
@@ -350,6 +445,84 @@ class _QQLoginPageState extends State<QQLoginPage> {
                     icon: Icons.qr_code_2_rounded,
                     gradient: const [AppColors.magenta, AppColors.violet],
                     onPressed: _busy ? null : _loginByQr,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          // 手机 App 扫码（MQTT 推送）
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            glowColor: AppColors.cyan,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '手机 App 扫码',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '用手机上的 QQ 音乐 App 扫描，扫码后事件实时推送（不轮询）',
+                  style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                ),
+                const SizedBox(height: 16),
+                if (_mobileQrImage != null) ...[
+                  Center(
+                    child: Container(
+                      width: 200,
+                      height: 200,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Image.memory(_mobileQrImage!, fit: BoxFit.contain),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (_mobileQrStatus != null) ...[
+                  Center(
+                    child: Text(
+                      _mobileQrStatus!,
+                      style: TextStyle(
+                          fontSize: 12, color: AppColors.textSecondary),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (_mobileQrError != null) ...[
+                  Center(
+                    child: Text(
+                      _mobileQrError!,
+                      style: TextStyle(fontSize: 12, color: AppColors.accentAlt),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (_mobileQrBusy && _mobileQrImage != null) ...[
+                  const Center(
+                    child: MiuixCircularProgressIndicator(size: 24),
+                  ),
+                  const SizedBox(height: 12),
+                  NeonButton(
+                    label: '取消扫码',
+                    filled: false,
+                    onPressed: _cancelMobileQr,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ] else
+                  NeonButton(
+                    label: _mobileQrImage == null ? '获取二维码' : '重新获取',
+                    icon: Icons.qr_code_2_rounded,
+                    gradient: const [AppColors.cyan, AppColors.violet],
+                    onPressed: _mobileQrBusy ? null : _loginByMobileQr,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
               ],
