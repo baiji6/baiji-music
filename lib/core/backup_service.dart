@@ -24,6 +24,7 @@ import 'dart:convert';
 
 import 'app_logger.dart';
 import 'app_version.dart';
+import 'backup_crypto.dart';
 import 'kv_store.dart';
 
 class BackupService {
@@ -79,29 +80,40 @@ class BackupService {
   static int countBackupItems() =>
       KvStore.instance.snapshot().keys.where(_included).length;
 
-  /// 导出为 JSON 字符串。
+  /// 导出为加密文件文本（v2.3.0-fix1：Base64 + RC4 + RSA 信封加密）。
+  ///
+  /// 备份含登录态与解密密钥库，明文落盘等于把账号送出去——
+  /// 每次导出生成随机 RC4 会话密钥加密内容，会话密钥用内置 RSA
+  /// 公钥加密后随文件携带，整体 Base64。文件离开设备后不可读。
   static String export() {
     final all = KvStore.instance.snapshot();
     final kv = <String, Object>{
       for (final e in all.entries)
         if (_included(e.key)) e.key: e.value,
     };
-    return const JsonEncoder.withIndent('  ').convert(<String, Object>{
+    final json = jsonEncode(<String, Object>{
       'app': 'baiji-music',
       'backupVersion': backupVersion,
       'appVersion': AppVersion.current,
       'exportedAt': DateTime.now().toIso8601String(),
       'kv': kv,
     });
+    return BackupCrypto.encrypt(json);
   }
 
-  /// 从 JSON 恢复。返回恢复的条目数；格式不对抛 [FormatException]。
+  /// 从文本恢复。自动识别两种格式：
+  /// - 加密格式（`BAIJI1.` 前缀，v2.3.0-fix1 起的导出）；
+  /// - 旧的明文 JSON（兼容用户已导出的历史文件）。
+  ///
+  /// 返回恢复的条目数；格式不对抛 [FormatException]。
   ///
   /// 恢复是**合并写回**：只覆盖备份里存在的键，本机多出来的数据保留。
   /// 内存中的各 Store（歌单/设置等）都是启动时读 KvStore 的静态快照，
   /// 恢复后需要重启应用才完全生效。
   static Future<int> import(String raw) async {
-    final decoded = jsonDecode(raw);
+    // v2.3.0-fix1 起默认是加密格式；旧的明文导出仍可导入
+    final plain = BackupCrypto.decrypt(raw) ?? raw;
+    final decoded = jsonDecode(plain);
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('备份文件结构不正确');
     }

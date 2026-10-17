@@ -815,8 +815,9 @@ MiuixArrowPreference(
                 padding: const EdgeInsets.only(bottom: 14),
                 child: Text(
                   '当前可备份 ${BackupService.countBackupItems()} 条数据。'
-                  '恢复为合并写回：只覆盖备份里有的键，本机其他数据保留；'
-                  '恢复后重启应用生效。',
+                  '导出文件经 RC4+RSA 加密（Base64 封装），不含明文，可安全'
+                  '传输保存。恢复为合并写回：只覆盖备份里有的键，本机其他'
+                  '数据保留；恢复后重启应用生效。',
                   style: TextStyle(
                       fontSize: 12,
                       height: 1.5,

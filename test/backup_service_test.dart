@@ -4,6 +4,7 @@
 // 会与服务端风控冲突；歌单/历史/登录态/设置必须包含。
 import 'dart:convert';
 
+import 'package:baiji_music/core/backup_crypto.dart';
 import 'package:baiji_music/core/backup_service.dart';
 import 'package:baiji_music/core/kv_store.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -43,7 +44,13 @@ void main() {
       'agreement_accepted': true,
       'log_something': 'noise',
     });
-    final json = BackupService.export();
+    final exported = BackupService.export();
+    // v2.3.0-fix1 起导出是加密文本（BAIJI1. 前缀），不含明文 JSON
+    expect(exported.startsWith('BAIJI1.'), isTrue,
+        reason: '导出必须是加密格式（防止登录态明文落盘）');
+    expect(exported.contains('playlist_list'), isFalse,
+        reason: '加密文件里不应出现明文键名');
+    final json = BackupCrypto.decrypt(exported)!;
     final map = jsonDecode(json) as Map<String, dynamic>;
     expect(map['app'], 'baiji-music');
     expect(map['backupVersion'], BackupService.backupVersion);
@@ -79,6 +86,8 @@ void main() {
       'search_history': '["旧搜索"]',
     });
     final exported = BackupService.export();
+    // 加密文件里不能有明文数据
+    expect(exported.contains('旧歌单'), isFalse);
 
     // 模拟换机：全新环境（空库）后导入
     SharedPreferences.setMockInitialValues(<String, String>{});
@@ -129,10 +138,12 @@ void main() {
       'favorite_songs': '[{"本机收藏":true}]',
     });
     final exported = BackupService.export();
-    final map = jsonDecode(exported) as Map<String, dynamic>;
+    final map =
+        jsonDecode(BackupCrypto.decrypt(exported)!) as Map<String, dynamic>;
     // 从备份里删掉 favorite_songs，模拟「旧备份没有收藏」
     (map['kv'] as Map<String, dynamic>).remove('favorite_songs');
-    final partial = jsonEncode(map);
+    // 重新按加密格式封装后再导入
+    final partial = BackupCrypto.encrypt(jsonEncode(map));
 
     // 改动本机数据后导入
     KvStore.instance.setString('favorite_songs', '[{"改动":1}]');
@@ -141,5 +152,20 @@ void main() {
     expect(KvStore.instance.getString('search_history'), '["本机搜索"]');
     // 备份里删掉的键不被触碰
     expect(KvStore.instance.getString('favorite_songs'), '[{"改动":1}]');
+  });
+
+  test('BackupCrypto：加密往返（RC4+RSA 信封）', () {
+    const plain = '{"app":"baiji-music","kv":{"k":"v 中文😀"}}';
+    final enc = BackupCrypto.encrypt(plain);
+    expect(enc.startsWith('BAIJI1.'), isTrue);
+    expect(enc.contains('中文'), isFalse, reason: '密文里不能有明文');
+    final back = BackupCrypto.decrypt(enc);
+    expect(back, plain);
+  });
+
+  test('BackupCrypto：旧明文 JSON 导入兼容（无前缀返回 null）', () {
+    expect(BackupCrypto.decrypt('{"app":"baiji-music"}'), isNull);
+    // 坏前缀内容应抛格式异常而不是静默
+    expect(() => BackupCrypto.decrypt('BAIJI1.%%%'), throwsFormatException);
   });
 }

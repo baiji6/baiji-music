@@ -1648,6 +1648,22 @@ class _LyricViewState extends State<_LyricView>
   DateTime _anchorAt = DateTime.now();
   bool _playing = false;
 
+  // ==================== 渲染诊断（fix1 排查逐字染色用，各打一次） ====================
+  bool _diagList = false;
+  bool _diagNoWords = false;
+
+  /// 打一次「视图收到的歌词对象」统计：如果 LyricApi 日志说词级=true
+  /// 而这里词级行=0，说明数据在到达 UI 前被替换/污染。
+  void _diagListView() {
+    if (_diagList) return;
+    _diagList = true;
+    final ly = widget.lyrics;
+    final wordLines = ly.lines.where((l) => l.isWordLevel).length;
+    AppLog.d('LyricView',
+        '歌词视图: lines=${ly.length} 词级行=$wordLines '
+        'hasWordTiming=${ly.hasWordTiming}');
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1806,6 +1822,12 @@ class _LyricViewState extends State<_LyricView>
     final height = isActive ? 1.32 : 1.45;
 
     if (!line.isWordLevel) {
+      // 诊断：词级歌词里混着无 words 的行（染色失效时的关键证据）
+      if (widget.lyrics.hasWordTiming && !_diagNoWords) {
+        _diagNoWords = true;
+        AppLog.w('LyricView',
+            '词级歌词存在无 words 行: "${line.text}" words=${line.words.length}');
+      }
       // 可读性保障：自定义浅色字切到浅色主题后对比度不足时自动回退
       // 主题墨色，否则当前行整个隐身（#80 视频实测 1.5:1）。
       final color = isActive
@@ -1856,6 +1878,7 @@ class _LyricViewState extends State<_LyricView>
   @override
   Widget build(BuildContext context) {
     final lyrics = widget.lyrics;
+    _diagListView();
     final settings = LyricSettings.instance;
     // 监听字号 / 对齐设置变化，改动后歌词立即重排
     return AnimatedBuilder(
@@ -2240,7 +2263,19 @@ class _KaraokeLineState extends State<_KaraokeLine> {
     _laidWidth = maxWidth;
     _laidSung = sung;
     _laidUnsung = unsung;
+
+    // 诊断（一次）：量字失败（有效盒=0）时逐字渲染会退回纯文本，
+    // 这条日志能直接区分「量字失败」与「数据无词级」。
+    if (!_diagMeasured) {
+      _diagMeasured = true;
+      final valid = rects.where((r) => r != null).length;
+      AppLog.d('LyricView',
+          '卡拉OK量字: 词数=${widget.line.words.length} 有效盒=$valid '
+          '视觉行=${rows.length} 文本宽=${painter.width.toStringAsFixed(0)}');
+    }
   }
+
+  bool _diagMeasured = false;
 
   @override
   void didUpdateWidget(covariant _KaraokeLine oldWidget) {
@@ -2311,6 +2346,8 @@ class _KaraokeLineState extends State<_KaraokeLine> {
                 wordRects: rects,
                 ratios: ratios,
                 sungColor: _readableSung,
+                align: widget.align,
+                maxWidth: maxWidth.isFinite ? maxWidth : tpUnsung.width,
               ),
             );
           },
@@ -2342,6 +2379,8 @@ class _KaraokePainter extends CustomPainter {
     required this.wordRects,
     required this.ratios,
     required this.sungColor,
+    required this.align,
+    required this.maxWidth,
   });
 
   final TextPainter unsungPainter;
@@ -2350,9 +2389,31 @@ class _KaraokePainter extends CustomPainter {
   final List<Rect?> wordRects;
   final List<double> ratios;
   final Color sungColor;
+  final TextAlign align;
+
+  /// 绘制约束宽度：居中 / 右对齐时按它算水平偏移。
+  final double maxWidth;
+
+  /// 水平对齐偏移（v2.3.0-fix1）。
+  ///
+  /// TextPainter 单行短文本时 width 收缩为文本宽，paint 从 (0,0) 起——
+  /// 直接画就是左对齐，用户设置的「居中」被丢掉（2.3.0 的回归）。
+  /// 这里手动补偏移：center = 剩余宽度的一半，right = 全部。
+  double get _dx {
+    switch (align) {
+      case TextAlign.center:
+        return ((maxWidth - unsungPainter.width) / 2).clamp(0.0, maxWidth);
+      case TextAlign.right:
+        return (maxWidth - unsungPainter.width).clamp(0.0, maxWidth);
+      default:
+        return 0;
+    }
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.translate(_dx, 0);
     // 1) 底层：整行未唱色
     unsungPainter.paint(canvas, Offset.zero);
 
@@ -2407,6 +2468,7 @@ class _KaraokePainter extends CustomPainter {
       }
       canvas.restore();
     }
+    canvas.restore(); // 对齐偏移的 save
   }
 
   @override
@@ -2415,6 +2477,8 @@ class _KaraokePainter extends CustomPainter {
       oldDelegate.ratios != ratios ||
       oldDelegate.rows != rows ||
       oldDelegate.wordRects != wordRects ||
+      oldDelegate.align != align ||
+      oldDelegate.maxWidth != maxWidth ||
       oldDelegate.unsungPainter != unsungPainter ||
       oldDelegate.sungPainter != sungPainter;
 }

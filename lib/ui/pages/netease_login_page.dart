@@ -5,6 +5,7 @@ import '../../network/music_api.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/cookie_field.dart';
 
 /// 网易云音乐登录页面：Cookie 登录。
 class NeteaseLoginPage extends StatefulWidget {
@@ -84,21 +85,9 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  AppTextField(
+                  CookieField(
                     controller: _cookieController,
-                    label: 'MUSIC_U=xxx; ...',
-                    useLabelAsPlaceholder: true,
-                    minLines: 2,
-                    maxLines: 4,
-                    textStyle: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textPrimary,
-                    ),
-                    leadingIcon: Icon(
-                      Icons.cookie_outlined,
-                      size: 18,
-                      color: AppColors.textTertiary,
-                    ),
+                    hint: 'MUSIC_U=xxx; ...',
                   ),
                   const SizedBox(height: 12),
                   NeonButton(

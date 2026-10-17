@@ -9,6 +9,7 @@ import '../../network/music_api.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
+import '../widgets/cookie_field.dart';
 
 /// QQ 音乐登录页面：Cookie 登录 + 二维码登录。
 class QQLoginPage extends StatefulWidget {
@@ -258,18 +259,11 @@ class _QQLoginPageState extends State<QQLoginPage> {
                   style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
                 ),
                 const SizedBox(height: 12),
-                AppTextField(
+                CookieField(
                   controller: _cookieController,
                   // 微信登录的 cookie 里没有 uin，账号 id 落在 wxuin 上，
                   // 两个都要提示到，否则用户会以为贴错了。
-                  label: 'uin=xxx（微信为 wxuin=xxx）; qm_keyst=xxx; …',
-                  useLabelAsPlaceholder: true,
-                  minLines: 2,
-                  maxLines: 3,
-                  textStyle: TextStyle(
-                      fontSize: 12, color: AppColors.textPrimary),
-                  leadingIcon: Icon(Icons.cookie_outlined,
-                      size: 18, color: AppColors.textTertiary),
+                  hint: 'uin=xxx（微信为 wxuin=xxx）; qm_keyst=xxx; …',
                 ),
                 const SizedBox(height: 12),
                 NeonButton(
