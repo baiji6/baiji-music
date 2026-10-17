@@ -6,6 +6,37 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.3.0-fix2
+
+### ✨ 新增：QQ / 网易云歌曲评论
+
+- 播放页顶栏评论图标进入评论页；**未登录可浏览**，登录后可发评 / 回复 / 点赞
+- QQ：读热评 / 最新评 / 评论数全部免登录（musicu globalComment 模块族），
+  发评与点赞走 `AddComment` / `PraiseComment`（未登录返回业务错误码）
+- 网易云：读评论免登录（`/api/v1/resource/comments/R_SO_4_{id}`），
+  发评 / 回复走模块接口（表单编码），点赞 / 取消走 `/api/v1/comment/like`
+- 评论页：头像 + 昵称 + 时间 + 内容 + 子评论缩略展示，点赞乐观更新
+  （失败自动回滚），下拉刷新 + 滚动到底自动加载更多
+
+### ✨ 新增：QQ 手机 App 扫码 + 网易云扫码登录（复刻「倾听」）
+
+- QQ 手机扫码：`CreateQRCode` 取码 → MQTT 5.0 over WebSocket 订阅
+  `management.qrcode_login/{id}` → 事件推送（scanned/canceled/timeout/
+  cookies）实时推进，不轮询；扫码成功后 cookies 载荷直接换票登录
+- 自实现 MQTT 最小客户端（CONNECT/SUBSCRIBE/PUBLISH/PINGREQ/DISCONNECT），
+  支持 CONNACK 0x9D 重定向跟随，不引入 mqtt_client 依赖
+- 网易云扫码：unikey 取码 + 二维码渲染 + 轮询（等待/已扫/过期/成功），
+  成功后从 Set-Cookie 提取登录态
+- 新增登录入口位于各自登录页，与原有 Cookie 登录并列
+
+### 🐛 修复：逐字歌词渲染语义（对齐 AMLL / 倾听）
+
+- 每词独立滑动羽化遮罩重写：过渡带宽恒为半个行高，取代旧的按字宽
+  比例窄过渡；`feather<=0` 时以亚像素 epsilon 带实现硬切
+- 每视觉行独立 `saveLayer + dstIn` 遮罩，换行不再导致染色失效
+- 修复当前行「居中 / 右对齐」设置被丢弃、一律顶左的问题
+  （根因：CustomPaint 未处理 textAlign 偏移，文本与染色层同步偏移）
+
 ## 2.3.0-fix1
 
 ### 🐛 修复：逐字歌词当前行「跳到左对齐 + 无染色」
