@@ -6,6 +6,41 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.3.0-fix4
+
+### 🐛 修复：播放页进度条「不见了」
+
+- 根因：`MiuixSlider` 内部是 `LayoutBuilder + SizedBox(height) + CustomPaint`，
+  CustomPaint 无子节点时按内容尺寸（0 宽）测量；在 `Column` 的宽松横向
+  约束下会塌缩成轨道高度的一小截，视频里只剩一个居中小胶囊
+- 修复：播放页进度条显式撑满可用宽度；新增 2 例回归（生产组件满宽断言 +
+  不撑满就塌缩的对照用例）
+
+### 🐛 修复：网易云评论输入框
+
+- **占位符与输入文字重叠**：`flutter_miuix` 1.3.0 的
+  `useLabelAsPlaceholder` 只在标签/边框动画时重建，文本变化不触发重建，
+  输入后「写评论」仍压在文字上。`AppTextField` 改为监听文本变化补重建
+- **输入栏不随输入法上抬**：`MiuixScaffold` 的 bottomBar 只吃系统栏
+  `padding`、不处理 `viewInsets`，键盘弹出后输入栏与发送按钮被盖住
+  （「能看评论、不能发送」的直接原因之一）。评论页按 `viewInsets.bottom`
+  垫高输入栏，并用 `AnimatedPadding` 跟随键盘动画
+- 网易云 250 仍为账号级写风控：文案保留「稍后再试」，可在登录页粘贴
+  完整浏览器 Cookie 走逃生门
+
+### ♻️ 重构：歌词渲染改用 AMLL 风格引擎
+
+- 官方 AMLL（applemusic-like-lyrics）只有 DOM / React / Vue 绑定，没有
+  Flutter 版；改用语义最接近的 `flutter_lyric` 4.1.0——Canvas 渲染、
+  逐字高亮、词级上弹 / 悬浮、前后奏倒计时、点击跳转、滚动跟随
+- 新增适配层：内部 `Lyrics` → `LyricDocument`（逐字时间轴、译文 / 罗马音、
+  无效行止时间、乱序归一），歌词样式（字号 / 对齐 / 三色 / 字重）映射为
+  AMLL 预设（Apple Music 预设：当前行放大、逐字点亮、远行虚化）
+- 播放器位置接成 `LyricProgressSource`：行进中逐帧采样（逐字跟手），
+  暂停 / seek / 切歌由事件驱动；不再自绘卡拉 OK 遮罩
+- 纯 Dart、无新增原生依赖，六端一致；旧 `KaraokeLine` / `KaraokeFill`
+  保留为参考实现与像素级测试
+
 ## 2.3.0-fix3
 
 ### 🐛 修复：逐字歌词「渲染成逐行」（已唱行恢复已唱色）
