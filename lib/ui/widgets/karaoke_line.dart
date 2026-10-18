@@ -9,6 +9,9 @@ import 'package:flutter/material.dart';
 
 /// 当前行的逐字卡拉 OK 填充（AMLL / 倾听同款语义的 Flutter 移植）。
 ///
+/// **v2.3.0-fix4 起 UI 已改用 `flutter_lyric`（见 amll_lyrics_view.dart），
+/// 本组件保留为自绘实现与像素级测试的参考，不再挂在播放页上。**
+///
 /// 每个词是一条独立遮罩：词被唱到时，一条宽度为半个行高的柔和亮/暗
 /// 边界从词的左缘匀速扫到右缘，扫完瞬间恰好等于词唱完；还没开口的词
 /// 保持全暗，已唱完的词保持全亮。遮罩算法见 [KaraokeFill]。

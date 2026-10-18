@@ -50,6 +50,11 @@ dependencies:
   flutter_markdown_plus: ^1.0.12
   gal: ^2.3.3
   flutter_miuix: ^1.3.0
+  # 歌词渲染引擎：AMLL（Apple Music 风格）语义的 Canvas 实现——逐字高亮、
+  # 词级上弹/悬浮、前奏倒计时、点击跳转、滚动跟随。官方 AMLL 只有
+  # DOM / React / Vue 绑定，Flutter 侧用它替代 v2.3.0 的自绘卡拉 OK
+  # （用户反馈「逐字歌词依旧没有」，改用成熟引擎）。纯 Dart，六端通吃。
+  flutter_lyric: ^4.1.0
   # 莫奈取色（设置里可开关）：读 Android 系统壁纸强调色作主题种子。
   # 注意本包同时是 flutter_miuix 的传递依赖（其平台动态取色走同一通道），
   # 提升为直接依赖不改变解析结果，只是让 import 它名正言顺。

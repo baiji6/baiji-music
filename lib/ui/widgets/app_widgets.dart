@@ -485,7 +485,9 @@ class AppTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final field = MiuixTextField(
+    // 每次调用都新建实例：复用同一个实例时 Flutter 会判定「widget 未变化」
+    // 而跳过整棵子树重建，占位符补丁就失效了。
+    Widget buildField() => MiuixTextField(
       controller: controller,
       focusNode: focusNode,
       onChanged: onChanged,
@@ -515,6 +517,21 @@ class AppTextField extends StatelessWidget {
         borderColor: error ? AppColors.danger : AppColors.strokeGlass,
       ),
     );
+    // 占位符标签的实时性补丁（flutter_miuix 1.3.0 缺陷）：
+    // MiuixTextField 的 `useLabelAsPlaceholder` 靠 AnimatedBuilder 重建，
+    // 而该 AnimatedBuilder 只监听标签/边框动画控制器——**不监听文本**。
+    // 而 `_onTextChanged` 又只在「需要浮动标签」时才会启动动画（占位符模式
+    // 下永远不需要浮动），于是输入第一个字之后没有任何东西触发重建，
+    // 占位标签继续压在已输入的文字上（用户反馈：输入的字和「写评论」重合）。
+    // 这里在文本变化时补一次重建，让 `_labelState` 重新求值隐藏标签。
+    // builder 里必须新建实例（见上方 buildField 注释）。
+    final Widget patched = (useLabelAsPlaceholder && controller != null)
+        ? ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller!,
+            builder: (_, _, _) => buildField(),
+          )
+        : buildField();
+
     // TextField 依赖 MaterialLocalizations（选择菜单的「复制/全选」文案）。
     // 弹窗内容挂在 MaterialApp 之外的 popup host 上，祖先链里没有
     // Localizations，缺了它 TextField 会在 build 期抛异常、被替换成
@@ -525,7 +542,7 @@ class AppTextField extends StatelessWidget {
     // en，中文 locale 下会被 _loadAll 跳过，等于没补。
     if (Localizations.of<MaterialLocalizations>(context, MaterialLocalizations) !=
         null) {
-      return field;
+      return patched;
     }
     return Localizations(
       locale: const Locale('zh', 'CN'),
@@ -533,7 +550,7 @@ class AppTextField extends StatelessWidget {
         AppZhMaterialLocalizationsDelegate(),
         AppWidgetsLocalizationsDelegate(),
       ],
-      child: field,
+      child: patched,
     );
   }
 }

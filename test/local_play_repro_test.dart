@@ -14,7 +14,9 @@ import 'package:baiji_music/network/lyric_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/ui/pages/player_page.dart';
+import 'package:baiji_music/ui/widgets/amll_lyrics_view.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_lyric/flutter_lyric.dart' as amll;
 import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
@@ -198,14 +200,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    // 逐字行必须走 KaraokePainter（每视觉行独立遮罩，AMLL 语义，CustomPaint）
-    final karaokePaints = find.byType(CustomPaint).evaluate().where((el) {
-      final w = el.widget as CustomPaint;
-      return w.painter != null &&
-          w.painter.runtimeType.toString() == 'KaraokePainter';
-    }).toList();
-    expect(karaokePaints, isNotEmpty,
-        reason: '逐字 .lrc 必须走卡拉 OK 染色渲染');
+    // 逐字渲染由 flutter_lyric（AMLL 风格引擎）承担
+    expect(find.byType(amll.LyricView), findsOneWidget,
+        reason: '逐字 .lrc 必须由 AMLL 引擎渲染');
+    expect(find.byType(AmllLyricsView), findsOneWidget,
+        reason: '播放页必须挂载 AmllLyricsView');
 
     dir.deleteSync(recursive: true);
   }, timeout: const Timeout(Duration(seconds: 60)));

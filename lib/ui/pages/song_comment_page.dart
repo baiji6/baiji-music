@@ -432,8 +432,19 @@ class _SongCommentPageState extends State<SongCommentPage> {
       );
 
   /// 底部输入栏：未登录显示「去登录」引导，登录后可发评 / 回复。
+  ///
+  /// 输入栏必须随输入法上抬：MiuixScaffold 的 bottomBar 只吃
+  /// `MediaQuery.padding`（系统栏），**不处理 viewInsets**，软键盘弹出后
+  /// 输入栏与发送按钮被盖在键盘下面（用户反馈：评论框不随输入法上升，
+  /// 于是「能看评论但不能发」）。这里按 viewInsets.bottom 垫一层底部内边距。
   Widget _buildInputBar() {
-    return Container(
+    final ime = MediaQuery.viewInsetsOf(context).bottom;
+    return AnimatedPadding(
+      // 与键盘动画同频，避免输入栏闪跳
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: ime),
+      child: Container(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
       decoration: BoxDecoration(
         color: AppColors.bg1,
@@ -442,6 +453,9 @@ class _SongCommentPageState extends State<SongCommentPage> {
       ),
       child: SafeArea(
         top: false,
+        // 键盘弹起时系统导航栏被键盘覆盖，再叠一层 SafeArea 底部内边距
+        // 会让输入栏悬在键盘上方一大截，直接贴着键盘更自然。
+        bottom: ime <= 0,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -522,6 +536,7 @@ class _SongCommentPageState extends State<SongCommentPage> {
                 ],
               ),
           ],
+        ),
         ),
       ),
     );

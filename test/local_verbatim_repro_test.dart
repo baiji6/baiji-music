@@ -13,7 +13,9 @@ import 'package:baiji_music/network/lyric_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/ui/pages/player_page.dart';
+import 'package:baiji_music/ui/widgets/amll_lyrics_view.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_lyric/flutter_lyric.dart' as amll;
 import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
@@ -153,28 +155,25 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    // 逐字行必须走 KaraokePainter（每视觉行独立遮罩，AMLL 语义，CustomPaint）
-    final karaokePaints = find.byType(CustomPaint).evaluate().where((el) {
-      final w = el.widget as CustomPaint;
-      return w.painter != null &&
-          w.painter.runtimeType.toString() == 'KaraokePainter';
-    }).toList();
-    expect(karaokePaints, isNotEmpty,
-        reason: 'VERBATIM 内嵌歌词必须走卡拉 OK 染色渲染');
+    // 逐字渲染由 flutter_lyric（AMLL 风格引擎）承担
+    expect(find.byType(amll.LyricView), findsOneWidget,
+        reason: 'VERBATIM 内嵌歌词必须由 AMLL 引擎渲染');
+    expect(find.byType(AmllLyricsView), findsOneWidget,
+        reason: '播放页必须挂载 AmllLyricsView');
 
-    // 拖动歌词列表（触发 _onUserScroll / 自动回定位）
-    await tester.drag(find.byType(ListView), const Offset(0, 400));
+    // 拖动歌词（引擎自己处理浏览/吸附/恢复跟随）
+    await tester.drag(find.byType(amll.LyricView), const Offset(0, 300));
     for (var i = 0; i < 8; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
-    // 点击某一行跳转
-    await tester.tap(find.byType(MiuixPressable).first);
+    // 点击歌词行跳转
+    await tester.tapAt(tester.getCenter(find.byType(amll.LyricView)));
     await tester.pump();
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    // 切到无歌词的歌（FutureBuilder → 暂无歌词 → _LyricView 卸载）
+    // 切到无歌词的歌（FutureBuilder → 暂无歌词 → AmllLyricsView 卸载）
     final plain = File('${dir.path}/plain.flac');
     plain.writeAsBytesSync(buildFlac());
     await tester.runAsync(() async {

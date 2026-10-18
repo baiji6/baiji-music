@@ -1,4 +1,5 @@
-// 播放页逐字歌词渲染回归：当前行走 KaraokeFill 分支（ShaderMask 染色）。
+// 播放页歌词渲染回归：歌词区由 flutter_lyric（AMLL 风格引擎）承载，
+// 逐字时间轴通过适配层完整带过去（v2.3.0-fix4 起替换自绘卡拉 OK）。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -17,7 +18,9 @@ import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/ui/pages/player_page.dart';
+import 'package:baiji_music/ui/widgets/amll_lyrics_view.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_lyric/flutter_lyric.dart' as amll;
 import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
@@ -170,7 +173,7 @@ void main() {
     tester.view.devicePixelRatio = 2.75;
     addTearDown(tester.view.reset);
 
-    // 先直接验证歌词读取：内嵌逐字 LRC 必须被解析回 word-level
+    // 先直接验证歌词读取：内嵌逐字 LRC 必须被解析回 word-level（适配层输入）
     await tester.runAsync(() async {
       final ly = await LyricApi.of(song);
       var wl = 0;
@@ -204,18 +207,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    // 当前行（active）应该走逐字渲染分支：fix5 起为 CustomPaint +
-    // 每视觉行独立 dstIn 遮罩（AMLL 同款，换行安全），不再是整行 ShaderMask
-    final paints = find.byType(CustomPaint);
-    expect(paints.evaluate(), isNotEmpty,
-        reason: '逐字渲染必须走 CustomPaint（KaraokeFill 遮罩）分支');
-    // CustomPaint 的 painter 应该有真实的排版缓存（说明量字成功）
-    final hasKaraoke = paints.evaluate().any((el) {
-      final w = el.widget as CustomPaint;
-      return w.painter != null && w.painter.runtimeType.toString() == 'KaraokePainter';
-    });
-    expect(hasKaraoke, isTrue,
-        reason: '词级行必须由 KaraokePainter 绘制（逐字染色）');
+    // 歌词区必须是 AMLL 引擎（flutter_lyric 的 LyricView）而不是自绘组件
+    expect(find.byType(amll.LyricView), findsOneWidget,
+        reason: '歌词区必须由 flutter_lyric 的 LyricView 渲染');
+    expect(find.byType(AmllLyricsView), findsOneWidget,
+        reason: '播放页必须挂载 AmllLyricsView');
     dir.deleteSync(recursive: true);
   }, timeout: const Timeout(Duration(seconds: 60)));
 }

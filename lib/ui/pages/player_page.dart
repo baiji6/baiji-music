@@ -15,18 +15,15 @@ import 'package:baiji_music/network/music_api.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/core/album_saver.dart';
-import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/ui/pages/netease_login_page.dart';
 import 'package:baiji_music/ui/pages/song_comment_page.dart';
 import 'package:baiji_music/ui/widgets/app_snackbar.dart';
+import 'package:baiji_music/ui/widgets/amll_lyrics_view.dart';
 import 'package:baiji_music/ui/widgets/app_widgets.dart';
 import 'package:baiji_music/ui/widgets/cover_image.dart';
-import 'package:baiji_music/ui/widgets/karaoke_line.dart';
 import 'package:baiji_music/ui/widgets/download_options_sheet.dart';
 import 'package:baiji_music/ui/widgets/lyric_style_sheet.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kDebugMode, debugPrintStack;
-import 'package:flutter/scheduler.dart';
 import 'package:flutter_miuix/miuix.dart';
 
 /// 播放页：封面 + 进度条 + 播放控制 + 平台化音质切换 + 下载 + 歌词（逐字/译文/点击跳转）。
@@ -541,7 +538,7 @@ class _PlayerPageState extends State<PlayerPage> {
                   actions: _buildActions(),
                   compact: false,
                 ),
-                _buildLyrics(padFactor: 0.3),
+                _buildLyrics(),
               ],
             ),
           ),
@@ -575,7 +572,7 @@ class _PlayerPageState extends State<PlayerPage> {
                 ),
               ),
               const SizedBox(width: 6),
-              Expanded(child: _buildLyrics(padFactor: 0.18)),
+              Expanded(child: _buildLyrics()),
             ],
           );
         },
@@ -632,7 +629,7 @@ class _PlayerPageState extends State<PlayerPage> {
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _ProgressSection(onSeek: _seekTo),
+          PlayerProgressSection(onSeek: _seekTo),
           _ControlsRow(
             playing: _playing,
             mode: _mode,
@@ -662,7 +659,8 @@ class _PlayerPageState extends State<PlayerPage> {
       padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
       child: Row(
         children: [
-          Expanded(child: _ProgressSection(onSeek: _seekTo, inlineTime: true)),
+          Expanded(
+              child: PlayerProgressSection(onSeek: _seekTo, inlineTime: true)),
           const SizedBox(width: 4),
           _ControlsRow(
             playing: _playing,
@@ -689,7 +687,7 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  Widget _buildLyrics({required double padFactor}) {
+  Widget _buildLyrics() {
     final future = _lyricsFuture;
     if (future == null) {
       return Center(
@@ -740,11 +738,10 @@ class _PlayerPageState extends State<PlayerPage> {
               children: [
                 if (showNeHint) _buildNeteaseLoginHint(),
                 Expanded(
-                  child: _LyricView(
+                  child: AmllLyricsView(
                     key: ValueKey(_lyricsKey),
                     lyrics: lyrics,
                     onSeek: _seekTo,
-                    padFactor: padFactor,
                   ),
                 ),
               ],
@@ -1024,8 +1021,16 @@ class _CoverArt extends StatelessWidget {
 
 // ==================== 进度条 ====================
 
-class _ProgressSection extends StatelessWidget {
-  const _ProgressSection({required this.onSeek, this.inlineTime = false});
+/// 进度条 + 时间标签（竖屏两行、横屏与控件同一行）。
+///
+/// 公开是为了让「进度条塌缩」回归能直接测生产组件（见
+/// `test/player_progress_bar_test.dart`）。
+class PlayerProgressSection extends StatelessWidget {
+  const PlayerProgressSection({
+    super.key,
+    required this.onSeek,
+    this.inlineTime = false,
+  });
 
   final Future<void> Function(Duration) onSeek;
 
@@ -1098,10 +1103,20 @@ class _ProgressSection extends StatelessWidget {
     );
   }
 
-  Widget _slider(double maxMs, int value) => MiuixSlider(
-        value: value.toDouble().clamp(0.0, maxMs),
-        max: maxMs,
-        onValueChanged: (v) => onSeek(Duration(milliseconds: v.round())),
+  /// 滑杆必须显式撑满宽度。
+  ///
+  /// [MiuixSlider] 内部是 `LayoutBuilder + SizedBox(height) + CustomPaint`，
+  /// CustomPaint 无子节点时按内容尺寸（0 宽）测量——在 [Column] 的宽松横向
+  /// 约束下会塌缩成轨道高度的一小截，视觉上就是「进度条不见了」
+  /// （v2.3.0-fix3 用户反馈；倍速滑杆与歌词样式弹窗早已用同一手法规避）。
+  /// 横屏时它位于 Row 的 [Expanded] 内（紧约束），撑满同样成立。
+  Widget _slider(double maxMs, int value) => SizedBox(
+        width: double.infinity,
+        child: MiuixSlider(
+          value: value.toDouble().clamp(0.0, maxMs),
+          max: maxMs,
+          onValueChanged: (v) => onSeek(Duration(milliseconds: v.round())),
+        ),
       );
 }
 
@@ -1611,386 +1626,11 @@ class _QualitySheet<T> extends StatelessWidget {
 
 // ==================== 歌词视图 ====================
 
-/// 歌词区：逐帧平滑的卡拉 OK 染色 + 自动滚动 + 点击跳转。
+/// 歌词区由 [AmllLyricsView]（flutter_lyric / AMLL 风格引擎）承担：
+/// 逐字高亮、切句动效、滚动跟随、前奏倒计时、点击跳转都由引擎实现。
 ///
-/// 平滑要点（旧实现按 100ms 节流整列表重建，肉眼可见卡顿与跳变）：
-/// 1. 播放头由 [Ticker] 逐帧推进，并在播放器上报的真实进度之间做墙钟插值，
-///    因此不再受 100ms 上报间隔限制，进度是连续的；
-/// 2. 只有"当前行"订阅播放头，其余行静态渲染，逐帧重建被限制在一行之内；
-/// 3. 单字进度经 smoothstep 缓动，消除线性染色的生硬边界。
-class _LyricView extends StatefulWidget {
-  const _LyricView({
-    super.key,
-    required this.lyrics,
-    required this.onSeek,
-    required this.padFactor,
-  });
-
-  final Lyrics lyrics;
-  final Future<void> Function(Duration) onSeek;
-
-  /// 上下留白占屏高比例（竖屏整页歌词留白大，横屏收紧）。
-  final double padFactor;
-
-  @override
-  State<_LyricView> createState() => _LyricViewState();
-}
-
-class _LyricViewState extends State<_LyricView>
-    with SingleTickerProviderStateMixin {
-  final ScrollController _scroll = ScrollController();
-  final List<GlobalKey> _keys = [];
-
-  Ticker? _ticker;
-  StreamSubscription<Duration>? _posSub;
-  StreamSubscription<bool>? _playSub;
-
-  int _active = -1;
-  bool _userDragging = false;
-  Timer? _resumeTimer;
-
-  /// 逐帧的播放位置（毫秒），专供逐字卡拉 OK 染色使用。
-  ///
-  /// 不能直接依赖 setState：逐字染色需要**每帧**都重绘当前行，
-  /// 而行号变化一整首歌也就几十次。所以单独用 notifier 驱动，
-  /// 只有当前行内部的 [ValueListenableBuilder] 会重建。
-  final ValueNotifier<int> _head = ValueNotifier<int>(0);
-
-  /// 播放器最近一次上报的真实进度 + 对应墙钟时刻，用于插值出平滑进度。
-  int _anchorMs = 0;
-  DateTime _anchorAt = DateTime.now();
-  bool _playing = false;
-
-  // ==================== 渲染诊断（fix1 排查逐字染色用，各打一次） ====================
-  bool _diagList = false;
-  bool _diagNoWords = false;
-
-  /// 打一次「视图收到的歌词对象」统计：如果 LyricApi 日志说词级=true
-  /// 而这里词级行=0，说明数据在到达 UI 前被替换/污染。
-  void _diagListView() {
-    if (_diagList) return;
-    _diagList = true;
-    final ly = widget.lyrics;
-    final wordLines = ly.lines.where((l) => l.isWordLevel).length;
-    AppLog.d('LyricView',
-        '歌词视图: lines=${ly.length} 词级行=$wordLines '
-        'hasWordTiming=${ly.hasWordTiming}');
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    for (var i = 0; i < widget.lyrics.length; i++) {
-      _keys.add(GlobalKey());
-    }
-    final player = PlayerController.instance;
-    _playing = player.isPlaying;
-    // 先定好当前行，再设基准——否则 _setAnchor 会在 initState 期间触发 setState
-    _active = widget.lyrics.indexAt(player.position);
-    _setAnchor(player.position);
-    _head.value = player.position.inMilliseconds;
-
-    _posSub = player.onPositionChanged.listen(_setAnchor);
-    _playSub = player.onPlayStateChanged.listen((p) {
-      _playing = p;
-      // 暂停/恢复都必须重置基准，否则暂停期间会继续插值、恢复时瞬间跳变
-      _setAnchor(player.position);
-      _syncTicker();
-    });
-    _syncTicker();
-
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _scrollToActive(animate: false));
-  }
-
-  @override
-  void didUpdateWidget(covariant _LyricView old) {
-    super.didUpdateWidget(old);
-    final lyricsChanged = !identical(old.lyrics, widget.lyrics);
-    if (lyricsChanged && old.lyrics.length != widget.lyrics.length) {
-      _keys.clear();
-      for (var i = 0; i < widget.lyrics.length; i++) {
-        _keys.add(GlobalKey());
-      }
-    }
-    if (lyricsChanged) {
-      // 换歌后 _active 必须重算：行数恰好相同的两首歌，旧行号指向
-      // 错误的行；若新歌比旧行号短，还会短暂越界。
-      _active = widget.lyrics.indexAt(PlayerController.instance.position);
-      _setAnchor(PlayerController.instance.position);
-    }
-  }
-
-  @override
-  void dispose() {
-    _posSub?.cancel();
-    _playSub?.cancel();
-    _resumeTimer?.cancel();
-    _ticker?.dispose();
-    _head.dispose();
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  void _setAnchor(Duration d) {
-    _anchorMs = d.inMilliseconds;
-    _anchorAt = DateTime.now();
-    // 暂停时 Ticker 不跑，逐字染色的播放头不会自己前进。seek（点击歌词）
-    // 后必须在这里补齐，否则高亮行对了、行内填充边界还停在旧位置。
-    if (_head.value != _anchorMs) _head.value = _anchorMs;
-    _syncActive();
-  }
-
-  /// 在真实进度上叠加墙钟走时，得到逐帧连续的播放位置（毫秒）。
-  ///
-  /// 倍速播放时音频时间轴按 rate 流失，墙钟插值必须同倍率外推，
-  /// 否则 2x 下歌词播放头会明显滞后于实际歌声。
-  int _smoothMs() {
-    if (!_playing) return _anchorMs;
-    final wallElapsed =
-        DateTime.now().difference(_anchorAt).inMilliseconds;
-    final est =
-        _anchorMs + (wallElapsed * PlayerController.instance.rate).round();
-    final total = PlayerController.instance.duration.inMilliseconds;
-    if (total > 0 && est > total) return total;
-    return est < 0 ? 0 : est;
-  }
-
-  void _syncActive() {
-    final idx = widget.lyrics.indexAt(Duration(milliseconds: _smoothMs()));
-    if (idx == _active) return;
-    if (!mounted) return;
-    setState(() => _active = idx);
-    _scrollToActive();
-  }
-
-  /// 逐帧做两件事：更新逐字染色的播放头、判断当前唱到哪一行。
-  void _onTick(Duration elapsed) {
-    final ms = _smoothMs();
-    // 逐字染色靠这个 notifier 每帧推进；只在值真的变了时才通知，
-    // 避免无谓重建。
-    if (_head.value != ms) _head.value = ms;
-    _syncActive();
-  }
-
-  /// 只在播放时跑 Ticker，暂停时停掉（省电，也避免无意义的重建）。
-  void _syncTicker() {
-    if (_playing) {
-      _ticker ??= createTicker(_onTick);
-      if (!_ticker!.isActive) _ticker!.start();
-    } else {
-      final t = _ticker;
-      if (t != null && t.isActive) t.stop();
-      // 暂停时行号不该变，但补一次同步能纠正拖动进度条后的偏差；
-      // 逐字染色的播放头同样要跟上，否则拖完进度条颜色还停在原地。
-      final ms = _smoothMs();
-      if (_head.value != ms) _head.value = ms;
-      _syncActive();
-    }
-  }
-
-  void _scrollToActive({bool animate = true}) {
-    if (_userDragging) return;
-    if (!mounted) return;
-    if (_active < 0 || _active >= _keys.length) return;
-    final ctx = _keys[_active].currentContext;
-    // mounted 检查不能省：ListView 回收滑出屏幕的行时，GlobalKey 还挂着
-    // 但 Element 可能已失效——此时 findRenderObject() 返回 null，
-    // ensureVisible 内部空断言直接 FATAL（线上崩溃栈与此吻合）。
-    if (ctx == null || !ctx.mounted) return;
-    // 滚动定位是纯辅助行为：歌词行还在重建中、被卸载、或框架内部
-    // 状态 momentarily 不一致时，ensureVisible 可能抛异常——
-    // 绝不能让它拖垮整个播放页（线上 FATAL 空指针的防御点之一）。
-    try {
-      Scrollable.ensureVisible(
-        ctx,
-        alignment: 0.42,
-        duration: animate ? const Duration(milliseconds: 380) : Duration.zero,
-        curve: Curves.easeOutCubic,
-      );
-    } catch (e, st) {
-      AppLog.w('LyricView', '滚动定位失败（已忽略）: $e');
-      if (kDebugMode) debugPrintStack(stackTrace: st);
-    }
-  }
-
-  void _onUserScroll() {
-    _userDragging = true;
-    _resumeTimer?.cancel();
-    // 用户停止滑动 5 秒后，歌词自动滚回当前播放位置（需求：5s 自动定位）。
-    _resumeTimer = Timer(const Duration(seconds: 5), () {
-      if (!mounted) return;
-      _userDragging = false;
-      _scrollToActive();
-    });
-  }
-
-  Widget _buildLine(LyricLine line, {required bool isActive}) {
-    final settings = LyricSettings.instance;
-
-    // 当前行轻微放大加粗，是整屏的视觉重心；非当前行压一档形成层次。
-    final size =
-        isActive ? settings.fontSize * settings.activeScale : settings.fontSize;
-    final weight = isActive ? settings.activeWeight : settings.inactiveWeight;
-    final height = isActive ? 1.32 : 1.45;
-
-    if (!line.isWordLevel) {
-      // 诊断：词级歌词里混着无 words 的行（染色失效时的关键证据）
-      if (widget.lyrics.hasWordTiming && !_diagNoWords) {
-        _diagNoWords = true;
-        AppLog.w('LyricView',
-            '词级歌词存在无 words 行: "${line.text}" words=${line.words.length}');
-      }
-      // 可读性保障：自定义浅色字切到浅色主题后对比度不足时自动回退
-      // 主题墨色，否则当前行整个隐身（#80 视频实测 1.5:1）。
-      // 非当前行走三态（已唱保留已唱色 / 未唱暗灰），见 [lyricLineColor]。
-      final color = lyricLineColor(
-        line: line,
-        isActive: isActive,
-        positionMs: _smoothMs(),
-        unsung: settings.readableUnsungColor,
-        sung: settings.readableSungColor,
-        inactive: settings.readableInactiveColor,
-      );
-      return Text(
-        line.displayText,
-        textAlign: settings.textAlign,
-        style: TextStyle(
-          fontSize: size,
-          height: height,
-          fontWeight: weight,
-          color: color,
-        ),
-      );
-    }
-
-    // 非当前行：AMLL / 倾听三态——已唱行保留已唱色（时间轨迹），
-    // 未唱行暗灰；只有当前行做逐字填充（整屏一个 CustomPaint，省电）。
-    //
-    // 旧实现把非当前行统一压成暗灰，唱过的行瞬间熄灭，满屏只有当前行
-    // 在动——逐字歌词因此被感知成逐行歌词（v2.3.0-fix2 用户反馈）。
-    // 层次靠主题色本身拉开（灰蓝 / 绿 / 白底扫绿），不会糊成中灰。
-    if (!isActive) {
-      return Text(
-        line.displayText,
-        textAlign: settings.textAlign,
-        style: TextStyle(
-          fontSize: size,
-          height: height,
-          fontWeight: weight,
-          color: lyricLineColor(
-            line: line,
-            isActive: false,
-            positionMs: _smoothMs(),
-            unsung: settings.readableUnsungColor,
-            sung: settings.readableSungColor,
-            inactive: settings.readableInactiveColor,
-          ),
-        ),
-      );
-    }
-
-    // 当前行：逐字填充 + 轻微放大。放大只影响字号，
-    // 逐字填满是另一条独立的渲染链路，两者不能互相取代。
-    return KaraokeLine(
-      line: line,
-      head: _head,
-      fontSize: size,
-      height: height,
-      align: settings.textAlign,
-      weight: settings.activeWeight,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final lyrics = widget.lyrics;
-    _diagListView();
-    final settings = LyricSettings.instance;
-    // 监听字号 / 对齐设置变化，改动后歌词立即重排
-    return AnimatedBuilder(
-      animation: settings,
-      builder: (context, _) => NotificationListener<ScrollNotification>(
-        onNotification: (n) {
-          if (n is UserScrollNotification) _onUserScroll();
-          return false;
-        },
-        child: ListView.builder(
-          controller: _scroll,
-          padding: EdgeInsets.symmetric(
-              vertical: MediaQuery.of(context).size.height * widget.padFactor),
-          itemCount: lyrics.length,
-          itemBuilder: (ctx, i) {
-            final line = lyrics[i];
-            final isActive = i == _active;
-            return MiuixPressable(
-              onPressed: () => widget.onSeek(Duration(milliseconds: line.startMs)),
-              child: Container(
-                key: _keys[i],
-                width: double.infinity,
-                // 当前行字号略大，行距相应放宽一点即可（不需要原来 16那么大的留白）
-                padding: EdgeInsets.symmetric(
-                    horizontal: 26, vertical: isActive ? 11 : 9),
-                child: Column(
-                  crossAxisAlignment: settings.alignLeft
-                      ? CrossAxisAlignment.start
-                      : CrossAxisAlignment.center,
-                  children: [
-                    _buildLine(line, isActive: isActive),
-                    if (line.translation != null &&
-                        line.translation!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: Text(
-                            line.translation!,
-                            textAlign: settings.textAlign,
-                            style: TextStyle(
-                              fontSize: isActive
-                                  ? settings.fontSize * 0.8 * settings.activeScale
-                                  : settings.fontSize * 0.8,
-                              height: 1.35,
-                              color: isActive
-                                  ? AppColors.textSecondary
-                                  : AppColors.textTertiary
-                                      .withValues(alpha: 0.7),
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (line.romanization != null &&
-                        line.romanization!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: Text(
-                            line.romanization!,
-                            textAlign: settings.textAlign,
-                            style: TextStyle(
-                              fontSize: isActive
-                                  ? settings.fontSize * 0.72 * settings.activeScale
-                                  : settings.fontSize * 0.72,
-                              height: 1.3,
-                              color: isActive
-                                  ? AppColors.textSecondary
-                                  : AppColors.textTertiary
-                                      .withValues(alpha: 0.6),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
+/// 旧的自绘实现（`_LyricView` + `KaraokeLine` 的 dstIn 遮罩）在
+/// v2.3.0-fix3 及以前使用，用户连续反馈「逐字歌词没有」，已整体替换。
 
 /// 音频规格面板：采样率 / 比特率 / 声道 / 容器与编码。
 ///
