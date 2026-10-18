@@ -334,6 +334,30 @@ class KaraokeRow {
   final List<int> wordIndexes;
 }
 
+/// 歌词整行的颜色三态（AMLL / 倾听语义，纯函数供 widget 与测试共用）。
+///
+/// - **当前行**：返回未唱色 [unsung]——行内明暗由 [KaraokeLine] 的逐字
+///   遮罩逐帧决定，这里只给底层底色；
+/// - **已唱行**（`endMs <= positionMs`）：返回已唱色 [sung]。唱过的行
+///   保留已唱色是逐字歌词时间维度的视觉轨迹（未唱暗灰 → 已唱点亮 →
+///   当前行扫描），缺失它时满屏只有当前行在动，逐字歌词会被感知成
+///   逐行歌词（v2.3.0-fix2 用户反馈的根因）；
+/// - **未唱行**：返回暗灰 [inactive]。
+///
+/// [endMs] <= 0（无有效行止时间，如信息行）按未唱处理。
+Color lyricLineColor({
+  required LyricLine line,
+  required bool isActive,
+  required int positionMs,
+  required Color unsung,
+  required Color sung,
+  required Color inactive,
+}) {
+  if (isActive) return unsung;
+  if (line.endMs > 0 && line.endMs <= positionMs) return sung;
+  return inactive;
+}
+
 /// 逐字卡拉OK绘制器（AMLL 同款思路：底层整行未唱色，每个视觉行
 /// 叠一层已唱色，再用该行的分段渐变做 dstIn 遮罩）。
 ///

@@ -45,8 +45,8 @@ void main() {
       'log_something': 'noise',
     });
     final exported = BackupService.export();
-    // v2.3.0-fix1 起导出是加密文本（BAIJI1. 前缀），不含明文 JSON
-    expect(exported.startsWith('BAIJI1.'), isTrue,
+    // v2.3.0-fix1 起导出是加密文本；v2.3.0-fix3 起为 BAIJI2（SM4+SM2）
+    expect(exported.startsWith('BAIJI2.'), isTrue,
         reason: '导出必须是加密格式（防止登录态明文落盘）');
     expect(exported.contains('playlist_list'), isFalse,
         reason: '加密文件里不应出现明文键名');
@@ -154,13 +154,49 @@ void main() {
     expect(KvStore.instance.getString('favorite_songs'), '[{"改动":1}]');
   });
 
-  test('BackupCrypto：加密往返（RC4+RSA 信封）', () {
+  test('BackupCrypto：加密往返（SM4-CBC + SM2 信封）', () {
     const plain = '{"app":"baiji-music","kv":{"k":"v 中文😀"}}';
     final enc = BackupCrypto.encrypt(plain);
-    expect(enc.startsWith('BAIJI1.'), isTrue);
+    expect(enc.startsWith('BAIJI2.'), isTrue);
     expect(enc.contains('中文'), isFalse, reason: '密文里不能有明文');
     final back = BackupCrypto.decrypt(enc);
     expect(back, plain);
+  });
+
+  test('BackupCrypto：v2 每次导出使用不同随机密钥/IV（语义安全）', () {
+    const plain = '{"same":"plaintext"}';
+    final a = BackupCrypto.encrypt(plain);
+    final b = BackupCrypto.encrypt(plain);
+    expect(a == b, isFalse, reason: '相同明文两次导出密文必须不同');
+    expect(BackupCrypto.decrypt(a), plain);
+    expect(BackupCrypto.decrypt(b), plain);
+  });
+
+  test('BackupCrypto：v1 历史备份（RC4+RSA）解密兼容', () {
+    // 真实 v2.3.0-fix1/fix2 导出的 BAIJI1 样本（脚本复刻旧算法生成）
+    const legacy =
+        'BAIJI1.QkFJSgCAsI6p/2+lcWepIODzN1TN6ZTaiX2n4ngxLhFAV4T+xyEVFoppYcOQRj7t'
+        '6YOs3vk1MWDey+3pFDeLB/RBBo9FzwFhlgY5DSf+QAvZ1B8DNT13tyzVrPWBJf02LRWoRI7'
+        'jkoLA4RPjx6KdnGBU2yyslc2X43fj+lhokrFRYl3KdesK+u9gcrJivkEsSPBOEqEYa6ADjO'
+        'CbwLKwTDXNBFHMaJf8KXJS+H5IcwGqlGUqTtMV74s+toK+uw4washm3sNFi/Q5TmqpGUEjU'
+        'pi7c8PQUe0CHowjOiof';
+    final json = BackupCrypto.decrypt(legacy);
+    expect(json, isNotNull);
+    final map = jsonDecode(json!) as Map<String, dynamic>;
+    expect(map['app'], 'baiji-music');
+    expect((map['playlists'] as List).single['name'], '我喜欢的音乐');
+  });
+
+  test('BackupCrypto：v2 坏 Base64 → 格式异常', () {
+    expect(() => BackupCrypto.decrypt('BAIJI2.%%%'), throwsFormatException);
+  });
+
+  test('BackupCrypto：v2 截断密文 → 格式异常', () {
+    final enc = BackupCrypto.encrypt('{"a":1}');
+    // 砍掉尾部几个字符再补齐到合法 Base64 长度，制造结构损坏
+    final body = enc.substring('BAIJI2.'.length);
+    final cut = '${body.substring(0, body.length - 8)}=';
+    expect(() => BackupCrypto.decrypt('BAIJI2.$cut'), throwsA(anything));
   });
 
   test('BackupCrypto：旧明文 JSON 导入兼容（无前缀返回 null）', () {

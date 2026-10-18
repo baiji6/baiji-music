@@ -10,6 +10,12 @@
 // - 点赞：music.globalComment.CommentWrite/PraiseComment（需登录，
 //   未登录返回 code=1000）
 //
+// **BizId 必须传数字 songid，不能传 mid**（2026-10-18 复现用户反馈）：
+// 传 mid 时 GetHotCommentList/GetNewCommentList 返回 code=10000
+// （AllowComment=0），登录与否都一样；传数字 songid 才正常返回。
+// 沙箱首次实测用的就是数字 id，所以没暴露；真机从播放页进来时
+// Song.mid 被当成 BizId，遂 10000。
+//
 // 与 H5 接口（c.y.qq.com fcg_global_comment_h5.fcg）二选一，这里走
 // musicu：复用现成的 QQMusicClient.executeRaw，不额外引入 HTTP 客户端，
 // 且响应里的 SubComments 直接带回复结构。
@@ -37,10 +43,16 @@ abstract final class QqCommentApi {
   /// 单条字段 `CmId/Nick/Avatar/Content/PubTime(秒)/PraiseNum/IsPraised/
   /// ReplyCnt/SubComments[]`。
   ///
+  /// 兼容两种入参形状：业务 data 层（`{CommentList: ...}`，单测样本即此）
+  /// 或 `executeRaw` 返回的完整 req_0（`{code, msg, data: {CommentList}}`）——
+  /// 后者会自动剥一层，防止网络层漏剥导致评论静默变空
+  /// （2026-10-18 live 实测复现：code=0 但 total=0）。
+  ///
   /// 返回的评论统一放在 [CommentPage.latest]；调用方按读取的是热评还是
   /// 最新评放入对应分桶（见 [getHotComments] / [getNewComments]）。
   static CommentPage parseCommentList(Map<String, dynamic> data) {
-    final list = data['CommentList'];
+    final biz = _bizLayer(data);
+    final list = biz['CommentList'];
     if (list is! Map<String, dynamic>) {
       return const CommentPage();
     }
@@ -57,6 +69,17 @@ abstract final class QqCommentApi {
       total: _toInt(list['Total']),
       hasMore: _toInt(list['HasMore']) == 1,
     );
+  }
+
+  /// 取出业务 data 层：已是业务层则原样返回；若是完整 req_0
+  /// （`{code, msg, data}`）则剥出 `data`。
+  static Map<String, dynamic> _bizLayer(Map<String, dynamic> data) {
+    final inner = data['data'];
+    if (inner is Map<String, dynamic> &&
+        (inner.containsKey('CommentList') || inner.containsKey('response'))) {
+      return inner;
+    }
+    return data;
   }
 
   /// 解析单条评论（含 SubComments 子评论）。
@@ -95,7 +118,7 @@ abstract final class QqCommentApi {
 
   /// 解析 GetCmCount 响应：`data.response.count`。
   static int parseCommentCount(Map<String, dynamic> data) {
-    final resp = data['response'];
+    final resp = _bizLayer(data)['response'];
     if (resp is Map<String, dynamic>) {
       return _toInt(resp['count']);
     }
@@ -105,12 +128,14 @@ abstract final class QqCommentApi {
   // ================= 网络 =================
 
   /// 读取歌曲热评（免登录）。
+  ///
+  /// [songId] 必须是**数字 songid**（不是 mid，见文件头说明）。
   static Future<CommentPage> getHotComments(
     String songId, {
     int page = 0,
     int pageSize = 15,
   }) async {
-    final data = await AppServices.instance.qq.executeRaw(
+    final req0 = await AppServices.instance.qq.executeRaw(
       BizRequest(
         module: 'music.globalComment.CommentRead',
         method: 'GetHotCommentList',
@@ -126,7 +151,7 @@ abstract final class QqCommentApi {
         },
       ),
     );
-    final parsed = parseCommentList(data);
+    final parsed = parseCommentList(req0);
     return CommentPage(
       hot: parsed.latest,
       total: parsed.total,
@@ -135,12 +160,14 @@ abstract final class QqCommentApi {
   }
 
   /// 读取歌曲最新评论（免登录）。
+  ///
+  /// [songId] 必须是**数字 songid**（不是 mid，见文件头说明）。
   static Future<CommentPage> getNewComments(
     String songId, {
     int page = 0,
     int pageSize = 15,
   }) async {
-    final data = await AppServices.instance.qq.executeRaw(
+    final req0 = await AppServices.instance.qq.executeRaw(
       BizRequest(
         module: 'music.globalComment.CommentRead',
         method: 'GetNewCommentList',
@@ -157,12 +184,12 @@ abstract final class QqCommentApi {
         },
       ),
     );
-    return parseCommentList(data);
+    return parseCommentList(req0);
   }
 
   /// 歌曲评论总数（免登录）。
   static Future<int> getCommentCount(String songId) async {
-    final data = await AppServices.instance.qq.executeRaw(
+    final req0 = await AppServices.instance.qq.executeRaw(
       BizRequest(
         module: 'music.globalComment.CommentCountSrv',
         method: 'GetCmCount',
@@ -175,11 +202,12 @@ abstract final class QqCommentApi {
         },
       ),
     );
-    return parseCommentCount(data);
+    return parseCommentCount(req0);
   }
 
   /// 发表评论（需登录）。
   ///
+  /// [songId] 必须是**数字 songid**（不是 mid，见文件头说明）。
   /// [replyTo] 非空时为回复某条评论（填被回复评论的 CmId）。
   static Future<void> addComment(
     String songId,
@@ -195,7 +223,7 @@ abstract final class QqCommentApi {
     if (replyTo != null && replyTo.isNotEmpty) {
       param['RepliedCmId'] = replyTo;
     }
-    final data = await AppServices.instance.qq.executeRaw(
+    final req0 = await AppServices.instance.qq.executeRaw(
       BizRequest(
         module: 'music.globalComment.CommentWriteServer',
         method: 'AddComment',
@@ -203,7 +231,11 @@ abstract final class QqCommentApi {
         allowErrorCodes: true,
       ),
     );
-    final code = _toInt(data['code']);
+    // 业务码可能出现在 CGI 层（req0.code）或 data 层（data.code），都查。
+    final biz = _bizLayer(req0);
+    final code = _toInt(req0['code']) != 0
+        ? _toInt(req0['code'])
+        : _toInt(biz['code']);
     if (code != 0) {
       throw Exception('发表评论失败（$code）');
     }
@@ -214,7 +246,7 @@ abstract final class QqCommentApi {
   ///
   /// [like] 为 true 点赞、false 取消；`new_` 字段即开关（实测形制）。
   static Future<void> praiseComment(String cmtId, {required bool like}) async {
-    final data = await AppServices.instance.qq.executeRaw(
+    final req0 = await AppServices.instance.qq.executeRaw(
       BizRequest(
         module: 'music.globalComment.CommentWrite',
         method: 'PraiseComment',
@@ -228,7 +260,10 @@ abstract final class QqCommentApi {
         allowErrorCodes: true,
       ),
     );
-    final code = _toInt(data['code']);
+    final biz = _bizLayer(req0);
+    final code = _toInt(req0['code']) != 0
+        ? _toInt(req0['code'])
+        : _toInt(biz['code']);
     if (code != 0) {
       throw Exception('点赞失败（$code）');
     }

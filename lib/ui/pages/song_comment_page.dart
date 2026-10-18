@@ -56,6 +56,20 @@ class _SongCommentPageState extends State<SongCommentPage> {
   bool get _loggedIn =>
       AppServices.instance.isLoggedIn(widget.song.source);
 
+  /// QQ 评论的 BizId 必须是**数字 songid**，不能传 mid。
+  ///
+  /// 实测（2026-10-18，u.y.qq.com musicu.fcg）：BizId 传 mid 时
+  /// `music.globalComment.CommentRead.GetHotCommentList` 返回
+  /// `code=10000`（AllowComment=0），与用户日志「评论加载失败 业务错误
+  /// 10000」完全一致；传数字 songid 才返回评论列表。
+  String get _qqBizId {
+    final id = widget.song.songId;
+    if (id <= 0) {
+      throw Exception('该歌曲缺少数字 ID（songid），无法加载 QQ 评论');
+    }
+    return id.toString();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -105,9 +119,11 @@ class _SongCommentPageState extends State<SongCommentPage> {
       } else {
         // QQ：热评 + 最新各拉一页。总数以最新评为准（实测与 GetCmCount
         // 一致：热评 Total 只是热评桶的条数）。
+        // 注意 BizId 用数字 songid（mid 会 10000，见 [_qqBizId]）。
+        final bizId = _qqBizId;
         final results = await Future.wait([
-          QqCommentApi.getHotComments(song.mid),
-          QqCommentApi.getNewComments(song.mid),
+          QqCommentApi.getHotComments(bizId),
+          QqCommentApi.getNewComments(bizId),
         ]);
         if (!mounted) return;
         _qqPage = 1;
@@ -150,7 +166,8 @@ class _SongCommentPageState extends State<SongCommentPage> {
           _neOffset += 15;
         });
       } else {
-        final page = await QqCommentApi.getNewComments(song.mid, page: _qqPage);
+        final page =
+            await QqCommentApi.getNewComments(_qqBizId, page: _qqPage);
         if (!mounted) return;
         setState(() {
           _data = CommentPage(
@@ -221,7 +238,7 @@ class _SongCommentPageState extends State<SongCommentPage> {
         );
       } else {
         await QqCommentApi.addComment(
-          song.mid,
+          _qqBizId,
           content,
           replyTo: _replyTo?.id,
         );

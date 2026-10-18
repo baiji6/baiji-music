@@ -218,6 +218,57 @@ void main() {
     });
   });
 
+  // ==================== req_0 外层兼容（防漏剥 data 层） ====================
+
+  group('QqCommentApi 完整 req_0 形状（live 回归 2026-10-18）', () {
+    // executeRaw 返回完整 req_0：{code, msg, data: {CommentList: ...}}。
+    // 曾因漏剥 data 层导致《晴天》code=0 但评论解析为空（total=0）。
+    test('parseCommentList 自动剥 data 层', () {
+      final req0 = <String, dynamic>{
+        'code': 0,
+        'msg': '',
+        'data': <String, dynamic>{
+          'AllowComment': 1,
+          'CommentList': <String, dynamic>{
+            'Comments': <dynamic>[
+              <String, dynamic>{
+                'CmId': 'c1',
+                'Nick': '测试',
+                'Content': '内容',
+                'PubTime': 1792300087,
+                'PraiseNum': 3,
+              }
+            ],
+            'Total': 333059,
+            'HasMore': 1,
+          }
+        }
+      };
+      final page = QqCommentApi.parseCommentList(req0);
+      expect(page.latest.length, 1);
+      expect(page.latest.single.content, '内容');
+      expect(page.total, 333059);
+      expect(page.hasMore, true);
+    });
+
+    test('parseCommentCount 自动剥 data 层', () {
+      final req0 = <String, dynamic>{
+        'code': 0,
+        'data': <String, dynamic>{
+          'response': <String, dynamic>{'count': 33}
+        }
+      };
+      expect(QqCommentApi.parseCommentCount(req0), 33);
+    });
+
+    test('业务层无 CommentList/response 时不误剥', () {
+      // 空业务层（无 data 内层）→ 空页，不抛异常
+      expect(QqCommentApi.parseCommentList(const {'code': 0, 'data': 'x'}).isEmpty,
+          true);
+      expect(QqCommentApi.parseCommentCount(const {'code': 0, 'data': 1}), 0);
+    });
+  });
+
   // ==================== 网易云 ====================
 
   group('NeteaseCommentApi.threadId', () {

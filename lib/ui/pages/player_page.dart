@@ -1843,9 +1843,15 @@ class _LyricViewState extends State<_LyricView>
       }
       // 可读性保障：自定义浅色字切到浅色主题后对比度不足时自动回退
       // 主题墨色，否则当前行整个隐身（#80 视频实测 1.5:1）。
-      final color = isActive
-          ? settings.readableUnsungColor
-          : settings.readableInactiveColor;
+      // 非当前行走三态（已唱保留已唱色 / 未唱暗灰），见 [lyricLineColor]。
+      final color = lyricLineColor(
+        line: line,
+        isActive: isActive,
+        positionMs: _smoothMs(),
+        unsung: settings.readableUnsungColor,
+        sung: settings.readableSungColor,
+        inactive: settings.readableInactiveColor,
+      );
       return Text(
         line.displayText,
         textAlign: settings.textAlign,
@@ -1858,11 +1864,12 @@ class _LyricViewState extends State<_LyricView>
       );
     }
 
-    // 非当前行统一暗灰：**不区分已唱 / 未唱**。
+    // 非当前行：AMLL / 倾听三态——已唱行保留已唱色（时间轨迹），
+    // 未唱行暗灰；只有当前行做逐字填充（整屏一个 CustomPaint，省电）。
     //
-    // 参考视频里层次完全由"当前行白字被逐字填成绿色、其余暗灰"建立，
-    // 已唱过的行并没有更亮的残留色——那样整屏会散出一堆半亮不亮的中灰，
-    // 行与行之间读不清。颜色统一后逐字 span 可以合并成整行 Text。
+    // 旧实现把非当前行统一压成暗灰，唱过的行瞬间熄灭，满屏只有当前行
+    // 在动——逐字歌词因此被感知成逐行歌词（v2.3.0-fix2 用户反馈）。
+    // 层次靠主题色本身拉开（灰蓝 / 绿 / 白底扫绿），不会糊成中灰。
     if (!isActive) {
       return Text(
         line.displayText,
@@ -1871,7 +1878,14 @@ class _LyricViewState extends State<_LyricView>
           fontSize: size,
           height: height,
           fontWeight: weight,
-          color: settings.readableInactiveColor,
+          color: lyricLineColor(
+            line: line,
+            isActive: false,
+            positionMs: _smoothMs(),
+            unsung: settings.readableUnsungColor,
+            sung: settings.readableSungColor,
+            inactive: settings.readableInactiveColor,
+          ),
         ),
       );
     }
