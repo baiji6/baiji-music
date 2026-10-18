@@ -22,6 +22,15 @@
 //   GET https://music.163.com/api/v1/comment/like?threadId=&commentId=&csrf_token=
 //   GET https://music.163.com/api/v1/comment/unlike?...
 //   （无参 → 400、带参 → 301；不存在路径 → 404，路由确认。）
+//
+// **写接口 250 = 网易云账号级风控**（2026-10-18 复现用户反馈）：
+// 用户真机首次发评即 250（登录态为扫码登录的最小 Cookie）。沙箱对照
+// 实验：完整浏览器 Cookie（24 字段）→ 200；但连续发评十余条后，
+// 完整 Cookie 的点赞/发评也全部 250——即 250 一旦触发就是账号级
+// 写限流，与 Cookie 完整性弱相关，需等待冷却。app 侧缓解：
+// - 扫码登录后 [NeteaseClient.enrichCookie] 补 NMTID 等会话字段；
+// - 250 文案引导「稍后再试」而非裸错误码；
+// - 设置页支持手动粘贴完整浏览器 Cookie 登录（逃生门）。
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/music_api.dart';
@@ -140,6 +149,11 @@ abstract final class NeteaseCommentApi {
     }
     final data = await client.postApi(url, form);
     final code = _toInt(data['code']);
+    if (code == 250) {
+      // 250 = 网易云风控（频率/会话异常）。完整浏览器 Cookie 下偶发，
+      // 频繁发送必中；文案引导用户稍后再试，避免裸错误码。
+      throw Exception('发送过于频繁或被网易云风控，请稍后再试');
+    }
     if (code != 200) {
       throw Exception('发表评论失败（$code）');
     }
@@ -159,6 +173,9 @@ abstract final class NeteaseCommentApi {
         '?threadId=${threadId(songId)}&commentId=$commentId&csrf_token=$csrf';
     final data = await client.getApi(url);
     final code = _toInt(data['code']);
+    if (code == 250) {
+      throw Exception('操作过于频繁或被网易云风控，请稍后再试');
+    }
     if (code != 200) {
       throw Exception('${like ? "点赞" : "取消点赞"}失败（$code）');
     }

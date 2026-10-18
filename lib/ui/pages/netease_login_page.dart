@@ -111,6 +111,9 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
           case NeteaseQrEvent.done:
             AppServices.instance.netease.cookie = s.cookie!;
             AppLog.i('NeteaseLoginPage', '网易云扫码登录成功');
+            // 补齐浏览器会话 Cookie（NMTID/_ntes_nuid 等）：轮询响应只带
+            // 登录态字段，缺这些容易触发网易云风控（发评 code=250）。
+            AppServices.instance.netease.enrichCookie();
             showAppSnack('网易云扫码登录成功');
             Navigator.pop(context, true);
         }

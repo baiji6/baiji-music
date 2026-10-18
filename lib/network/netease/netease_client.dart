@@ -57,6 +57,57 @@ class NeteaseClient {
     KvStore.instance.remove(_prefsUserId);
   }
 
+  /// 登录后补齐浏览器会话 Cookie。
+  ///
+  /// 扫码登录只从轮询响应的 Set-Cookie 拿到登录态字段（MUSIC_U/
+  /// __csrf 等），真实浏览器会话还有 NMTID/_ntes_nuid/JSESSIONID-WYYY 等。
+  /// `/discover` 页面会下发 NMTID（设备追踪 Cookie，网易云每次页面访问
+  /// 都带），把它 harvest 进来让会话更接近真实浏览器，降低写接口被风控
+  /// （code=250）的概率。只增不覆盖，不动已有登录态字段。
+  ///
+  /// 注意：music.163.com 首页被 CDN 缓存不吐 Set-Cookie，必须打
+  /// /discover 或任一 api 路径（实测两者都会下发 NMTID）。
+  Future<void> enrichCookie() async {
+    try {
+      final resp = await getRaw('https://music.163.com/discover');
+      final harvested = <String, String>{};
+      for (final entry in resp.headers.map['set-cookie'] ?? const []) {
+        final first = entry.split(';').first.trim();
+        final idx = first.indexOf('=');
+        if (idx <= 0) continue;
+        final name = first.substring(0, idx).trim();
+        final value = first.substring(idx + 1).trim();
+        if (name.isNotEmpty && value.isNotEmpty) harvested[name] = value;
+      }
+      if (harvested.isEmpty) return;
+      final merged = mergeHarvestedCookie(cookie, harvested);
+      if (merged == cookie) return;
+      cookie = merged;
+      AppLog.i('NeteaseClient', 'Cookie 补齐完成');
+    } catch (e) {
+      // 补齐失败不影响登录态本身
+      AppLog.w('NeteaseClient', 'Cookie 补齐失败: $e');
+    }
+  }
+
+  /// 合并 harvest 到的 Cookie：**只增不覆盖**——已有字段（登录态）
+  /// 优先保留，仅追加缺失的浏览器会话字段。纯函数，可单测。
+  static String mergeHarvestedCookie(
+      String existing, Map<String, String> harvested) {
+    if (harvested.isEmpty) return existing;
+    final map = <String, String>{};
+    parseCookie(existing, map);
+    var added = 0;
+    harvested.forEach((k, v) {
+      if (!map.containsKey(k)) {
+        map[k] = v;
+        added++;
+      }
+    });
+    if (added == 0) return existing;
+    return map.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  }
+
   /// 组装请求 Cookie：用户 Cookie 优先，并补齐 os/appver 等字段。
   String buildCookieHeader() {
     final map = <String, String>{};

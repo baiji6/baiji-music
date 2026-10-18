@@ -7,6 +7,7 @@
 //   桌面端行为与倾听（NeteaseCloudMusicApi）login.py 的码值表固化；
 // - Set-Cookie 样本：按网易云登录响应的一般形态构造（MUSIC_U + __csrf，
 //   带 Path/Expires/HttpOnly 属性段）。
+import 'package:baiji_music/network/netease/netease_client.dart';
 import 'package:baiji_music/network/netease_qr_login.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -99,6 +100,45 @@ void main() {
 
     test('空列表得到空串', () {
       expect(NeteaseQrLogin.buildCookieFromSetCookie(const []), '');
+    });
+  });
+
+  group('NeteaseClient.mergeHarvestedCookie（登录后补齐，只增不覆盖）', () {
+    test('缺失的浏览器字段被追加，登录态字段原样保留', () {
+      const existing = 'MUSIC_U=abc; __csrf=xyz; os=pc';
+      final merged = NeteaseClient.mergeHarvestedCookie(existing, {
+        'MUSIC_U': 'ATTACKER', // 不得覆盖登录态
+        '__csrf': 'other',
+        'NMTID': 'nmtid123',
+        '_ntes_nuid': 'nuid456',
+        'JSESSIONID-WYYY': 'jsess',
+      });
+      final map = <String, String>{};
+      NeteaseClient.parseCookie(merged, map);
+      expect(map['MUSIC_U'], 'abc');
+      expect(map['__csrf'], 'xyz');
+      expect(map['os'], 'pc');
+      expect(map['NMTID'], 'nmtid123');
+      expect(map['_ntes_nuid'], 'nuid456');
+      expect(map['JSESSIONID-WYYY'], 'jsess');
+    });
+
+    test('harvest 为空 / 无新字段 → 原样返回', () {
+      const existing = 'MUSIC_U=abc';
+      expect(NeteaseClient.mergeHarvestedCookie(existing, const {}), existing);
+      expect(
+        NeteaseClient.mergeHarvestedCookie(
+            existing, const {'MUSIC_U': 'zzz'}),
+        existing,
+      );
+    });
+
+    test('existing 为空时全量接纳', () {
+      final merged = NeteaseClient.mergeHarvestedCookie('', {
+        'MUSIC_U': 'abc',
+        'NMTID': 'nmtid',
+      });
+      expect(merged, 'MUSIC_U=abc; NMTID=nmtid');
     });
   });
 }
