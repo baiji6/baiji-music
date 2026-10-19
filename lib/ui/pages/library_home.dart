@@ -9,6 +9,7 @@ import '../../network/music_api.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 import 'about_page.dart';
+import 'play_stats_page.dart';
 import 'download_page.dart';
 import 'favorite_page.dart';
 import 'history_page.dart';
@@ -273,6 +274,16 @@ class _LibraryHomeState extends State<LibraryHome> {
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Column(
                       children: [
+                        // 本地播放统计（v2.3.1）：时长/次数/单曲循环，纯本地
+                        _SettingTile(
+                          icon: Icons.bar_chart_rounded,
+                          title: '播放统计',
+                          subtitle: '今日与近 7 日听歌时长 · 次数排行 · 最爱',
+                          color: AppColors.accent,
+                          onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                  builder: (_) => const PlayStatsPage())),
+                        ),
                         _SettingTile(
                           icon: Icons.settings_outlined,
                           title: '设置',
