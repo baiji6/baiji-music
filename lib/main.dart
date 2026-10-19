@@ -14,6 +14,7 @@ import 'core/capture_trust.dart';
 import 'core/dev_mode.dart';
 import 'core/kv_store.dart';
 import 'core/lyric_settings.dart';
+import 'core/play_stats.dart';
 import 'core/signature_guard.dart';
 import 'core/theme_controller.dart';
 import 'core/ui_settings.dart';
@@ -46,6 +47,8 @@ Future<void> main() async {
   await UiSettings.instance.load();
   // 内存图片缓存上限走KvStore，每次启动都要重新应用一次（进程级设置）
   CacheManager.applyMemoryLimit();
+  // 本地播放统计（听歌时长/次数/循环，纯本地）：KvStore 就绪后即开始采集
+  PlayStatsService.instance.start();
   // 日志落盘 + 回读当天历史：v2.2.6 起日志不再"每次打开软件就清空"，
   // 闪退后打开日志页能看到崩之前发生了什么。
   await AppLog.instance.initFileSink();

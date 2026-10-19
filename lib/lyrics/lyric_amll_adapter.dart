@@ -90,6 +90,12 @@ amll.LyricPreset lyricPresetFrom(LyricSettings s) {
       amll.LyricLineEffect.scale(.92),
       amll.LyricLineEffect.fade(.88),
     ]),
+    // 远处行虚化的开销档位（v2.3.1）：引擎对每条远处行逐帧做
+    // saveLayer + 高斯模糊，预设默认 maxSigma 4 / 每行 +1——一屏 8~10 行
+    // 全在模糊，中端机直接掉帧（用户反馈「太卡了」）。降到 2.5 / 0.4：
+    // 只有相邻几行有轻微虚化，层次感保留，逐帧模糊开销降一个量级。
+    distanceBlur: const amll.LyricDistanceBlur(
+        maxSigma: 2.5, sigmaPerLine: 0.4, whenBrowsing: false),
     // 预设自带的前奏/间奏圆点是白色的（面向深色底），浅色主题下会隐身；
     // 换成主题已唱色，既看得见又与逐字高亮同源。
     countdown: amll.LyricCountdown(

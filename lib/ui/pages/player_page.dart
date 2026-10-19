@@ -348,45 +348,70 @@ class _PlayerPageState extends State<PlayerPage> {
 
     // 全出血页面：自绘顶栏 + 自带 SafeArea 与渐变底，不套 PageScaffold 的
     // 顶栏和内容 Padding（否则窗口 inset 会双重叠加）。
+    //
+    // v2.3.1 恒暗沉浸面：有歌时整页（顶栏/封面页/歌词页/控制区）共用
+    // 同一张「封面放大模糊 + 深色幕布」底——之前只有歌词页有暗底，
+    // 封面页还是主题亮色，左右一滑白↔黑 反差强烈（用户反馈割裂感）。
+    // 与 QQ 音乐 / 网易云 / Apple Music 的播放页一致：整页压在封面
+    // 模糊上，与主题明暗解耦。
+    final immersive = song != null;
     return PageScaffold(
       showTopBar: false,
       snackbarHost: appSnackbarHostState,
       // Miuix 弹层统一挂在脚手架的 popup 作用域内（Stack 本身不占布局）
       bottomBar: _buildSheets(),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [AppColors.bg1, AppColors.bg0],
-          ),
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              // 顶栏：只保留返回键与音源标识（歌名/操作已下移到封面下方）
-              _buildTopBar(song, landscape),
-
-              if (song == null)
-                Expanded(
-                  child: Center(
-                    child: Text('未在播放\n去搜索一首歌吧',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            color: AppColors.textTertiary, fontSize: 13)),
+      child: immersive
+          ? ClipRect(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _LyricBackdrop(song: song)),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(gradient: _lyricScrim()),
+                      ),
+                    ),
                   ),
-                )
-              else if (landscape)
-                Expanded(child: _buildLandscape(song))
-              else
-                Expanded(child: _buildPortrait(song)),
-
-              // 进度条 + 控制区
-              _buildBottom(landscape),
-            ],
-          ),
-        ),
-      ),
+                  SafeArea(
+                    child: Column(
+                      children: [
+                        _buildTopBar(song, landscape),
+                        if (landscape)
+                          Expanded(child: _buildLandscape(song))
+                        else
+                          Expanded(child: _buildPortrait(song)),
+                        _buildBottom(landscape),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [AppColors.bg1, AppColors.bg0],
+                ),
+              ),
+              child: SafeArea(
+                child: Column(
+                  children: [
+                    _buildTopBar(song, landscape),
+                    Expanded(
+                      child: Center(
+                        child: Text('未在播放\n去搜索一首歌吧',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: AppColors.textTertiary, fontSize: 13)),
+                      ),
+                    ),
+                    _buildBottom(landscape),
+                  ],
+                ),
+              ),
+            ),
     );
   }
 
@@ -493,11 +518,12 @@ class _PlayerPageState extends State<PlayerPage> {
             MiuixIconButton(
               onPressed: () => Navigator.of(context).pop(),
               child: Icon(Icons.keyboard_arrow_down_rounded,
-                  color: AppColors.textSecondary, size: 28),
+                  color: AppPalette.dark.textSecondary, size: 28),
             ),
             const SizedBox(width: 2),
             Text('正在播放',
-                style: TextStyle(fontSize: 11, color: AppColors.textTertiary)),
+                style: TextStyle(
+                    fontSize: 11, color: AppPalette.dark.textTertiary)),
             const Spacer(),
             if (song != null) _SourceChip(song: song),
             const SizedBox(width: 4),
@@ -511,14 +537,14 @@ class _PlayerPageState extends State<PlayerPage> {
                 ));
               },
               child: Icon(Icons.mode_comment_outlined,
-                  size: 20, color: AppColors.textSecondary),
+                  size: 20, color: AppPalette.dark.textSecondary),
             ),
             // 歌词字号 / 对齐的快捷入口，不必绕到设置页
             MiuixIconButton(
               onPressed: () =>
                   setState(() => _showLyricStyleSheet = true),
               child: Icon(Icons.format_size_rounded,
-                  color: AppColors.textSecondary, size: 20),
+                  color: AppPalette.dark.textSecondary, size: 20),
             ),
           ],
         ),
@@ -606,7 +632,9 @@ class _PlayerPageState extends State<PlayerPage> {
                 : () => setState(() => _showRateSheet = true),
             child: Icon(Icons.speed_rounded,
                 size: 21,
-                color: _rate != 1.0 ? AppColors.accent : AppColors.textSecondary),
+                color: _rate != 1.0
+                    ? AppPalette.dark.accent
+                    : AppPalette.dark.textSecondary),
           ),
           const SizedBox(width: 12),
           // 音频规格（采样率 / 比特率 / 声道 / 编码）
@@ -615,7 +643,7 @@ class _PlayerPageState extends State<PlayerPage> {
                 ? null
                 : () => setState(() => _showAudioSpecSheet = true),
             child: Icon(Icons.graphic_eq_rounded,
-                size: 20, color: AppColors.accent),
+                size: 20, color: AppPalette.dark.accent),
           ),
         ],
       );
@@ -693,10 +721,9 @@ class _PlayerPageState extends State<PlayerPage> {
     if (future == null) {
       return Center(
           child: Text('暂无歌词',
-              style: TextStyle(color: AppColors.textTertiary, fontSize: 13)));
+              style: TextStyle(
+                  color: AppPalette.dark.textTertiary, fontSize: 13)));
     }
-    // 歌词卡片：半透明玻璃底 + 可调圆角（LyricSettings.corner）。
-    // 圆角为 0 时退化成直角卡片，视觉上与旧版一致。
     final settings = LyricSettings.instance;
     final corner = settings.corner;
     return FutureBuilder<Lyrics>(
@@ -716,7 +743,8 @@ class _PlayerPageState extends State<PlayerPage> {
           return Center(
             child: Text('暂无歌词\n本曲可能没有提供歌词资源',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textTertiary, fontSize: 13)),
+                style: TextStyle(
+                    color: AppPalette.dark.textTertiary, fontSize: 13)),
           );
         }
         // 网易云未登录时服务端只给逐行歌词（yrc 需要登录），
@@ -727,38 +755,19 @@ class _PlayerPageState extends State<PlayerPage> {
             !MusicApi.isLoggedIn(song.source) &&
             !lyrics.hasWordTiming &&
             !_neLoginHintDismissed;
-        // v2.3.0-fix5：歌词区从「玻璃卡片」换成 AMLL 风格全幅底——
-        // 当前歌封面放大重度模糊铺满 + 主题化暗幕/亮幕，歌词直接压在
-        // 暗底上（对齐用户参考视频1）。卡片圆角设置仍作用于裁剪。
+        // v2.3.1：模糊封面底与深色幕布已提升到整页（见 build），
+        // 歌词区这里只负责内容，直接透出页面共享的暗画布；
+        // 卡片圆角设置仍作用于裁剪（默认 0 = 不裁）。
         return ClipRRect(
           borderRadius: BorderRadius.circular(corner),
-          child: Stack(
+          child: Column(
             children: [
-              Positioned.fill(
-                child: song == null
-                    ? const SizedBox.shrink()
-                    : _LyricBackdrop(song: song),
-              ),
-              // 暗幕/亮幕：把模糊封面压到可读的明度，三色歌词才立得住
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(gradient: _lyricScrim()),
-                  ),
-                ),
-              ),
-              Positioned.fill(
-                child: Column(
-                  children: [
-                    if (showNeHint) _buildNeteaseLoginHint(),
-                    Expanded(
-                      child: AmllLyricsView(
-                        key: ValueKey(_lyricsKey),
-                        lyrics: lyrics,
-                        onSeek: _seekTo,
-                      ),
-                    ),
-                  ],
+              if (showNeHint) _buildNeteaseLoginHint(),
+              Expanded(
+                child: AmllLyricsView(
+                  key: ValueKey(_lyricsKey),
+                  lyrics: lyrics,
+                  onSeek: _seekTo,
                 ),
               ),
             ],
@@ -912,7 +921,7 @@ class _SongTitle extends StatelessWidget {
               fontSize: compact ? 16 : 20,
               height: 1.28,
               fontWeight: FontWeight.w800,
-              color: AppColors.textPrimary,
+              color: AppPalette.dark.textPrimary,
             ),
           ),
           if (sub.isNotEmpty) ...[
@@ -923,7 +932,7 @@ class _SongTitle extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                  fontSize: 12, color: AppColors.textSecondary),
+                  fontSize: 12, color: AppPalette.dark.textSecondary),
             ),
           ],
         ],
@@ -963,7 +972,9 @@ class _PageIndicator extends StatelessWidget {
                   height: 5,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(3),
-                    color: i == index ? AppColors.accent : AppColors.strokeGlass,
+                    color: i == index
+                        ? AppPalette.dark.accent
+                        : AppPalette.dark.strokeGlass,
                   ),
                 ),
               ),
@@ -986,16 +997,16 @@ class _SourceChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.surfaceGlass,
+        color: AppPalette.dark.surfaceGlass,
         borderRadius: BorderRadius.circular(11),
-        border: Border.all(color: AppColors.strokeGlass),
+        border: Border.all(color: AppPalette.dark.strokeGlass),
       ),
       child: Text(
         ne ? '网易云音乐' : 'QQ 音乐',
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
-          color: ne ? AppColors.accentAlt : AppColors.accent,
+          color: ne ? AppPalette.dark.accentAlt : AppPalette.dark.accent,
         ),
       ),
     );
@@ -1061,10 +1072,15 @@ class _CoverArt extends StatelessWidget {
 /// AMLL 风格歌词底：封面放大 + 重度高斯模糊。
 ///
 /// 参考视频（v2.3.0-fix5 视频1）里歌词页是一张暗化的模糊封面。实现要点：
-/// - 放大 1.8 倍再模糊：高斯模糊会把边缘约 sigma 宽的范围啃成透明，
-///   放大后原图永远盖满裁剪区，不会露黑边；
-/// - 解码宽度钳到 1000px 以内：模糊后没有细节可言，按屏幕尺寸解码即可
-///   （封面原图 1500~3000px，全尺寸解码要几十 MB）；
+/// - 放大 1.25 倍再模糊：高斯模糊会把边缘约 sigma 宽的范围啃成透明，
+///   放大后原图永远盖满裁剪区，不会露黑边（v2.3.1 从 1.8 降下来——
+///   sigma 40 下 1.25 倍与 1.8 倍肉眼无差，但 GPU 纹理面积小一半，
+///   进播放页的首帧卡顿明显减轻）；
+/// - 解码宽度钳到 480px 以内：模糊后没有细节可言（封面原图
+///   1500~3000px，全尺寸解码要几十 MB）；
+/// - [RepaintBoundary]：歌词视图逐帧重绘（逐字跟手），必须把这张
+///   静态模糊图隔离开——否则它会被连带重滤波，每帧一次全屏高斯模糊
+///   是用户反馈「太卡了」的主因；
 /// - 纯展示层，不响应手势（点击跳转由上层歌词视图处理）。
 class _LyricBackdrop extends StatelessWidget {
   const _LyricBackdrop({required this.song});
@@ -1073,26 +1089,28 @@ class _LyricBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRect(
-      child: ImageFiltered(
-        imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
-        child: LayoutBuilder(
-          builder: (ctx, c) {
-            final side = math.max(c.maxWidth, c.maxHeight) * 1.8;
-            final decode = side.round().clamp(240, 1000);
-            return Center(
-              child: SizedBox(
-                width: side,
-                height: side,
-                child: CoverImage(
-                  song: song,
-                  size: side,
-                  radius: 0,
-                  memCacheWidth: decode,
+    return RepaintBoundary(
+      child: ClipRect(
+        child: ImageFiltered(
+          imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
+          child: LayoutBuilder(
+            builder: (ctx, c) {
+              final side = math.max(c.maxWidth, c.maxHeight) * 1.25;
+              final decode = side.round().clamp(240, 480);
+              return Center(
+                child: SizedBox(
+                  width: side,
+                  height: side,
+                  child: CoverImage(
+                    song: song,
+                    size: side,
+                    radius: 0,
+                    memCacheWidth: decode,
+                  ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
@@ -1144,7 +1162,7 @@ class PlayerProgressSection extends StatelessWidget {
               final value = pos.inMilliseconds.clamp(0, maxMs.round());
               final timeStyle = TextStyle(
                   fontSize: 11,
-                  color: AppColors.textTertiary,
+                  color: AppPalette.dark.textTertiary,
                   fontWeight: FontWeight.w500);
               // 时间夹在轨道两端（对齐参考视频2的布局）
               return Row(
@@ -1205,11 +1223,10 @@ class ThinProgressBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final maxMs = max > 0 ? max : 1.0;
     final progress = (value / maxMs).clamp(0.0, 1.0);
-    final dark = AppColors.isDark;
-    final played = dark ? Colors.white : AppColors.textPrimary;
-    final remaining = dark
-        ? Colors.white.withValues(alpha: 0.28)
-        : Colors.black.withValues(alpha: 0.16);
+    // v2.3.1：进度条只在播放页（恒暗沉浸面）使用，恒取白色系，
+    // 不再跟随主题明暗（浅色主题下的黑轨在暗底上会隐身）。
+    const played = Colors.white;
+    final remaining = Colors.white.withValues(alpha: 0.28);
     return LayoutBuilder(
       builder: (ctx, c) {
         final width = c.maxWidth;
@@ -1320,7 +1337,9 @@ class _ControlsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dim = hasSong ? AppColors.textPrimary : AppColors.textTertiary;
+    final dim = hasSong
+        ? AppPalette.dark.textPrimary
+        : AppPalette.dark.textTertiary;
     final main = compact ? 46.0 : 62.0;
     return Padding(
       padding: EdgeInsets.fromLTRB(compact ? 0 : 16, 6, compact ? 0 : 16, 0),
@@ -1331,7 +1350,8 @@ class _ControlsRow extends StatelessWidget {
           MiuixIconButton(
             onPressed: hasSong ? () => onMode() : null,
             child: Icon(mode.icon,
-                size: compact ? 19 : 22, color: AppColors.textSecondary),
+                size: compact ? 19 : 22,
+                color: AppPalette.dark.textSecondary),
           ),
           SizedBox(width: compact ? 8 : 0),
           MiuixIconButton(
@@ -1348,12 +1368,15 @@ class _ControlsRow extends StatelessWidget {
               gradient: LinearGradient(
                 colors: hasSong
                     ? AppColors.neonGradient
-                    : [AppColors.surfaceGlassStrong, AppColors.surfaceGlass],
+                    : [
+                        AppPalette.dark.surfaceGlassStrong,
+                        AppPalette.dark.surfaceGlass
+                      ],
               ),
               boxShadow: hasSong
                   ? [
                       BoxShadow(
-                        color: AppColors.accent.withValues(alpha: 0.45),
+                        color: AppPalette.dark.accent.withValues(alpha: 0.45),
                         blurRadius: 22,
                       )
                     ]
@@ -1363,7 +1386,7 @@ class _ControlsRow extends StatelessWidget {
               onPressed: hasSong ? () => onToggle() : null,
               child: Icon(
                 playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                color: hasSong ? Colors.white : AppColors.textTertiary,
+                color: hasSong ? Colors.white : AppPalette.dark.textTertiary,
                 size: main * 0.55,
               ),
             ),
@@ -1380,7 +1403,8 @@ class _ControlsRow extends StatelessWidget {
             child: Icon(
               favorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
               size: compact ? 20 : 23,
-              color: favorite ? AppColors.aqua : AppColors.textSecondary,
+              color:
+                  favorite ? AppColors.aqua : AppPalette.dark.textSecondary,
             ),
           ),
         ],
@@ -1461,9 +1485,9 @@ class _QualityButton extends StatelessWidget {
         height: 38,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: AppColors.surfaceGlass,
+          color: AppPalette.dark.surfaceGlass,
           borderRadius: BorderRadius.circular(19),
-          border: Border.all(color: AppColors.strokeGlass),
+          border: Border.all(color: AppPalette.dark.strokeGlass),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1472,14 +1496,18 @@ class _QualityButton extends StatelessWidget {
                 size: 16,
                 color: downgraded
                     ? AppColors.warning
-                    : (netease ? AppColors.accentAlt : AppColors.accent)),
+                    : (netease
+                        ? AppPalette.dark.accentAlt
+                        : AppPalette.dark.accent)),
             const SizedBox(width: 6),
             Text(
               label,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: downgraded ? AppColors.warning : AppColors.textSecondary,
+                color: downgraded
+                    ? AppColors.warning
+                    : AppPalette.dark.textSecondary,
               ),
             ),
           ],
@@ -1651,9 +1679,9 @@ class _DownloadButton extends StatelessWidget {
         height: 38,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: AppColors.surfaceGlass,
+          color: AppPalette.dark.surfaceGlass,
           borderRadius: BorderRadius.circular(19),
-          border: Border.all(color: AppColors.strokeGlass),
+          border: Border.all(color: AppPalette.dark.strokeGlass),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1672,7 +1700,9 @@ class _DownloadButton extends StatelessWidget {
             else
               Icon(Icons.download_rounded,
                   size: 16,
-                  color: enabled ? AppColors.accent : AppColors.textTertiary),
+                  color: enabled
+                      ? AppPalette.dark.accent
+                      : AppPalette.dark.textTertiary),
             const SizedBox(width: 6),
             Text(
               downloading
@@ -1681,8 +1711,9 @@ class _DownloadButton extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color:
-                    enabled ? AppColors.textSecondary : AppColors.textTertiary,
+                color: enabled
+                    ? AppPalette.dark.textSecondary
+                    : AppPalette.dark.textTertiary,
               ),
             ),
           ],

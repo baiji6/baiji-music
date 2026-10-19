@@ -29,6 +29,7 @@ import '../widgets/cover_image.dart';
 import '../widgets/lyric_style_sheet.dart';
 import 'qq_login_page.dart';
 import 'netease_login_page.dart';
+import 'play_stats_page.dart';
 
 /// 歌词字重档位名（300~900，步进 100）。
 const List<String> _lyricWeightNames = ['细', '常规', '中等', '半粗', '粗', '特粗', '黑'];
@@ -635,6 +636,17 @@ class _SettingsPageState extends State<SettingsPage> {
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
                 children: [
+                  // 本地播放统计（v2.3.1）：时长 / 次数 / 单曲循环，纯本地
+                  MiuixArrowPreference(
+                    title: '播放统计',
+                    summary: '今日与近 7 日听歌时长、播放次数与最爱歌曲',
+                    startAction: Icon(Icons.bar_chart_rounded,
+                        color: AppColors.accent, size: 22),
+                    onClick: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const PlayStatsPage())),
+                  ),
+                  const MiuixHorizontalDivider(),
                   // 主题偏好是 ChangeNotifier，只重建这一行，不波及整个设置页
                   AnimatedBuilder(
                     animation: ThemeController.instance,

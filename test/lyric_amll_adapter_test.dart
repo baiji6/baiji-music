@@ -107,4 +107,13 @@ void main() {
     expect(inactive.opacity, greaterThanOrEqualTo(0.88));
     expect(p.lineTransition.state(true).opacity, 1.0);
   });
+
+  test('预设映射：远处行虚化的开销档位（v2.3.1 卡顿回归）', () {
+    // appleMusic 预设默认 maxSigma 4 / sigmaPerLine 1——一屏 8~10 行
+    // 全在逐帧 saveLayer + 高斯模糊，中端机直接掉帧（用户反馈「太卡」）。
+    // 锁定降到 2.5 / 0.4 的性能档位。
+    final p = lyricPresetFrom(LyricSettings.instance);
+    expect(p.distanceBlur.maxSigma, 2.5);
+    expect(p.distanceBlur.sigmaPerLine, 0.4);
+  });
 }

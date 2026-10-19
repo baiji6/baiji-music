@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_version.dart';
 import '../../core/dev_mode.dart';
@@ -7,6 +8,24 @@ import '../../theme/app_theme.dart';
 import '../widgets/agreement_dialog.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
+
+/// 项目主页（GitHub）。
+const String kGitHubUrl = 'https://github.com/baiji6/baiji-music';
+
+/// QQ 群跳转链接（点击唤起 QQ 加群）。
+const String kQqGroupUrl =
+    'https://qun.qq.com/universal-share/share?ac=1&authKey=GZcIArq0%2FC2kFnBz%2BXIW64EAkp6ntNaaFHCcOCx2zoRPfkpC8MvkhHvq1vcyRcNN&busi_data=eyJncm91cENvZGUiOiIxMDcwNTcxNjM2IiwidG9rZW4iOiJTNlRyVkEybVk4a2RRa3FDVHhKbjRCL0VZVWlLeDlreFFEeEJVQUdoRzdRWFU4aENkblJVTXl0c1JPWGcyTzV6IiwidWluIjoiMjQ0OTA2NzgzNCJ9&data=Z1IltiwQtQxFk_RSwY8M-iPQhNL88DSNZvzroAQ9tEqKPea5C7pnQXzzUgaz5MSXFag-PPHOE2gzfvCd0vK23w&svctype=4&tempid=h5_group_info';
+
+/// QQ 群号（展示用）。
+const String kQqGroupId = '1070571636';
+
+Future<void> _launchExternal(String url) async {
+  final uri = Uri.parse(url);
+  // externalApplication：GitHub 走浏览器，QQ 群链接走系统分发（能唤起 QQ）
+  if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+    showAppSnack('无法打开链接：$url');
+  }
+}
 
 /// 关于页。
 ///
@@ -34,6 +53,9 @@ class _AboutPageState extends State<AboutPage> {
 
   /// 密码可见性（小眼睛切换）。
   bool _obscurePassword = true;
+
+  /// 捐赠码弹层显隐（声明式，挂 bottomBar 槽位）。
+  bool _showDonateDialog = false;
 
   final _passwordController = TextEditingController();
 
@@ -154,6 +176,42 @@ class _AboutPageState extends State<AboutPage> {
               ),
             ),
             const SizedBox(height: 24),
+            // 社区与支持（v2.3.1）：GitHub 项目主页 / QQ 群 / 捐赠
+            const SectionHeader(
+                title: '社区与支持', icon: Icons.volunteer_activism_rounded),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                children: [
+                  MiuixArrowPreference(
+                    title: 'GitHub 项目主页',
+                    summary: kGitHubUrl,
+                    startAction: Icon(Icons.code_rounded,
+                        color: AppColors.accent, size: 22),
+                    onClick: () => _launchExternal(kGitHubUrl),
+                  ),
+                  MiuixHorizontalDivider(
+                      thickness: 1, color: AppColors.strokeGlass),
+                  MiuixArrowPreference(
+                    title: 'QQ 交流群',
+                    summary: '群号 $kQqGroupId · 点击唤起 QQ 加群',
+                    startAction: Icon(Icons.groups_rounded,
+                        color: AppColors.accentAlt, size: 22),
+                    onClick: () => _launchExternal(kQqGroupUrl),
+                  ),
+                  MiuixHorizontalDivider(
+                      thickness: 1, color: AppColors.strokeGlass),
+                  MiuixArrowPreference(
+                    title: '请作者喝一杯',
+                    summary: '扫描收款码捐赠 · 全部自愿',
+                    startAction: Icon(Icons.redeem_rounded,
+                        color: AppColors.warning, size: 22),
+                    onClick: () => setState(() => _showDonateDialog = true),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
             // 法律信息（从设置页移来：与「关于」语义一致，设置页不再重复）
             const SectionHeader(
                 title: '法律信息', icon: Icons.gavel_rounded),
@@ -199,12 +257,70 @@ class _AboutPageState extends State<AboutPage> {
     title: '关于',
     snackbarHost: appSnackbarHostState,
     contentPadding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
-    bottomBar: _buildPasswordDialog(),
+    bottomBar: Stack(children: [
+      _buildPasswordDialog(),
+      _buildDonateDialog(),
+    ]),
     child: body,
   );
   }
 
-  /// 开发者模式密码弹层（声明式，挂 bottomBar 槽位由 root popup host 渲染）。
+  /// 捐赠码弹层：支付宝收款码 + 微信赞赏码并排，长按无动作（截图保存）。
+  Widget _buildDonateDialog() {
+    return MiuixOverlayDialog(
+      show: _showDonateDialog,
+      title: '请作者喝一杯',
+      summary: '开发与维护不易，扫码支持一下（完全自愿）',
+      backgroundColor: AppColors.bg2,
+      onDismissRequest: () => setState(() => _showDonateDialog = false),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.asset('assets/donate/alipay.jpg',
+                          width: 150, fit: BoxFit.cover),
+                    ),
+                    const SizedBox(height: 6),
+                    Text('支付宝',
+                        style: TextStyle(
+                            fontSize: 12, color: AppColors.textSecondary)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.asset('assets/donate/reward.png',
+                          width: 150, fit: BoxFit.cover),
+                    ),
+                    const SizedBox(height: 6),
+                    Text('微信赞赏',
+                        style: TextStyle(
+                            fontSize: 12, color: AppColors.textSecondary)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          MiuixTextButton('关闭', onPressed: () {
+            setState(() => _showDonateDialog = false);
+          }),
+        ],
+      ),
+    );
+  }
+
+  // 开发者模式密码弹层（声明式，挂 bottomBar 槽位由 root popup host 渲染）。
   Widget _buildPasswordDialog() {
     return MiuixOverlayDialog(
         show: _showPasswordDialog,
