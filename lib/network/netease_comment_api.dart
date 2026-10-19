@@ -91,13 +91,40 @@ abstract final class NeteaseCommentApi {
     );
   }
 
-  /// 从 Cookie 串取 `__csrf`（写接口的 csrf_token 表单值）。
+  /// 从 Cookie 串取 csrf（写接口的 csrf_token 表单值）。
   ///
-  /// 登录态 Cookie 由扫码/手动登录保存，`__csrf` 是网易云登录时下发的。
+  /// 浏览器粘贴的 Cookie 字段名是 `__csrf`；扫码登录 Set-Cookie 下发的
+  /// 字段名是 `__csrf_token`（v2.3.0-fix6 起两者都认，扫码用户不再空 csrf）。
   static String csrfFromCookie(String cookie) {
     final map = <String, String>{};
     NeteaseClient.parseCookie(cookie, map);
-    return map['__csrf'] ?? '';
+    return map['__csrf'] ?? map['__csrf_token'] ?? '';
+  }
+
+  /// 写操作前把会话补齐到浏览器形态（v2.3.0-fix6，250 风控缓解）。
+  ///
+  /// 粘贴 Cookie 登录不会跑 [NeteaseClient.enrichCookie]（只有扫码登录
+  /// 会跑），若用户只粘了 MUSIC_U 等登录字段，会话缺 NMTID/_ntes_nuid
+  /// 等浏览器字段——服务端风控对「带登录态却毫无会话痕迹」的写请求
+  /// 评分很高（表现即 code=250）。已含 NMTID 说明是完整浏览器会话，
+  /// 直接跳过；补齐限时 3 秒，失败不阻塞发送。
+  static Future<void> _ensureSession() async {
+    final client = AppServices.instance.netease;
+    if (client.cookie.contains('NMTID=')) return;
+    try {
+      await client.enrichCookie().timeout(const Duration(seconds: 3));
+    } catch (_) {
+      // 补齐失败不阻塞发送
+    }
+  }
+
+  /// 从响应里提取服务端消息（250 等失败码的原文，便于远程诊断）。
+  static String? _serverMessage(Map<String, dynamic> data) {
+    for (final k in const ['message', 'msg', 'debugInfo']) {
+      final v = data[k];
+      if (v != null && v.toString().trim().isNotEmpty) return v.toString();
+    }
+    return null;
   }
 
   // ================= 网络 =================
@@ -129,6 +156,7 @@ abstract final class NeteaseCommentApi {
     if (!client.isLoggedIn()) {
       throw Exception('登录后可发表评论');
     }
+    await _ensureSession();
     final csrf = csrfFromCookie(client.cookie);
     // 回复走专用端点（commentId = 被回复评论 id），顶层评论走 add
     final isReply = replyTo != null && replyTo.isNotEmpty;
@@ -142,12 +170,19 @@ abstract final class NeteaseCommentApi {
         '${isReply ? 'reply' : 'add'}';
     final data = await client.postWeapi(url, payload, csrf: csrf);
     final code = _toInt(data['code']);
+    final serverMsg = _serverMessage(data);
     if (code == 250) {
-      // weapi 形态下仍可能触发真风控（频繁操作），文案引导稍后再试
-      throw Exception('发送过于频繁或被网易云风控，请稍后再试');
+      // weapi 形态下仍可能触发真风控（账号/设备指纹/频率评分）。
+      // v2.3.0-fix6 起请求指纹已对齐真浏览器并发送前补齐会话字段，
+      // 仍 250 多为账号近期被反复失败请求拉高了风控分，等待后会回落。
+      throw Exception(
+          '网易云风控拦截（250${serverMsg == null ? '' : '：$serverMsg'}）：'
+          '请过几分钟再试；若持续出现，请到登录页重新粘贴完整的浏览器 '
+          'Cookie（F12 → 网络 → 任意 music.163.com 请求 → 复制整段 Cookie）');
     }
     if (code != 200) {
-      throw Exception('发表评论失败（$code）');
+      throw Exception(
+          '发表评论失败（$code${serverMsg == null ? '' : '：$serverMsg'}）');
     }
     AppLog.i('NeteaseCommentApi', '发表评论成功 song=$songId');
   }
@@ -159,6 +194,7 @@ abstract final class NeteaseCommentApi {
     if (!client.isLoggedIn()) {
       throw Exception('登录后可点赞');
     }
+    await _ensureSession();
     final csrf = csrfFromCookie(client.cookie);
     final url = 'https://music.163.com/weapi/v1/comment/'
         '${like ? 'like' : 'unlike'}';
@@ -168,11 +204,16 @@ abstract final class NeteaseCommentApi {
       'csrf_token': csrf,
     }, csrf: csrf);
     final code = _toInt(data['code']);
+    final serverMsg = _serverMessage(data);
     if (code == 250) {
-      throw Exception('操作过于频繁或被网易云风控，请稍后再试');
+      throw Exception(
+          '网易云风控拦截（250${serverMsg == null ? '' : '：$serverMsg'}）：'
+          '请过几分钟再试');
     }
     if (code != 200) {
-      throw Exception('${like ? "点赞" : "取消点赞"}失败（$code）');
+      throw Exception(
+          '${like ? "点赞" : "取消点赞"}失败'
+          '（$code${serverMsg == null ? '' : '：$serverMsg'}）');
     }
     AppLog.i('NeteaseCommentApi', '${like ? "点赞" : "取消点赞"}成功 cmt=$commentId');
   }

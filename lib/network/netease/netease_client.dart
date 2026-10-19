@@ -168,6 +168,9 @@ class NeteaseClient {
   /// 同款做法是打 `/weapi/...?csrf_token=X`，请求体为 AES 双层加密的
   /// `params` + RSA 的 `encSecKey`（见 [NeteaseWeapi]），实测同一账号
   /// 同一 Cookie 立即 code=200。
+  ///
+  /// v2.3.0-fix6：weapi 请求指纹对齐真浏览器（风控 250 缓解，见
+  /// [_weapiHeaders]）。
   Future<Map<String, dynamic>> postWeapi(
     String weapiUrl,
     Map<String, dynamic> payload, {
@@ -178,8 +181,31 @@ class NeteaseClient {
         'params=${Uri.encodeQueryComponent(encrypted.params)}'
         '&encSecKey=${Uri.encodeQueryComponent(encrypted.encSecKey)}';
     final url = '$weapiUrl?csrf_token=${Uri.encodeQueryComponent(csrf)}';
-    return _postForm(body, url, isJson: false);
+    return _postForm(body, url, headers: _weapiHeaders());
   }
+
+  /// weapi（网页端通道）专用请求头：**对齐真浏览器指纹**。
+  ///
+  /// weapi 是网页端通道，之前通用头里的三样东西都是「非浏览器」标记，
+  /// 叠在浏览器 Cookie 上会抬高风控评分（实测表现即写接口 code=250）：
+  /// - UA 带 `NeteaseMusicDesktop/2.10.2`（桌面客户端标识）；
+  /// - Cookie 被追加了 `os=pc; appver=…; osver=…; deviceId=pyncm!`
+  ///   （桌面客户端 + 第三方库标记）；
+  /// - 浏览器对同源 POST 必带的 `Origin` 头缺失。
+  /// 因此 weapi 请求改用纯浏览器 UA + Origin，Cookie 原样直传不加工
+  /// （eapi / 明文 api 通道维持原头不变，那些通道吃桌面客户端指纹）。
+  Map<String, String> _weapiHeaders() => {
+        'User-Agent': webUserAgent,
+        'Referer': referer,
+        'Origin': 'https://music.163.com',
+        'Cookie': cookie,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      };
+
+  /// 纯浏览器 UA（weapi 通道专用，见 [_weapiHeaders]）。
+  static const String webUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
   /// 网页版接口 GET。
   Future<Map<String, dynamic>> getApi(String apiUrl) async {
@@ -223,11 +249,13 @@ class NeteaseClient {
     }
   }
 
-  Future<Map<String, dynamic>> _postForm(
-      String body, String url, {bool isJson = false}) async {
+  Future<Map<String, dynamic>> _postForm(String body, String url,
+      {bool isJson = false, Map<String, String>? headers}) async {
     final resp = await _retry(() => _dio.post(url,
         data: body,
-        options: Options(headers: _baseHeaders(), validateStatus: (_) => true)));
+        options: Options(
+            headers: headers ?? _baseHeaders(),
+            validateStatus: (_) => true)));
     return _decode(resp, url);
   }
 

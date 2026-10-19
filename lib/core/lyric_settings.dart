@@ -60,6 +60,14 @@ class LyricSettings extends ChangeNotifier {
   /// v2.3.0-fix5 起默认左对齐；用户仍可在样式面板切居中。
   static const bool defaultAlignLeft = true;
 
+  /// 歌词画布底色（v2.3.0-fix6）。
+  ///
+  /// 歌词区是**恒暗画布**：不论 app 亮暗主题，歌词永远压在封面模糊 +
+  /// 深色幕布上（参考视频与 AMLL / Apple Music 的标准形态）。三色的
+  /// 默认值与可读性解析都按这块暗底走，与系统主题解耦。
+  /// 取值与 AppPalette.dark.bg1 一致（const 上下文不能引用实例属性）。
+  static const Color lyricCanvasBg = Color(0xFF0A0F1E);
+
   static const String _prefs = 'lyric_view';
   static const String _kFont = 'font_size';
   static const String _kAlign = 'align';
@@ -111,14 +119,15 @@ class LyricSettings extends ChangeNotifier {
   /// 歌词卡片圆角半径（逻辑像素）。
   double get corner => _corner;
 
-  /// 已唱色（逐字填充的目标色）。未自定义时跟随主题。
-  Color get sungColor => _sungCustom ?? AppColors.karaoke;
+  /// 已唱色（逐字填充的目标色）。未自定义时恒取深色板
+  /// （歌词区是恒暗画布，见 [lyricCanvasBg]，与 app 主题明暗无关）。
+  Color get sungColor => _sungCustom ?? AppPalette.dark.karaoke;
 
-  /// 当前行未唱色。未自定义时跟随主题。
-  Color get unsungColor => _unsungCustom ?? AppColors.lyricUnsung;
+  /// 当前行未唱色。未自定义时恒取深色板。
+  Color get unsungColor => _unsungCustom ?? AppPalette.dark.lyricUnsung;
 
-  /// 非当前行颜色。未自定义时跟随主题。
-  Color get inactiveColor => _inactiveCustom ?? AppColors.lyricInactive;
+  /// 非当前行颜色。未自定义时恒取深色板。
+  Color get inactiveColor => _inactiveCustom ?? AppPalette.dark.lyricInactive;
 
   // ===== 可读性保障（#80 逐行歌词高亮隐身回归 / v2.2.9-fix1 逐字染色回归） =====
 
@@ -180,25 +189,29 @@ class LyricSettings extends ChangeNotifier {
           Color custom, Color themedFallback, Color bg) =>
       _resolveReadable(custom, themedFallback, bg: bg);
 
-  /// 当前行未唱色的可读版本（歌词区背景近似为 [AppColors.bg1]）。
+  /// 当前行未唱色的可读版本（歌词区是恒暗画布，按 [lyricCanvasBg] 解析）。
   Color get readableUnsungColor =>
-      _resolveReadable(unsungColor, AppColors.lyricUnsung);
+      _resolveReadable(unsungColor, AppPalette.dark.lyricUnsung,
+          bg: lyricCanvasBg);
 
   /// 非当前行颜色的可读版本。
   Color get readableInactiveColor =>
-      _resolveReadable(inactiveColor, AppColors.lyricInactive);
+      _resolveReadable(inactiveColor, AppPalette.dark.lyricInactive,
+          bg: lyricCanvasBg);
 
   /// 已唱色的可读版本。
   ///
   /// 额外保证与解析后的未唱色**不同色**：两者相同时填充渐变两端一致，
-  /// 逐字染色完全隐形。碰撞时强制用主题强调色（青/深青，与任何白灰
-  /// 墨都不同色相）拉开。
+  /// 逐字染色完全隐形。碰撞时强制用强调色（与任何白灰墨都不同色相）
+  /// 拉开。
   /// v2.3.0-fix5：主题已唱色的默认值本身变成了白（AMLL 参考视频就是
   /// 白色填充），兜不住白/灰碰撞，因此逃逸目标从 karaoke 换成 accent。
+  /// v2.3.0-fix6：按恒暗画布解析，逃逸色取深色板强调色（画布一致性）。
   Color get readableSungColor {
-    final s = _resolveReadable(sungColor, AppColors.karaoke);
+    final s = _resolveReadable(sungColor, AppPalette.dark.karaoke,
+        bg: lyricCanvasBg);
     if (s == readableUnsungColor) {
-      final escape = AppColors.accent;
+      final escape = AppPalette.dark.accent;
       if (escape != s) return escape;
     }
     return s;
@@ -206,6 +219,7 @@ class LyricSettings extends ChangeNotifier {
 
   /// 应用启动时调用一次，从本地存储恢复设置。
   Future<void> load() async {
+    await _migrateIfNeeded();
     final f = KvStore.instance.getString('$_prefs:$_kFont');
     final a = KvStore.instance.getString('$_prefs:$_kAlign');
     final sc = KvStore.instance.getString('$_prefs:$_kScale');
@@ -216,7 +230,10 @@ class LyricSettings extends ChangeNotifier {
     final inactive = KvStore.instance.getString('$_prefs:$_kInactive');
     _fontSize = (double.tryParse(f ?? '') ?? defaultFontSize)
         .clamp(minFontSize, maxFontSize);
-    _alignLeft = a == 'left';
+    // v2.3.0-fix5 默认从居中改为左对齐：键不存在（从未设置过）时必须
+    // 取新默认值，不能像旧代码那样把 null 等同于 'center'（旧默认）——
+    // 否则老用户永远拿不到新默认的左对齐。
+    _alignLeft = a == null ? defaultAlignLeft : (a == 'left');
     _activeScale = (double.tryParse(sc ?? '') ?? defaultActiveScale)
         .clamp(minActiveScale, maxActiveScale);
     _weight = (int.tryParse(w ?? '') ?? defaultWeight)
@@ -237,6 +254,45 @@ class LyricSettings extends ChangeNotifier {
       return; // 无需通知，还没有监听者
     }
     notifyListeners();
+  }
+
+  /// 设置结构版本。v2.3.0-fix6 起：fix5 对默认样式做过一次大改（字号
+  /// 17→26、圆角 24→0、居中→左对齐、三色改 AMLL 白/灰），但老用户
+  /// 本地持久化过**旧默认值**（用户曾碰过样式面板的任意控件就会把当时
+  /// 的值写进存储），这些值会被误当成个人偏好，把新默认值全部压住——
+  /// 表现为「升级后歌词还是旧样式」。迁移只处理与旧默认**完全相等**的
+  /// 项（真正改过的保留），然后写版本号，永不再跑。
+  static const String _kVersion = 'settings_version';
+  static const int currentSettingsVersion = 1;
+
+  /// fix4 及以前的默认值（迁移判定基准）。
+  static const String _legacyFont = '17.0';
+  static const String _legacyCorner = '24.0';
+  static const String _legacyAlign = 'center';
+  static const List<(String, String)> _legacyColors = [
+    ('$_prefs:$_kSung', '#A8F685'), // 已唱 = 荧光黄绿
+    ('$_prefs:$_kUnsung', '#F2F5FF'), // 未唱 = 亮白
+    ('$_prefs:$_kInactive', '#5A6686'), // 非当前行 = 暗灰
+  ];
+
+  Future<void> _migrateIfNeeded() async {
+    final ver = KvStore.instance.getInt('$_prefs:$_kVersion', def: 0);
+    if (ver >= currentSettingsVersion) return;
+    if (KvStore.instance.getString('$_prefs:$_kFont') == _legacyFont) {
+      await KvStore.instance.remove('$_prefs:$_kFont');
+    }
+    if (KvStore.instance.getString('$_prefs:$_kCorner') == _legacyCorner) {
+      await KvStore.instance.remove('$_prefs:$_kCorner');
+    }
+    if (KvStore.instance.getString('$_prefs:$_kAlign') == _legacyAlign) {
+      await KvStore.instance.remove('$_prefs:$_kAlign');
+    }
+    for (final (key, legacy) in _legacyColors) {
+      if (KvStore.instance.getString(key) == legacy) {
+        await KvStore.instance.remove(key);
+      }
+    }
+    await KvStore.instance.setInt('$_prefs:$_kVersion', currentSettingsVersion);
   }
 
   Future<void> setFontSize(double v) async {
@@ -323,8 +379,8 @@ class LyricSettings extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 系统明暗切换时由根组件调用：未自定义的三色要重新取主题默认值，
-  /// 播放页的歌词列表监听本对象，推一次即可重排。
+  /// 系统明暗切换时由根组件调用：三色默认值已与主题解耦（恒暗画布），
+  /// 通知只为让监听方（播放页歌词视图）在主题切换时统一重排一次。
   void notifyThemeChanged() => notifyListeners();
 
   /// `#RRGGBB` 十六进制串 → Color；非法输入返回 null（交给调用方用默认值）。

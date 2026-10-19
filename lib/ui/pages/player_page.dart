@@ -768,43 +768,40 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  /// 歌词区幕布：深色主题压黑、浅色主题提白，上下略带渐变。
+  /// 歌词区幕布：**恒暗**（v2.3.0-fix6）。
   ///
-  /// 取值同时服务两套三色（深色主题白/灰字、浅色主题墨字）：
-  /// 深色幕 50%→72% 黑时白字对比度 ≥ 8:1；浅色幕 72%→88% 白时
-  /// 墨字对比度 ≥ 7:1（相对幕布中心明度估算）。
+  /// 参考视频1 与 AMLL / Apple Music 的歌词都是压在封面模糊上的暗画布，
+  /// 与 app 亮暗主题无关——浅色主题下若跟随主题换成白幕，三色（白/灰）
+  /// 会隐身，整页观感也和参考视频完全不同。深色幕 50%→72% 黑时白字
+  /// 对比度 ≥ 8:1。
   static Gradient _lyricScrim() {
-    final dark = AppColors.isDark;
-    final top = dark
-        ? Colors.black.withValues(alpha: 0.50)
-        : Colors.white.withValues(alpha: 0.72);
-    final mid = dark
-        ? Colors.black.withValues(alpha: 0.60)
-        : Colors.white.withValues(alpha: 0.80);
-    final bottom = dark
-        ? Colors.black.withValues(alpha: 0.72)
-        : Colors.white.withValues(alpha: 0.88);
     return LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
-      colors: [top, mid, bottom],
+      colors: [
+        Colors.black.withValues(alpha: 0.50),
+        Colors.black.withValues(alpha: 0.60),
+        Colors.black.withValues(alpha: 0.72),
+      ],
       stops: const [0.0, 0.5, 1.0],
     );
   }
 
   /// 网易云未登录提示条：说明为什么只有逐行歌词，并提供去登录入口。
   Widget _buildNeteaseLoginHint() {
+    // 歌词区是恒暗画布（见 _lyricScrim），提示条配色取深色板，
+    // 不随主题明暗切换（浅色主题下墨字会隐没在暗底上）。
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
       child: Row(
         children: [
           Icon(Icons.lyrics_outlined,
-              size: 15, color: AppColors.textTertiary),
+              size: 15, color: AppPalette.dark.textTertiary),
           const SizedBox(width: 6),
           Expanded(
             child: Text('网易云未登录：仅逐行歌词，登录后显示逐字染色',
                 style: TextStyle(
-                    color: AppColors.textSecondary, fontSize: 12)),
+                    color: AppPalette.dark.textSecondary, fontSize: 12)),
           ),
           GestureDetector(
             onTap: () {
@@ -816,7 +813,7 @@ class _PlayerPageState extends State<PlayerPage> {
                   const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               child: Text('去登录',
                   style: TextStyle(
-                      color: AppColors.accent,
+                      color: AppPalette.dark.accent,
                       fontSize: 12,
                       fontWeight: FontWeight.w600)),
             ),
@@ -828,7 +825,7 @@ class _PlayerPageState extends State<PlayerPage> {
               padding:
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               child: Icon(Icons.close,
-                  size: 15, color: AppColors.textTertiary),
+                  size: 15, color: AppPalette.dark.textTertiary),
             ),
           ),
         ],

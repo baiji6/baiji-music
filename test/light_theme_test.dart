@@ -266,28 +266,29 @@ void main() {
     });
   });
 
-  group('歌词三色跟随主题', () {
-    test('未自定义时跟随当前主题默认', () async {
+  group('歌词三色恒暗画布（v2.3.0-fix6：与主题明暗解耦）', () {
+    test('未自定义时恒为暗画布三色，浅色主题下也是白/灰', () async {
       await LyricSettings.instance.resetColors();
       AppColors.setBrightness(Brightness.light);
-      expect(LyricSettings.instance.unsungColor, const Color(0xFF12233F));
-      expect(LyricSettings.instance.inactiveColor, const Color(0xFF5D6B84));
-      expect(LyricSettings.instance.sungColor, const Color(0xFF0E9E52));
+      // 歌词区是恒暗画布（封面模糊 + 深色幕布），浅色主题下若跟随主题
+      // 换成墨/绿，整页观感与参考视频完全不符（用户反馈）。
+      expect(LyricSettings.instance.unsungColor, const Color(0x99FFFFFF));
+      expect(LyricSettings.instance.inactiveColor, const Color(0x66FFFFFF));
+      expect(LyricSettings.instance.sungColor, const Color(0xFFFFFFFF));
       AppColors.setBrightness(Brightness.dark);
-      // v2.3.0-fix5：深色板三色对齐 AMLL 参考视频（白 / 60%白 / 40%白）
       expect(LyricSettings.instance.unsungColor, const Color(0x99FFFFFF));
       expect(LyricSettings.instance.sungColor, const Color(0xFFFFFFFF));
     });
 
-    test('自定义后不跟随主题；重置后回到主题默认', () async {
+    test('自定义后保留；重置后回到暗画布默认', () async {
       await LyricSettings.instance.resetColors();
       await LyricSettings.instance.setSungColor(const Color(0xFFFF0000));
       AppColors.setBrightness(Brightness.light);
       expect(LyricSettings.instance.sungColor, const Color(0xFFFF0000));
-      // 未自定义的两个仍跟随主题
-      expect(LyricSettings.instance.unsungColor, const Color(0xFF12233F));
+      // 未自定义的仍取暗画布默认（不是浅色板的墨色）
+      expect(LyricSettings.instance.unsungColor, const Color(0x99FFFFFF));
       await LyricSettings.instance.resetColors();
-      expect(LyricSettings.instance.sungColor, const Color(0xFF0E9E52));
+      expect(LyricSettings.instance.sungColor, const Color(0xFFFFFFFF));
       AppColors.setBrightness(Brightness.dark);
     });
 
@@ -296,6 +297,18 @@ void main() {
       await LyricSettings.instance.load();
       expect(LyricSettings.instance.unsungColor, const Color(0xFF123456));
       await LyricSettings.instance.resetColors();
+    });
+
+    test('恒暗画布可读性解析按暗底走（浅色主题下白字不被换成墨字）', () async {
+      await LyricSettings.instance.resetColors();
+      AppColors.setBrightness(Brightness.light);
+      // 浅色主题下 AppColors.bg1 是亮色，若按主题背景解析，
+      // 白色未唱色会被误判为「对比不足」换成墨字——恒暗画布上直接隐身。
+      expect(LyricSettings.instance.readableUnsungColor,
+          const Color(0x99FFFFFF));
+      expect(LyricSettings.instance.readableSungColor,
+          const Color(0xFFFFFFFF));
+      AppColors.setBrightness(Brightness.dark);
     });
   });
 }

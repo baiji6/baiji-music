@@ -56,6 +56,12 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
       // 验证 cookie 有效性
       final test = AppServices.instance.netease.isLoggedIn();
       AppLog.i('NeteaseLoginPage', '网易云 Cookie 已保存 loggedIn=$test');
+      // 粘贴的 Cookie 可能只有登录字段（MUSIC_U 等），缺 NMTID 等浏览器
+      // 会话字段——写操作（发评论）会被风控。这里异步补齐一次（限时
+      // 3 秒，失败不影响登录），与扫码登录路径对齐。
+      unawaited(AppServices.instance.netease
+          .enrichCookie()
+          .timeout(const Duration(seconds: 3), onTimeout: () async {}));
       if (mounted) {
         showAppSnack('网易云 Cookie 登录成功');
         Navigator.pop(context, true);

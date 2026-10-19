@@ -183,17 +183,73 @@ void main() {
       await s.resetColors();
     });
 
-    test('已唱色与未唱色解析后同色 → 强制主题强调色拉开层次', () async {
+    test('已唱色与未唱色解析后同色 → 强制强调色拉开层次', () async {
       final s = LyricSettings.instance;
       // 深色板下两把都设为可读的白：各自可读、却彼此相同
       await s.setSungColor(Colors.white);
       await s.setUnsungColor(Colors.white);
-      // 未唱保留白色；已唱检测到与未唱同色 → 逃逸到主题强调色
-      // （v2.3.0-fix5：主题已唱色默认已是白，兜不住同色碰撞）
+      // 未唱保留白色；已唱检测到与未唱同色 → 逃逸到强调色
+      // （v2.3.0-fix5：主题已唱色默认已是白，兜不住同色碰撞；
+      //  v2.3.0-fix6：恒暗画布，逃逸色取深色板强调色）
       expect(s.readableUnsungColor, Colors.white);
-      expect(s.readableSungColor, AppColors.accent);
+      expect(s.readableSungColor, AppPalette.dark.accent);
       expect(s.readableSungColor, isNot(s.readableUnsungColor));
       await s.resetColors();
+    });
+  });
+
+  group('LyricSettings 旧默认值迁移（v2.3.0-fix6）', () {
+    /// 造一个「老用户」存储：碰过样式面板后 fix5 之前的默认值被持久化。
+    Future<void> seedLegacy() async {
+      // 清掉 setUp 里 load() 写入的版本号，让迁移重新生效
+      await KvStore.instance.clear();
+      await KvStore.instance.setString('lyric_view:font_size', '17.0');
+      await KvStore.instance.setString('lyric_view:corner', '24.0');
+      await KvStore.instance.setString('lyric_view:align', 'center');
+      await KvStore.instance.setString('lyric_view:sung_color', '#A8F685');
+      await KvStore.instance.setString('lyric_view:unsung_color', '#F2F5FF');
+      await KvStore.instance.setString('lyric_view:inactive_color', '#5A6686');
+    }
+
+    test('旧默认值整体迁移到新 AMLL 默认（用户没真自定义的场景）', () async {
+      await seedLegacy();
+      final s = LyricSettings.instance;
+      await s.load();
+      expect(s.fontSize, LyricSettings.defaultFontSize);
+      expect(s.corner, LyricSettings.defaultCorner);
+      expect(s.alignLeft, isTrue);
+      expect(s.sungColor, const Color(0xFFFFFFFF));
+      expect(s.unsungColor, const Color(0x99FFFFFF));
+      expect(s.inactiveColor, const Color(0x66FFFFFF));
+      // 版本号落盘，之后不再重复迁移
+      expect(
+          KvStore.instance.getInt('lyric_view:settings_version', def: 0),
+          LyricSettings.currentSettingsVersion);
+    });
+
+    test('真自定义值保留，不被迁移误删', () async {
+      await seedLegacy();
+      // 用户真的改过字号与已唱色
+      await KvStore.instance.setString('lyric_view:font_size', '20.0');
+      await KvStore.instance.setString('lyric_view:sung_color', '#123456');
+      final s = LyricSettings.instance;
+      await s.load();
+      expect(s.fontSize, 20.0);
+      expect(s.sungColor, const Color(0xFF123456));
+      // 其余旧默认项仍正常迁移
+      expect(s.corner, LyricSettings.defaultCorner);
+      expect(s.alignLeft, isTrue);
+      expect(s.unsungColor, const Color(0x99FFFFFF));
+    });
+
+    test('迁移只跑一次：之后手动写回旧值是个人偏好，不再清除', () async {
+      await seedLegacy();
+      final s = LyricSettings.instance;
+      await s.load();
+      // 用户主动把字号调回 17（个人偏好）
+      await s.setFontSize(17.0);
+      await s.load();
+      expect(s.fontSize, 17.0);
     });
   });
 }
