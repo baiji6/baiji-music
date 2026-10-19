@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 
 import 'netease_crypto.dart';
 import 'netease_api.dart';
+import 'netease_weapi.dart';
 
 /// 网易云 API 客户端。
 ///
@@ -62,11 +63,15 @@ class NeteaseClient {
   /// 扫码登录只从轮询响应的 Set-Cookie 拿到登录态字段（MUSIC_U/
   /// __csrf 等），真实浏览器会话还有 NMTID/_ntes_nuid/JSESSIONID-WYYY 等。
   /// `/discover` 页面会下发 NMTID（设备追踪 Cookie，网易云每次页面访问
-  /// 都带），把它 harvest 进来让会话更接近真实浏览器，降低写接口被风控
-  /// （code=250）的概率。只增不覆盖，不动已有登录态字段。
+  /// 都带），把它 harvest 进来让会话更接近真实浏览器。
+  /// 只增不覆盖，不动已有登录态字段。
   ///
   /// 注意：music.163.com 首页被 CDN 缓存不吐 Set-Cookie，必须打
   /// /discover 或任一 api 路径（实测两者都会下发 NMTID）。
+  ///
+  /// v2.3.0-fix5 起写接口已全部改走 weapi 加密通道（见 [postWeapi]），
+  /// 「明文接口 400」的根因与 Cookie 完整性无关；本方法保留是为让会话
+  /// 更贴近真实浏览器，降低真风控（code=250）的概率。
   Future<void> enrichCookie() async {
     try {
       final resp = await getRaw('https://music.163.com/discover');
@@ -153,6 +158,27 @@ class NeteaseClient {
         .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
         .join('&');
     return _postForm(body, apiUrl, isJson: false);
+  }
+
+  /// 网页版 weapi 请求（写接口必须走这条，v2.3.0-fix5）。
+  ///
+  /// 网易云**写接口**（发评/回复/点赞/删除）的明文 `/api` 形态已废弃：
+  /// 带完整 Cookie POST 表单恒定返回 `{"code":400,"参数错误"}`，与账号和
+  /// 频率无关——App 在 v2.3.0-fix3 及以前把它误判成「250 风控」。网页版
+  /// 同款做法是打 `/weapi/...?csrf_token=X`，请求体为 AES 双层加密的
+  /// `params` + RSA 的 `encSecKey`（见 [NeteaseWeapi]），实测同一账号
+  /// 同一 Cookie 立即 code=200。
+  Future<Map<String, dynamic>> postWeapi(
+    String weapiUrl,
+    Map<String, dynamic> payload, {
+    required String csrf,
+  }) {
+    final encrypted = NeteaseWeapi.encrypt(payload);
+    final body =
+        'params=${Uri.encodeQueryComponent(encrypted.params)}'
+        '&encSecKey=${Uri.encodeQueryComponent(encrypted.encSecKey)}';
+    final url = '$weapiUrl?csrf_token=${Uri.encodeQueryComponent(csrf)}';
+    return _postForm(body, url, isJson: false);
   }
 
   /// 网页版接口 GET。

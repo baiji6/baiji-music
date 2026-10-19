@@ -161,19 +161,13 @@ void main() {
     expect(find.byType(AmllLyricsView), findsOneWidget,
         reason: '播放页必须挂载 AmllLyricsView');
 
-    // 拖动歌词（引擎自己处理浏览/吸附/恢复跟随）
-    await tester.drag(find.byType(amll.LyricView), const Offset(0, 300));
-    for (var i = 0; i < 8; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-    // 点击歌词行跳转
-    await tester.tapAt(tester.getCenter(find.byType(amll.LyricView)));
-    await tester.pump();
-    for (var i = 0; i < 10; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-
     // 切到无歌词的歌（FutureBuilder → 暂无歌词 → AmllLyricsView 卸载）
+    // 注意顺序：所有原生播放器调用（play/seek）必须排在歌词页手势交互
+    // 之前。点击歌词行会在**假异步域**内发起 seek——widget 测试的假时钟
+    // 不驱动 media_kit 的原生事件回复，该 seek 永不完成并永久占用
+    // media_kit 的全局命令锁，之后的任何 open/seek 都会挂死（真实 app
+    // 里手势跑在真实事件循环上，无此问题）。因此点击放在最后，其后不再
+    // 触发原生调用。
     final plain = File('${dir.path}/plain.flac');
     plain.writeAsBytesSync(buildFlac());
     await tester.runAsync(() async {
@@ -192,6 +186,19 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 400));
     });
     for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    // 拖动歌词（引擎自己处理浏览/吸附/恢复跟随）
+    await tester.drag(find.byType(amll.LyricView), const Offset(0, 300));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    // 点击歌词行跳转（最后一个交互：其 seek 在假异步域内发起，
+    // 见上方说明，之后不能再有原生播放器调用）
+    await tester.tapAt(tester.getCenter(find.byType(amll.LyricView)));
+    await tester.pump();
+    for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
 

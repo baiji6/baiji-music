@@ -2,10 +2,13 @@
 //
 // 根因：MiuixSlider 内部是 `LayoutBuilder + SizedBox(height) + CustomPaint`，
 // CustomPaint 无子节点时按内容尺寸（0 宽）测量；在 Column 的宽松横向约束下
-// 会塌缩成轨道高度的一小截，视觉上等于进度条消失。修法是显式撑满宽度。
+// 会塌缩成轨道高度的一小截，视觉上等于进度条消失。
 //
-// 这里直接测生产组件 [PlayerProgressSection]，并保留一个「不撑满就塌缩」的
-// 对照用例，锁死这个约束陷阱。
+// v2.3.0-fix5 起进度条换成自绘的 [ThinProgressBar]（QQ 音乐式细轨+竖条
+// 游标，对齐参考视频2），塌缩陷阱随之消失，但「必须撑满剩余宽度」这条
+// 不变量仍然要锁死：细轨只有 3px，宽度一塌缩就真的看不见了。
+// 这里直接测生产组件 [PlayerProgressSection]，并保留一个 MiuixSlider
+// 「不撑满就塌缩」的对照用例，记录这个约束陷阱的来历。
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/ui/pages/player_page.dart';
 import 'package:flutter/material.dart';
@@ -22,10 +25,10 @@ Widget _wrap(Widget child) => MiuixTheme(
 
 void main() {
   const screen = 390.0;
-  const padding = 22.0 * 2; // _ProgressSection 的左右内边距
-  const expected = screen - padding;
+  const padding = 16.0 * 2; // PlayerProgressSection 的左右内边距
+  const gap = 10.0 * 2; // 时间与轨道之间的间距
 
-  testWidgets('进度条在 Column 松约束下仍撑满可用宽度', (tester) async {
+  testWidgets('细进度条撑满「去掉边距与两端时间」后的剩余宽度', (tester) async {
     tester.view.physicalSize = const Size(screen, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -41,13 +44,41 @@ void main() {
     )));
     await tester.pump();
 
-    final slider = find.byType(MiuixSlider);
-    expect(slider, findsOneWidget);
-    expect(tester.getSize(slider).width, closeTo(expected, 1.0),
-        reason: '进度条必须撑满父级可用宽度（实际 ${tester.getSize(slider).width}）');
+    final bar = find.byType(ThinProgressBar);
+    expect(bar, findsOneWidget);
+    // 两端时间（00:00）也要真实占位，扣掉才是轨道的应得宽度
+    final timeWidth = tester.getSize(find.text('00:00').first).width;
+    final expected = screen - padding - timeWidth * 2 - gap;
+    expect(tester.getSize(bar).width, closeTo(expected, 1.0),
+        reason: '细轨必须撑满剩余宽度（实际 ${tester.getSize(bar).width}，'
+            '应得 $expected）');
   });
 
-  testWidgets('对照：不撑满宽度时滑杆会塌缩（说明必须显式给宽）',
+  testWidgets('点击进度条回调 seek（按比例映射）', (tester) async {
+    tester.view.physicalSize = const Size(screen, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    Duration? sought;
+    await tester.pumpWidget(_wrap(SizedBox(
+      width: screen,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          PlayerProgressSection(onSeek: (d) async => sought = d),
+        ],
+      ),
+    )));
+    await tester.pump();
+
+    final barSize = tester.getSize(find.byType(ThinProgressBar));
+    await tester.tapAt(tester.getTopLeft(find.byType(ThinProgressBar)) +
+        Offset(barSize.width / 2, 8));
+    await tester.pump();
+    expect(sought, isNotNull);
+  });
+
+  testWidgets('对照：MiuixSlider 不撑满宽度时会塌缩（记录约束陷阱）',
       (tester) async {
     tester.view.physicalSize = const Size(screen, 800);
     tester.view.devicePixelRatio = 1.0;

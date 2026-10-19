@@ -70,16 +70,26 @@ amll.LyricPreset lyricPresetFrom(LyricSettings s) {
       color: s.readableUnsungColor,
     ),
     translationTextStyle: TextStyle(
-      fontSize: s.fontSize * 0.78,
+      fontSize: s.fontSize * 0.6,
       fontWeight: s.inactiveWeight,
       height: 1.3,
       color: s.readableInactiveColor.withValues(alpha: 0.85),
     ),
     activeTranslationTextStyle: TextStyle(
-      fontSize: s.fontSize * 0.78 * s.activeScale,
+      fontSize: s.fontSize * 0.6 * s.activeScale,
       color: s.readableUnsungColor.withValues(alpha: 0.9),
     ),
     highlight: amll.LyricHighlight.solid(s.readableSungColor, tailFadeWidth: 10),
+    // 远处行可见性：appleMusic 预设的行过渡对非当前行施加 fade(.45)，
+    // 叠加深色底上的 40% 白文字色后远处行几乎不可见（实测有效亮度
+    // 不到背景的 1.15 倍），与参考视频1「灰色但清晰可读、仅虚化」不符。
+    // 这里自建过渡：保留 0.92 缩放维持层次，不透明度提到 0.88——灰度
+    // 由文字色本身（40% 白）承担，不再用透明度二次打折；虚化仍由
+    // 预设自带的 distanceBlur（maxSigma 4）负责。
+    lineTransition: amll.LyricLineTransition.effects(const [
+      amll.LyricLineEffect.scale(.92),
+      amll.LyricLineEffect.fade(.88),
+    ]),
     // 预设自带的前奏/间奏圆点是白色的（面向深色底），浅色主题下会隐身；
     // 换成主题已唱色，既看得见又与逐字高亮同源。
     countdown: amll.LyricCountdown(

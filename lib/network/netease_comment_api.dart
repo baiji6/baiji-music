@@ -1,36 +1,28 @@
 // 网易云歌曲评论。
 //
-// 端点全部经沙箱实测（2025-10，歌曲 657666《起风了》），与倾听 5.4.14
-// dex 里的端点一致（`/api/resource/comments/add|reply`、`/api/v1/comment/
-// like|unlike`）：
+// 端点全部经沙箱实测（2025-10，歌曲 657666《起风了》；2026-10-19 weapi 化
+// 改造后复测），与倾听 5.4.14 dex 里的端点路径一致：
 //
-// - 读评论（免登录）：
+// - 读评论（免登录，明文 GET 仍有效）：
 //   GET https://music.163.com/api/v1/resource/comments/R_SO_4_{songId}
 //       ?limit=15&offset=0
 //   响应 code:200 + total/more/hotComments[]/comments[]/topComments[]；
 //   单条字段 commentId/content/time(毫秒)/likedCount/liked/
 //   user.{userId,nickname,avatarUrl}/beReplied[]。
-// - 发评（需登录）：
-//   POST https://music.163.com/api/resource/comments/add
-//   表单 {threadId, content, csrf_token}（注意是表单编码，不是 JSON：
-//   JSON body 会 400 参数错误）。
-// - 回复（需登录）：
-//   POST https://music.163.com/api/resource/comments/reply
-//   表单 {threadId, content, commentId, csrf_token}。
-//   （缺 commentId → 400 参数错误；齐全 → 301 需登录，形制正确。）
-// - 点赞 / 取消（需登录）：
-//   GET https://music.163.com/api/v1/comment/like?threadId=&commentId=&csrf_token=
-//   GET https://music.163.com/api/v1/comment/unlike?...
-//   （无参 → 400、带参 → 301；不存在路径 → 404，路由确认。）
+// - 发评 / 回复 / 点赞 / 删除（需登录，**必须 weapi**）：
+//   POST https://music.163.com/weapi/resource/comments/add?csrf_token=X
+//   POST https://music.163.com/weapi/resource/comments/reply?csrf_token=X
+//   POST https://music.163.com/weapi/v1/comment/like?csrf_token=X
+//   POST https://music.163.com/weapi/v1/comment/unlike?csrf_token=X
+//   表单 {params, encSecKey}（AES 双层 + RSA，见 netease/netease_weapi.dart）。
 //
-// **写接口 250 = 网易云账号级风控**（2026-10-18 复现用户反馈）：
-// 用户真机首次发评即 250（登录态为扫码登录的最小 Cookie）。沙箱对照
-// 实验：完整浏览器 Cookie（24 字段）→ 200；但连续发评十余条后，
-// 完整 Cookie 的点赞/发评也全部 250——即 250 一旦触发就是账号级
-// 写限流，与 Cookie 完整性弱相关，需等待冷却。app 侧缓解：
-// - 扫码登录后 [NeteaseClient.enrichCookie] 补 NMTID 等会话字段；
-// - 250 文案引导「稍后再试」而非裸错误码；
-// - 设置页支持手动粘贴完整浏览器 Cookie 登录（逃生门）。
+// **「250 风控」是误判（v2.3.0-fix5 纠正）**：用户反馈「网易云能打开不能
+// 发评论」，v2.3.0-fix3 按 250 归因为账号级风控。复测发现真正的失败码是
+// **400「参数错误」**——明文 `/api/resource/comments/add` 这个写接口形态
+// 已被网易云废弃，带完整浏览器 Cookie 也一样 400，与账号/频率无关。
+// 换成网页版同款 `/weapi` + 加密体后，同一账号同一 Cookie 立即 code=200
+// （已实测：Dart 加密发评→删评、点赞→取消点赞均 200，测试评论已删除）。
+// 250 仍然保留为兜底文案：weapi 形态下频繁操作依然可能触发真风控。
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/music_api.dart';
@@ -126,32 +118,32 @@ abstract final class NeteaseCommentApi {
     return parseComments(data);
   }
 
-  /// 发表评论（需登录）。
+  /// 发表评论（需登录）。[replyTo] 非空 = 回复某条评论。
+  ///
+  /// 走 weapi 加密通道（明文 /api 写接口已废弃，恒定 400，见文件头）。
+  /// [NeteaseClient.postWeapi] 负责 AES 双层加密；csrf_token 同时出现在
+  /// URL query 与 payload 里（网页端两个位置都带，少任何一个都 400）。
   static Future<void> addComment(String songId, String content,
       {String? replyTo}) async {
     final client = AppServices.instance.netease;
     if (!client.isLoggedIn()) {
       throw Exception('登录后可发表评论');
     }
+    final csrf = csrfFromCookie(client.cookie);
     // 回复走专用端点（commentId = 被回复评论 id），顶层评论走 add
     final isReply = replyTo != null && replyTo.isNotEmpty;
-    final form = <String, String>{
+    final payload = <String, dynamic>{
       'threadId': threadId(songId),
       'content': content,
-      'csrf_token': csrfFromCookie(client.cookie),
+      'csrf_token': csrf,
+      if (isReply) 'commentId': replyTo,
     };
-    final String url;
-    if (isReply) {
-      form['commentId'] = replyTo;
-      url = 'https://music.163.com/api/resource/comments/reply';
-    } else {
-      url = 'https://music.163.com/api/resource/comments/add';
-    }
-    final data = await client.postApi(url, form);
+    final url = 'https://music.163.com/weapi/resource/comments/'
+        '${isReply ? 'reply' : 'add'}';
+    final data = await client.postWeapi(url, payload, csrf: csrf);
     final code = _toInt(data['code']);
     if (code == 250) {
-      // 250 = 网易云风控（频率/会话异常）。完整浏览器 Cookie 下偶发，
-      // 频繁发送必中；文案引导用户稍后再试，避免裸错误码。
+      // weapi 形态下仍可能触发真风控（频繁操作），文案引导稍后再试
       throw Exception('发送过于频繁或被网易云风控，请稍后再试');
     }
     if (code != 200) {
@@ -160,7 +152,7 @@ abstract final class NeteaseCommentApi {
     AppLog.i('NeteaseCommentApi', '发表评论成功 song=$songId');
   }
 
-  /// 点赞 / 取消点赞（需登录）。
+  /// 点赞 / 取消点赞（需登录）。weapi POST，与网页版一致。
   static Future<void> likeComment(String songId, String commentId,
       {required bool like}) async {
     final client = AppServices.instance.netease;
@@ -168,10 +160,13 @@ abstract final class NeteaseCommentApi {
       throw Exception('登录后可点赞');
     }
     final csrf = csrfFromCookie(client.cookie);
-    final url = 'https://music.163.com/api/v1/comment/'
-        '${like ? 'like' : 'unlike'}'
-        '?threadId=${threadId(songId)}&commentId=$commentId&csrf_token=$csrf';
-    final data = await client.getApi(url);
+    final url = 'https://music.163.com/weapi/v1/comment/'
+        '${like ? 'like' : 'unlike'}';
+    final data = await client.postWeapi(url, {
+      'threadId': threadId(songId),
+      'commentId': commentId,
+      'csrf_token': csrf,
+    }, csrf: csrf);
     final code = _toInt(data['code']);
     if (code == 250) {
       throw Exception('操作过于频繁或被网易云风控，请稍后再试');

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:baiji_music/core/lyric_settings.dart';
 import 'package:baiji_music/data/history_store.dart';
@@ -726,29 +727,68 @@ class _PlayerPageState extends State<PlayerPage> {
             !MusicApi.isLoggedIn(song.source) &&
             !lyrics.hasWordTiming &&
             !_neLoginHintDismissed;
+        // v2.3.0-fix5：歌词区从「玻璃卡片」换成 AMLL 风格全幅底——
+        // 当前歌封面放大重度模糊铺满 + 主题化暗幕/亮幕，歌词直接压在
+        // 暗底上（对齐用户参考视频1）。卡片圆角设置仍作用于裁剪。
         return ClipRRect(
           borderRadius: BorderRadius.circular(corner),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: AppColors.surfaceGlass,
-              borderRadius: BorderRadius.circular(corner),
-              border: Border.all(color: AppColors.strokeGlass),
-            ),
-            child: Column(
-              children: [
-                if (showNeHint) _buildNeteaseLoginHint(),
-                Expanded(
-                  child: AmllLyricsView(
-                    key: ValueKey(_lyricsKey),
-                    lyrics: lyrics,
-                    onSeek: _seekTo,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: song == null
+                    ? const SizedBox.shrink()
+                    : _LyricBackdrop(song: song),
+              ),
+              // 暗幕/亮幕：把模糊封面压到可读的明度，三色歌词才立得住
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(gradient: _lyricScrim()),
                   ),
                 ),
-              ],
-            ),
+              ),
+              Positioned.fill(
+                child: Column(
+                  children: [
+                    if (showNeHint) _buildNeteaseLoginHint(),
+                    Expanded(
+                      child: AmllLyricsView(
+                        key: ValueKey(_lyricsKey),
+                        lyrics: lyrics,
+                        onSeek: _seekTo,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         );
       },
+    );
+  }
+
+  /// 歌词区幕布：深色主题压黑、浅色主题提白，上下略带渐变。
+  ///
+  /// 取值同时服务两套三色（深色主题白/灰字、浅色主题墨字）：
+  /// 深色幕 50%→72% 黑时白字对比度 ≥ 8:1；浅色幕 72%→88% 白时
+  /// 墨字对比度 ≥ 7:1（相对幕布中心明度估算）。
+  static Gradient _lyricScrim() {
+    final dark = AppColors.isDark;
+    final top = dark
+        ? Colors.black.withValues(alpha: 0.50)
+        : Colors.white.withValues(alpha: 0.72);
+    final mid = dark
+        ? Colors.black.withValues(alpha: 0.60)
+        : Colors.white.withValues(alpha: 0.80);
+    final bottom = dark
+        ? Colors.black.withValues(alpha: 0.72)
+        : Colors.white.withValues(alpha: 0.88);
+    return LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [top, mid, bottom],
+      stops: const [0.0, 0.5, 1.0],
     );
   }
 
@@ -1019,9 +1059,52 @@ class _CoverArt extends StatelessWidget {
   }
 }
 
+// ==================== 歌词底（AMLL 风格） ====================
+
+/// AMLL 风格歌词底：封面放大 + 重度高斯模糊。
+///
+/// 参考视频（v2.3.0-fix5 视频1）里歌词页是一张暗化的模糊封面。实现要点：
+/// - 放大 1.8 倍再模糊：高斯模糊会把边缘约 sigma 宽的范围啃成透明，
+///   放大后原图永远盖满裁剪区，不会露黑边；
+/// - 解码宽度钳到 1000px 以内：模糊后没有细节可言，按屏幕尺寸解码即可
+///   （封面原图 1500~3000px，全尺寸解码要几十 MB）；
+/// - 纯展示层，不响应手势（点击跳转由上层歌词视图处理）。
+class _LyricBackdrop extends StatelessWidget {
+  const _LyricBackdrop({required this.song});
+
+  final Song song;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRect(
+      child: ImageFiltered(
+        imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
+        child: LayoutBuilder(
+          builder: (ctx, c) {
+            final side = math.max(c.maxWidth, c.maxHeight) * 1.8;
+            final decode = side.round().clamp(240, 1000);
+            return Center(
+              child: SizedBox(
+                width: side,
+                height: side,
+                child: CoverImage(
+                  song: song,
+                  size: side,
+                  radius: 0,
+                  memCacheWidth: decode,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
 // ==================== 进度条 ====================
 
-/// 进度条 + 时间标签（竖屏两行、横屏与控件同一行）。
+/// 进度条 + 两端时间（时间与轨道同一行，QQ 音乐式布局）。
 ///
 /// 公开是为了让「进度条塌缩」回归能直接测生产组件（见
 /// `test/player_progress_bar_test.dart`）。
@@ -1034,7 +1117,7 @@ class PlayerProgressSection extends StatelessWidget {
 
   final Future<void> Function(Duration) onSeek;
 
-  /// true：时间标签与滑块同一行（横屏省高度）。
+  /// true：左右边距由外层提供（横屏与控制条并排时用）。
   final bool inlineTime;
 
   static String _fmt(Duration d) {
@@ -1047,7 +1130,7 @@ class PlayerProgressSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final player = PlayerController.instance;
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: inlineTime ? 0 : 22),
+      padding: EdgeInsets.symmetric(horizontal: inlineTime ? 0 : 16),
       child: StreamBuilder<Duration>(
         stream: player.onPositionChanged,
         initialData: player.position,
@@ -1062,38 +1145,25 @@ class PlayerProgressSection extends StatelessWidget {
                   ? total.inMilliseconds.toDouble()
                   : 1.0;
               final value = pos.inMilliseconds.clamp(0, maxMs.round());
-              return Column(
-                mainAxisSize: MainAxisSize.min,
+              final timeStyle = TextStyle(
+                  fontSize: 11,
+                  color: AppColors.textTertiary,
+                  fontWeight: FontWeight.w500);
+              // 时间夹在轨道两端（对齐参考视频2的布局）
+              return Row(
                 children: [
-                  if (inlineTime)
-                    Row(
-                      children: [
-                        Text(_fmt(pos),
-                            style: TextStyle(
-                                fontSize: 11, color: AppColors.textTertiary)),
-                        Expanded(child: _slider(maxMs, value)),
-                        Text(_fmt(total),
-                            style: TextStyle(
-                                fontSize: 11, color: AppColors.textTertiary)),
-                      ],
-                    )
-                  else ...[
-                    _slider(maxMs, value),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(_fmt(pos),
-                              style: TextStyle(
-                                  fontSize: 11, color: AppColors.textTertiary)),
-                          Text(_fmt(total),
-                              style: TextStyle(
-                                  fontSize: 11, color: AppColors.textTertiary)),
-                        ],
-                      ),
+                  Text(_fmt(pos), style: timeStyle),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ThinProgressBar(
+                      value: value.toDouble(),
+                      max: maxMs,
+                      onSeek: (v) =>
+                          onSeek(Duration(milliseconds: v.round())),
                     ),
-                  ],
+                  ),
+                  const SizedBox(width: 10),
+                  Text(_fmt(total), style: timeStyle),
                 ],
               );
             },
@@ -1102,22 +1172,124 @@ class PlayerProgressSection extends StatelessWidget {
       ),
     );
   }
+}
 
-  /// 滑杆必须显式撑满宽度。
-  ///
-  /// [MiuixSlider] 内部是 `LayoutBuilder + SizedBox(height) + CustomPaint`，
-  /// CustomPaint 无子节点时按内容尺寸（0 宽）测量——在 [Column] 的宽松横向
-  /// 约束下会塌缩成轨道高度的一小截，视觉上就是「进度条不见了」
-  /// （v2.3.0-fix3 用户反馈；倍速滑杆与歌词样式弹窗早已用同一手法规避）。
-  /// 横屏时它位于 Row 的 [Expanded] 内（紧约束），撑满同样成立。
-  Widget _slider(double maxMs, int value) => SizedBox(
-        width: double.infinity,
-        child: MiuixSlider(
-          value: value.toDouble().clamp(0.0, maxMs),
-          max: maxMs,
-          onValueChanged: (v) => onSeek(Duration(milliseconds: v.round())),
-        ),
-      );
+/// QQ 音乐式细进度条（v2.3.0-fix5，对齐用户参考视频2）：
+/// 3px 细轨道 + 已播/未播两段明度 + 3×16 竖条游标。
+///
+/// 不用 [MiuixSlider] 的原因：它的轨道是约 20px 高的胶囊、游标是大圆点，
+/// 与参考视频「细轨 + 竖条」的形态不符；且内部 CustomPaint 在松约束下会
+/// 塌缩（v2.3.0-fix3 的「进度条不见了」根因），自绘反而更可控。
+/// 拖动过程中实时 seek（与旧滑杆行为一致，libmpv seek 无爆音）。
+
+/// 细轨几何（参考视频2实测：轨道 3px、游标 3×16）。
+const double _kTrackHeight = 3.0;
+const double _kCursorWidth = 3.0;
+const double _kCursorHeight = 16.0;
+
+class ThinProgressBar extends StatelessWidget {
+  const ThinProgressBar({
+    super.key,
+    required this.value,
+    required this.max,
+    required this.onSeek,
+  });
+
+  /// 当前进度（毫秒）。
+  final double value;
+
+  /// 总时长（毫秒）；<=0 时按 1 处理避免除零。
+  final double max;
+
+  /// 拖动 / 点击到新位置（毫秒）。
+  final ValueChanged<double> onSeek;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxMs = max > 0 ? max : 1.0;
+    final progress = (value / maxMs).clamp(0.0, 1.0);
+    final dark = AppColors.isDark;
+    final played = dark ? Colors.white : AppColors.textPrimary;
+    final remaining = dark
+        ? Colors.white.withValues(alpha: 0.28)
+        : Colors.black.withValues(alpha: 0.16);
+    return LayoutBuilder(
+      builder: (ctx, c) {
+        final width = c.maxWidth;
+        void seekAt(double dx) =>
+            onSeek((dx / width).clamp(0.0, 1.0) * maxMs);
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (d) => seekAt(d.localPosition.dx),
+          onHorizontalDragStart: (d) => seekAt(d.localPosition.dx),
+          onHorizontalDragUpdate: (d) => seekAt(d.localPosition.dx),
+          child: SizedBox(
+            // 手势区给足高度：轨道只有 3px，直接摸会点空
+            height: _kCursorHeight,
+            width: width,
+            child: CustomPaint(
+              size: Size(width, _kCursorHeight),
+              painter: _ProgressTrackPainter(
+                progress: progress,
+                played: played,
+                remaining: remaining,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ProgressTrackPainter extends CustomPainter {
+  const _ProgressTrackPainter({
+    required this.progress,
+    required this.played,
+    required this.remaining,
+  });
+
+  final double progress;
+  final Color played;
+  final Color remaining;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final trackTop = (size.height - _kTrackHeight) / 2;
+    final trackRect =
+        Rect.fromLTWH(0, trackTop, size.width, _kTrackHeight);
+    final radius = Radius.circular(_kTrackHeight / 2);
+    // 未播段：整条圆角底
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(trackRect, radius),
+        Paint()
+          ..color = remaining);
+    // 已播段
+    final playedWidth = size.width * progress;
+    if (playedWidth > 0) {
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromLTWH(0, trackTop, playedWidth, _kTrackHeight), radius),
+          Paint()
+            ..color = played);
+    }
+    // 竖条游标：中线对齐进度点，左右不越界
+    final cursorLeft = (playedWidth - _kCursorWidth / 2)
+        .clamp(0.0, size.width - _kCursorWidth);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            Rect.fromLTWH(cursorLeft, (size.height - _kCursorHeight) / 2,
+                _kCursorWidth, _kCursorHeight),
+            Radius.circular(_kCursorWidth / 2)),
+        Paint()
+          ..color = played);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ProgressTrackPainter old) =>
+      old.progress != progress ||
+      old.played != played ||
+      old.remaining != remaining;
 }
 
 // ==================== 控制区 ====================

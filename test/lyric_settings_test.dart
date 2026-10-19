@@ -50,7 +50,7 @@ void main() {
   });
 
   group('LyricSettings 圆角', () {
-    test('默认 24，范围 0~40', () {
+    test('默认 0（AMLL 全幅歌词底），范围 0~40', () {
       final s = LyricSettings.instance;
       expect(s.corner, LyricSettings.defaultCorner);
       expect(LyricSettings.minCorner, 0.0);
@@ -67,11 +67,11 @@ void main() {
   });
 
   group('LyricSettings 三色', () {
-    test('默认值：已唱荧光黄绿 / 当前行白 / 非当前行暗灰', () {
+    test('默认值：已唱纯白 / 当前行 60% 白 / 非当前行 40% 白（AMLL 参考）', () {
       final s = LyricSettings.instance;
-      expect(s.sungColor, const Color(0xFFA8F685));
-      expect(s.unsungColor, const Color(0xFFF2F5FF));
-      expect(s.inactiveColor, const Color(0xFF5A6686));
+      expect(s.sungColor, const Color(0xFFFFFFFF));
+      expect(s.unsungColor, const Color(0x99FFFFFF));
+      expect(s.inactiveColor, const Color(0x66FFFFFF));
     });
 
     test('自定义颜色即时生效并可重置', () async {
@@ -83,9 +83,9 @@ void main() {
       expect(s.unsungColor, const Color(0xFF00FF00));
       expect(s.inactiveColor, const Color(0xFF0000FF));
       await s.resetColors();
-      expect(s.sungColor, const Color(0xFFA8F685));
-      expect(s.unsungColor, const Color(0xFFF2F5FF));
-      expect(s.inactiveColor, const Color(0xFF5A6686));
+      expect(s.sungColor, const Color(0xFFFFFFFF));
+      expect(s.unsungColor, const Color(0x99FFFFFF));
+      expect(s.inactiveColor, const Color(0x66FFFFFF));
     });
 
     test('load 能从存储恢复（序列化 round-trip）', () async {
@@ -132,15 +132,14 @@ void main() {
 
     test('对比度足够时原样保留自定义色', () {
       const bg = Color(0xFFFCFBFE);
-      // 默认非当前行灰蓝（≈5:1）保留
+      // 灰蓝（≈5:1）在浅底上保留
       expect(LyricSettings.ensureReadable(const Color(0xFF5A6686), bg),
           const Color(0xFF5A6686));
-      // 深底上默认荧光黄绿 / 亮白都保留
+      // 深底上纯白 / 60% 白都保留
       const darkBg = Color(0xFF0A0F1E);
-      expect(LyricSettings.ensureReadable(const Color(0xFFA8F685), darkBg),
-          const Color(0xFFA8F685));
-      expect(LyricSettings.ensureReadable(const Color(0xFFF2F5FF), darkBg),
-          const Color(0xFFF2F5FF));
+      expect(LyricSettings.ensureReadable(Colors.white, darkBg), Colors.white);
+      expect(LyricSettings.ensureReadable(const Color(0x99FFFFFF), darkBg),
+          const Color(0x99FFFFFF));
     });
 
     test('readableXxx 跟随当前色板：默认三色始终可读不被改写', () {
@@ -184,14 +183,15 @@ void main() {
       await s.resetColors();
     });
 
-    test('已唱色与未唱色解析后同色 → 强制主题已唱色拉开层次', () async {
+    test('已唱色与未唱色解析后同色 → 强制主题强调色拉开层次', () async {
       final s = LyricSettings.instance;
       // 深色板下两把都设为可读的白：各自可读、却彼此相同
       await s.setSungColor(Colors.white);
       await s.setUnsungColor(Colors.white);
-      // 未唱保留白色；已唱检测到与未唱同色 → 强制主题绿
+      // 未唱保留白色；已唱检测到与未唱同色 → 逃逸到主题强调色
+      // （v2.3.0-fix5：主题已唱色默认已是白，兜不住同色碰撞）
       expect(s.readableUnsungColor, Colors.white);
-      expect(s.readableSungColor, AppColors.karaoke);
+      expect(s.readableSungColor, AppColors.accent);
       expect(s.readableSungColor, isNot(s.readableUnsungColor));
       await s.resetColors();
     });

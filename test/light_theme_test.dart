@@ -274,8 +274,9 @@ void main() {
       expect(LyricSettings.instance.inactiveColor, const Color(0xFF5D6B84));
       expect(LyricSettings.instance.sungColor, const Color(0xFF0E9E52));
       AppColors.setBrightness(Brightness.dark);
-      expect(LyricSettings.instance.unsungColor, const Color(0xFFF2F5FF));
-      expect(LyricSettings.instance.sungColor, const Color(0xFFA8F685));
+      // v2.3.0-fix5：深色板三色对齐 AMLL 参考视频（白 / 60%白 / 40%白）
+      expect(LyricSettings.instance.unsungColor, const Color(0x99FFFFFF));
+      expect(LyricSettings.instance.sungColor, const Color(0xFFFFFFFF));
     });
 
     test('自定义后不跟随主题；重置后回到主题默认', () async {

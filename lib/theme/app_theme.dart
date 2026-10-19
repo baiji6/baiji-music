@@ -98,9 +98,13 @@ class AppPalette {
     titleGradient: [Color(0xFF8ADBFF), Color(0xFF4FA3FF)],
     accent: Color(0xFF00E5FF),
     accentAlt: Color(0xFFFF2E97),
-    karaoke: Color(0xFFA8F685),
-    lyricUnsung: Color(0xFFF2F5FF),
-    lyricInactive: Color(0xFF5A6686),
+    // 歌词三色对齐视频参考（AMLL / Apple Music 风格，v2.3.0-fix5）：
+    // 逐字已唱 = 纯白填充；当前行未唱 = 60% 白（灰）；非当前行 = 40% 白。
+    // 层次全靠明度差，与参考视频一致（旧值已唱是荧光绿，不符）。
+    // 可读性下限由 LyricSettings 的对比度解析兜底（对 bg1 均 ≥3:1）。
+    karaoke: Color(0xFFFFFFFF),
+    lyricUnsung: Color(0x99FFFFFF),
+    lyricInactive: Color(0x66FFFFFF),
     danger: Color(0xFFFF5470),
     success: Color(0xFF2EE6A8),
     warning: Color(0xFFFFB74D),

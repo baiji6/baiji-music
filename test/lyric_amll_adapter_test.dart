@@ -97,4 +97,14 @@ void main() {
     expect(p.resumeDelay, const Duration(seconds: 5));
     expect(p.interactive, isTrue);
   });
+
+  test('预设映射：远处行保持可读（不被行过渡的 fade 二次打折）', () {
+    // v2.3.0-fix5：appleMusic 预设自带 fade(.45)，非当前行不透明度只有
+    // 45%，叠加深色底上的 40% 白文字后远处行几乎不可见（实测有效亮度
+    // 不到背景 1.15 倍）。这里锁定自建过渡：远处行 ≥0.88、当前行 =1。
+    final p = lyricPresetFrom(LyricSettings.instance);
+    final inactive = p.lineTransition.state(false);
+    expect(inactive.opacity, greaterThanOrEqualTo(0.88));
+    expect(p.lineTransition.state(true).opacity, 1.0);
+  });
 }

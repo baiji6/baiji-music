@@ -16,7 +16,11 @@ class LyricSettings extends ChangeNotifier {
 
   static const double minFontSize = 12.0;
   static const double maxFontSize = 30.0;
-  static const double defaultFontSize = 17.0;
+
+  /// 默认字号。v2.3.0-fix5 起对齐参考视频（AMLL 风格）：视频里一行歌词
+  /// 几乎占满屏宽，对应 26~30px 量级；17px 在参考视频的尺度下小得看不清。
+  /// 仍可在 12~30 范围调节。
+  static const double defaultFontSize = 26.0;
 
   /// 当前行放大倍率的可调范围。1.0 表示不放大。
   static const double minActiveScale = 1.0;
@@ -36,17 +40,25 @@ class LyricSettings extends ChangeNotifier {
   static const int defaultWeight = 800;
 
   /// 歌词卡片圆角可调范围（逻辑像素）。0 = 直角，铺满整屏。
+  ///
+  /// v2.3.0-fix5 起默认 0：歌词区换成 AMLL 风格的全幅模糊封面底，
+  /// 参考视频里歌词直接铺在暗底上没有卡片边界。
   static const double minCorner = 0.0;
   static const double maxCorner = 40.0;
-  static const double defaultCorner = 24.0;
+  static const double defaultCorner = 0.0;
 
   // 默认三色（深色主题下的取值；浅色主题由 AppPalette.light 提供，
   // 见 AppColors.karaoke / lyricUnsung / lyricInactive）：
-  // 已唱 = 荧光黄绿（参考视频实测色值），当前行未唱 = 亮白，
-  // 非当前行 = 暗灰。三者都可在设置里自定义，自定义后不再跟随主题。
-  static const Color defaultSungColor = Color(0xFFA8F685);
-  static const Color defaultUnsungColor = Color(0xFFF2F5FF);
-  static const Color defaultInactiveColor = Color(0xFF5A6686);
+  // 已唱 = 白色填充（AMLL 参考视频实测：逐字填充为纯白），
+  // 当前行未唱 = 60% 白（灰），非当前行 = 40% 白。
+  // 三者都可在设置里自定义，自定义后不再跟随主题。
+  static const Color defaultSungColor = Color(0xFFFFFFFF);
+  static const Color defaultUnsungColor = Color(0x99FFFFFF);
+  static const Color defaultInactiveColor = Color(0x66FFFFFF);
+
+  /// 是否左对齐默认值。参考视频（AMLL / QQ 音乐）均为左对齐，
+  /// v2.3.0-fix5 起默认左对齐；用户仍可在样式面板切居中。
+  static const bool defaultAlignLeft = true;
 
   static const String _prefs = 'lyric_view';
   static const String _kFont = 'font_size';
@@ -59,7 +71,7 @@ class LyricSettings extends ChangeNotifier {
   static const String _kInactive = 'inactive_color';
 
   double _fontSize = defaultFontSize;
-  bool _alignLeft = false;
+  bool _alignLeft = defaultAlignLeft;
   double _activeScale = defaultActiveScale;
   int _weight = defaultWeight;
   double _corner = defaultCorner;
@@ -179,13 +191,15 @@ class LyricSettings extends ChangeNotifier {
   /// 已唱色的可读版本。
   ///
   /// 额外保证与解析后的未唱色**不同色**：两者相同时填充渐变两端一致，
-  /// 逐字染色完全隐形。碰撞时强制用主题已唱色（绿色系，与任何墨/纸
-  /// 底色都拉开）。
+  /// 逐字染色完全隐形。碰撞时强制用主题强调色（青/深青，与任何白灰
+  /// 墨都不同色相）拉开。
+  /// v2.3.0-fix5：主题已唱色的默认值本身变成了白（AMLL 参考视频就是
+  /// 白色填充），兜不住白/灰碰撞，因此逃逸目标从 karaoke 换成 accent。
   Color get readableSungColor {
     final s = _resolveReadable(sungColor, AppColors.karaoke);
     if (s == readableUnsungColor) {
-      final themed = AppColors.karaoke;
-      if (themed != s) return themed;
+      final escape = AppColors.accent;
+      if (escape != s) return escape;
     }
     return s;
   }
