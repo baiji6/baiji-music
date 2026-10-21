@@ -6,6 +6,77 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.0-fix1
+
+### 🐛 修复：酷我无法搜索
+
+- 根因：酷我搜索接口 `www.kuwo.cn/search/searchMusicBykeyWord` 的响应头是
+  `Content-Type: text/plain`（不是 `application/json`），dio 的 `ResponseType.json`
+  因此把响应体**原样当字符串**返回，后续 `as Map<String, dynamic>` 直接抛
+  `type 'String' is not a subtype of type 'Map<String, dynamic>' in type cast`
+- 修复：改为按 bytes 收取 + 手动解码（UTF-8 优先，失败回退 GBK）+ `jsonDecode`，
+  并显式校验 `decoded is! Map` 时抛出可读错误，不再抛类型转换异常
+
+### 🐛 修复：三平台歌单只解析出部分曲目
+
+- **QQ 音乐**：`fcg_v8_playlist_cp.fcg` 的 `songlist` 字段本身就是**全量**
+  （实测 2710 首的歌单返回 2163~2710 条全量），此前被本地 `.take(limit)` 截断成
+  1000 条；现改为默认不限量，并补上歌单创建者昵称
+- **网易云音乐**：`api/playlist/detail` 的 `tracks` 字段**只返回 10 首**，
+  改为先取 `api/v6/playlist/detail` 的 `trackIds`（实测全量 1996 条），
+  再分批调 `api/v3/song/detail`（单批上限 100）补全曲目信息
+- **酷我音乐**：`pl.svc` 的 `rn` 参数单次最多返回 1000 条，超过会被截断；
+  改为按 1000 条/页循环拉取，直到取满 `total`
+- 分享歌单导入的 `limit` 默认值由 1000 改为 0（不限制）
+
+### 🐛 修复：设置里的「设备 GUID」点不开
+
+- 此前只弹一条瞬时 snackbar，GUID 太长在手机上根本看不全、也复制不了
+- 改为弹出 Miuix 信息对话框：完整展示 GUID + 平台名，等宽字体 + 可横向滚动，
+  并提供**一键复制**按钮；取值改为 `await DeviceGuid.ensure()`，
+  首次启动读平台设备 ID 未完成时也不会再显示「生成中…」
+
+### 🆕 酷我 ID / 单曲链接直达播放
+
+- 新增「工具箱 → 音乐工具 → **酷我 ID 直达播放**」，同时在「我的 → 更多」增加同名入口
+- 支持三种输入：纯数字歌曲 ID（rid）、酷我网页版单曲链接
+  （`kuwo.cn/play_detail/{id}`）、移动端单曲链接（`m.kuwo.cn/newh5app/song_detail/{id}`）
+- 查询后展示歌曲名 / 歌手 / 专辑 / 时长 / 可用音质，一键播放；
+  QMC 加密音轨自动走本地流式中继解密
+
+### ⚡ QMC v2 本地流式解密：重写中继 + 验证算法
+
+- **算法验证**：与开源实现 `kuwo-music-relay-main/decrypt.php` 逐表逐式对照
+  （DES 置换表、TEA 变体、密钥派生常量、`rawKeyLengths=[704,364]`、V2 前缀、
+  Rc4Cipher 的 KSA / hash / segmentSkip / firstSegment）**完全一致**；
+  用真实线上 mflac 母带音轨（rid=7149583）端到端跑通：
+  ekey 952 字符 → rawKey 704 → 最终 key 512 → 走 `Rc4Cipher` → 解出合法 `fLaC` 头
+- **中继重写**，修掉四个实际缺陷：
+  - 之前无 Range 时会把整个文件读进内存（实测 145MB / 8.3 秒，手机上直接 OOM）；
+    改用 `http.Client.send()` + `StreamedResponse` **逐块解密逐块下发**，
+    实测 2863 块、**首字节延迟 0ms**、总耗时 6.2 秒
+  - ekey 原本明文塞在 URL query（952 字符，密钥暴露在日志里）；
+    改为**短 token 会话表**，URL 形如 `http://127.0.0.1:43425/stream.flac?t=s0`，
+    ekey 只存内存
+  - 固定端口 8899 可能冲突；改为由系统分配空闲端口（`port = 0`）
+  - 越界 Range 直接 502；改为先探测总大小再把 start/end 夹回合法范围重试
+- 补齐 `.aac` → `audio/aac`、`.mp4` → `audio/mp4` 的 Content-Type
+
+### 🐛 修复：服务端面板表格在手机上无法左右滑动
+
+- `upload.php` 的「用户（按 GUID 聚合）」「最近播放」「最近搜索」三张表在窄屏下
+  被裁切且无法横向滚动
+- 改为外层 `.tw` 滚动容器（`overflow-x:auto` + `-webkit-overflow-scrolling:touch`），
+  表格 `width:max-content; min-width:100%`，**首列（GUID / 时间）左侧吸附固定**，
+  滑动时仍可见；手机端另加「← 左右滑动查看更多列 →」提示
+- 手机端同步收紧外边距与字号
+
+### 🧪 新增回归测试
+
+- `test/kuwo_qmc_test.dart`：用**真实 ekey + 真实密文/明文前 6144 字节**锁死
+  QMC v2 行为 —— 密钥派生链、工厂选择 `Rc4Cipher`、解密得合法 FLAC 头、
+  **按偏移解密与整文件解密逐字节一致**（seek 前提）、分段边界 128 / 5120 前后一致
+
 ## 2.4.0
 
 ### 🎵 新增：酷我音乐音源（第三平台）

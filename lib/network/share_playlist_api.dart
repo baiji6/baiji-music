@@ -71,8 +71,13 @@ class QqPlaylist {
   }
 
   /// 拉取歌单详情
+  ///
+  /// 说明: `fcg_v8_playlist_cp.fcg` 的 `songlist` 字段本身就是**全量**
+  /// （实测 2710 首的歌单返回 2163~2710 条全量），`songids` 也是全量逗号串。
+  /// 历史上的「只解析出 1000 首」是因为本方法对 `songlist` 做了 `.take(limit)`，
+  /// 而默认 limit=1000。现在 limit 默认为 0（不限制）。
   static Future<SharedPlaylist> detail(String disstid,
-      {int limit = 1000}) async {
+      {int limit = 0}) async {
     final url = Uri.parse('https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg')
         .replace(queryParameters: {
       'type': '1',
@@ -86,8 +91,9 @@ class QqPlaylist {
         ? null
         : Map<String, dynamic>.from(cdlist.first as Map);
     if (cd == null) throw Exception('歌单不存在: $disstid');
-    final songs =
-        (cd['songlist'] as List<dynamic>? ?? const []).take(limit).map((e) {
+
+    final rawList = (cd['songlist'] as List<dynamic>? ?? const []);
+    final songs = (limit > 0 ? rawList.take(limit) : rawList).map((e) {
       final song = Map<String, dynamic>.from(e as Map);
       return PlaylistTrack(
         name: (song['songname'] ?? '').toString(),
@@ -101,14 +107,14 @@ class QqPlaylist {
       source: 'qq',
       id: disstid,
       name: (cd['dissname'] ?? '').toString(),
-      creator: '',
+      creator: (cd['nickname'] ?? cd['nick'] ?? '').toString(),
       cover: (cd['logo'] ?? cd['headurl'] ?? '').toString(),
       trackCount: songs.length,
       tracks: songs,
     );
   }
 
-  static Future<SharedPlaylist> parse(String input, {int limit = 1000}) async {
+  static Future<SharedPlaylist> parse(String input, {int limit = 0}) async {
     final id = parseId(input);
     if (id == null) throw ArgumentError('无法从输入解析出 QQ 歌单 id');
     return detail(id, limit: limit);
@@ -137,24 +143,39 @@ class NeteasePlaylist {
   }
 
   /// 拉取歌单详情
-  static Future<SharedPlaylist> detail(String id,
-      {int limit = 1000}) async {
-    final url = Uri.parse('https://music.163.com/api/playlist/detail')
+  ///
+  /// 关键坑: `api/playlist/detail` 返回的 `tracks` 字段**只有 10 条**，
+  /// 而歌单真实曲目在 `api/v6/playlist/detail` 的 `trackIds` 里（全量，实测 1996 条）。
+  /// 因此这里改为：v6 拿 trackIds → 分批调 `api/v3/song/detail` 补全曲目信息。
+  ///
+  /// `api/v3/song/detail` 的批量上限实测为 100（200 会返回 0 条），
+  /// 需要同时传 `ids`（逗号串）与 `c`（`[{"id":..,"br":128000}]`）。
+  static Future<SharedPlaylist> detail(String id, {int limit = 0}) async {
+    final metaUrl = Uri.parse('https://music.163.com/api/v6/playlist/detail')
         .replace(queryParameters: {'id': id}).toString();
-    final data = await getJsonWithRetry(url, headers: headers);
-    final pl = (data['result'] ?? data['playlist']) as Map<String, dynamic>?;
+    final meta = await getJsonWithRetry(metaUrl, headers: headers);
+    final pl = (meta['playlist'] ?? meta['result']) as Map<String, dynamic>?;
     if (pl == null) throw Exception('歌单不存在: $id');
-    final songs =
-        ((pl['tracks'] ?? const []) as List<dynamic>).take(limit).map((e) {
-      final song = Map<String, dynamic>.from(e as Map);
-      return PlaylistTrack(
-        name: (song['name'] ?? '').toString(),
-        artist: _joinArtists(song['artists'] as List<dynamic>?),
-        album: (song['album']?['name'] ?? '').toString(),
-        durationSeconds: ((song['dt'] ?? 0) as num).toInt() ~/ 1000,
-        rid: (song['id'] ?? '').toString(),
-      );
-    }).toList();
+
+    // 全量曲目 id
+    final trackIds = (pl['trackIds'] as List<dynamic>? ?? const [])
+        .map((e) => (e is Map ? e['id'] : e).toString())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final ids = limit > 0 && limit < trackIds.length
+        ? trackIds.sublist(0, limit)
+        : trackIds;
+
+    // 分批补全歌曲详情
+    const batchSize = 100;
+    final songs = <PlaylistTrack>[];
+    for (var i = 0; i < ids.length; i += batchSize) {
+      final chunk = ids.sublist(
+          i, (i + batchSize).clamp(0, ids.length));
+      final detail = await _songDetails(chunk);
+      songs.addAll(detail);
+    }
+
     return SharedPlaylist(
       source: 'netease',
       id: id,
@@ -166,7 +187,28 @@ class NeteasePlaylist {
     );
   }
 
-  static Future<SharedPlaylist> parse(String input, {int limit = 1000}) async {
+  /// 批量拉取歌曲详情（每批 ≤100 首）
+  static Future<List<PlaylistTrack>> _songDetails(List<String> ids) async {
+    if (ids.isEmpty) return const [];
+    final c = '[${ids.map((i) => '{"id":$i,"br":128000}').join(',')}]';
+    final url = Uri.parse('https://music.163.com/api/v3/song/detail')
+        .replace(queryParameters: {'ids': ids.join(','), 'c': c})
+        .toString();
+    final data = await getJsonWithRetry(url, headers: headers);
+    final raw = (data['songs'] as List<dynamic>? ?? const []);
+    return raw.map((e) {
+      final song = Map<String, dynamic>.from(e as Map);
+      return PlaylistTrack(
+        name: (song['name'] ?? '').toString(),
+        artist: _joinArtists(song['ar'] as List<dynamic>?),
+        album: (song['al']?['name'] ?? '').toString(),
+        durationSeconds: ((song['dt'] ?? 0) as num).toInt() ~/ 1000,
+        rid: (song['id'] ?? '').toString(),
+      );
+    }).toList();
+  }
+
+  static Future<SharedPlaylist> parse(String input, {int limit = 0}) async {
     final id = parseId(input);
     if (id == null) throw ArgumentError('无法从输入解析出网易云歌单 id');
     return detail(id, limit: limit);
@@ -187,48 +229,75 @@ class KuwoPlaylist {
   }
 
   /// 拉取歌单详情
-  static Future<SharedPlaylist> detail(String pid,
-      {int limit = 1000}) async {
-    final url = Uri.parse('http://nplserver.kuwo.cn/pl.svc').replace(
-        queryParameters: {
-      'op': 'getlistinfo',
-      'pid': pid,
-      'pn': '0',
-      'rn': limit.toString(),
-      'encode': 'utf8',
-      'keyset': 'pl2012',
-      'identity': 'kuwo',
-      'pcmp4': '1',
-      'vipver': 'MUSIC_9.0.5.0_W1',
-      'newver': '1',
-    }).toString();
-    final data = await getJsonWithRetry(url, headers: headers);
-    final songs =
-        ((data['musiclist'] ?? const []) as List<dynamic>).take(limit).map((e) {
-      final song = Map<String, dynamic>.from(e as Map);
-      return PlaylistTrack(
-        name: (song['name'] ?? '').toString(),
-        artist: (song['artist'] ?? '').toString(),
-        album: (song['album'] ?? '').toString(),
-        durationSeconds:
-            int.tryParse((song['duration'] ?? '0').toString()) ?? 0,
-        rid: (song['id'] ?? '').toString(),
-      );
-    }).toList();
+  ///
+  /// 关键坑: `rn` 参数单次最多返回 1000 条，超过 1000 的歌单必须**分页**
+  /// （`pn` 递增）。实测 1790 首的歌单用 `rn=2000` 可一次拿全，
+  /// 但 2710 首的歌单会被截断，所以这里按 1000/页循环拉取。
+  static Future<SharedPlaylist> detail(String pid, {int limit = 0}) async {
+    const pageSize = 1000;
+    final tracks = <PlaylistTrack>[];
+    var total = 0;
+    String name = '';
+    String creator = '';
+    String cover = '';
+
+    for (var pn = 0; ; pn++) {
+      final url = Uri.parse('http://nplserver.kuwo.cn/pl.svc').replace(
+          queryParameters: {
+        'op': 'getlistinfo',
+        'pid': pid,
+        'pn': pn.toString(),
+        'rn': pageSize.toString(),
+        'encode': 'utf8',
+        'keyset': 'pl2012',
+        'identity': 'kuwo',
+        'pcmp4': '1',
+        'vipver': 'MUSIC_9.0.5.0_W1',
+        'newver': '1',
+      }).toString();
+      final data = await getJsonWithRetry(url, headers: headers);
+      if (pn == 0) {
+        total = (data['total'] as num?)?.toInt() ?? 0;
+        name = (data['name'] ?? data['listname'] ?? data['title'] ??
+                data['list_title'] ?? '')
+            .toString();
+        creator = (data['uname'] ?? '').toString();
+        cover = (data['img'] ?? '').toString();
+      }
+      final raw = (data['musiclist'] as List<dynamic>? ?? const []);
+      if (raw.isEmpty) break;
+      for (final e in raw) {
+        final song = Map<String, dynamic>.from(e as Map);
+        tracks.add(PlaylistTrack(
+          name: (song['name'] ?? '').toString(),
+          artist: (song['artist'] ?? '').toString(),
+          album: (song['album'] ?? '').toString(),
+          durationSeconds:
+              int.tryParse((song['duration'] ?? '0').toString()) ?? 0,
+          rid: (song['id'] ?? '').toString(),
+        ));
+      }
+      // 已取满总量或达到 limit 即停止
+      if (total > 0 && tracks.length >= total) break;
+      if (limit > 0 && tracks.length >= limit) break;
+      if (raw.length < pageSize) break;
+    }
+
+    final songs = limit > 0 && tracks.length > limit
+        ? tracks.sublist(0, limit)
+        : tracks;
     return SharedPlaylist(
       source: 'kuwo',
       id: pid,
-      name: (data['name'] ?? data['listname'] ?? data['title'] ??
-              data['list_title'] ?? '')
-          .toString(),
-      creator: (data['uname'] ?? '').toString(),
-      cover: (data['img'] ?? '').toString(),
+      name: name,
+      creator: creator,
+      cover: cover,
       trackCount: songs.length,
       tracks: songs,
     );
   }
 
-  static Future<SharedPlaylist> parse(String input, {int limit = 1000}) async {
+  static Future<SharedPlaylist> parse(String input, {int limit = 0}) async {
     final id = parseId(input);
     if (id == null) throw ArgumentError('无法从输入解析出酷我歌单 id');
     return detail(id, limit: limit);
@@ -238,8 +307,9 @@ class KuwoPlaylist {
 // ───────────────────────────── 统一入口 ─────────────────────────────
 class SharePlaylist {
   /// 自动识别平台并解析分享歌单
-  static Future<SharedPlaylist> parse(String input,
-      {int limit = 1000}) async {
+  ///
+  /// [limit] 为 0 时不限制（拉取全部曲目）。
+  static Future<SharedPlaylist> parse(String input, {int limit = 0}) async {
     final s = input.trim();
     if (s.contains('qq.com')) {
       return QqPlaylist.parse(s, limit: limit);

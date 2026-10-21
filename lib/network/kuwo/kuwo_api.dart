@@ -140,20 +140,40 @@ class KuwoApi {
     _relay = null;
   }
 
+  /// 请求 JSON 接口。
+  ///
+  /// **不能直接用 `ResponseType.json`**：酷我搜索接口
+  /// (`www.kuwo.cn/search/searchMusicBykeyWord`) 的响应头是
+  /// `Content-Type: text/plain`，dio 会因此把响应体原样当字符串返回，
+  /// 后续 `as Map<String, dynamic>` 直接抛
+  /// `type 'String' is not a subtype of type 'Map<String, dynamic>'`。
+  /// 所以这里统一按 bytes 收，自己解码（utf8 优先，失败退 gbk）再 jsonDecode。
   static Future<Map<String, dynamic>> _getJson(
     String url, {
     Map<String, String>? headers,
   }) async {
-    final resp = await _dio.get<Map<String, dynamic>>(
+    final resp = await _dio.get<List<int>>(
       url,
       options: Options(
-        responseType: ResponseType.json,
+        responseType: ResponseType.bytes,
         headers: headers ?? browserHeaders,
       ),
     );
-    final data = resp.data;
-    if (data == null) throw Exception('酷我接口返回空');
-    return data;
+    final body = _decodeBody(resp.data ?? const []);
+    final decoded = jsonDecode(body);
+    if (decoded is! Map) {
+      throw Exception('酷我接口返回的不是 JSON 对象：${body.substring(0, body.length > 120 ? 120 : body.length)}');
+    }
+    return Map<String, dynamic>.from(decoded);
+  }
+
+  /// 响应体解码：优先 UTF-8，失败退 GBK（酷我部分接口仍是 GBK）。
+  static String _decodeBody(List<int> bytes) {
+    try {
+      return utf8.decode(bytes);
+    } catch (_) {
+      return gbk.decode(bytes, allowMalformed: true);
+    }
   }
 
   // ==================== 搜索 ====================

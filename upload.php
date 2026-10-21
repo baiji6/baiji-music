@@ -538,6 +538,8 @@ if ($action === 'api') {
        box-shadow:0 0 0 0 rgba(63,185,80,.6);animation:pulse 2s infinite}
   @keyframes pulse{70%{box-shadow:0 0 0 8px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
   .wrap{padding:20px;max-width:1400px;margin:0 auto}
+  @media(max-width:640px){.wrap{padding:12px}}
+  @media(max-width:640px){th,td{max-width:180px;font-size:12px;padding:7px 8px}}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
   .card .k{font-size:12px;color:var(--dim)}
@@ -548,9 +550,19 @@ if ($action === 'api') {
   .panel h2{margin:0;padding:12px 16px;font-size:14px;border-bottom:1px solid var(--line);
             background:var(--panel2);color:var(--dim);font-weight:600;letter-spacing:.5px}
   .panel .body{padding:12px 16px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
+  /* ---- 表格：外层 .tw 负责横向滚动，手机上可左右滑动 ---- */
+  .tw{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
+      width:100%;max-width:100%}
+  .tw::-webkit-scrollbar{height:8px}
+  .tw::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+  .tw::-webkit-scrollbar-track{background:transparent}
+  table{border-collapse:collapse;font-size:13px;width:max-content;min-width:100%}
   th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap;
         overflow:hidden;text-overflow:ellipsis;max-width:280px}
+  th{position:sticky;left:0;background:var(--panel2);z-index:2}
+  /* 首列（GUID / 时间）固定在左侧，横向滑动时仍可见 */
+  td:first-child{position:sticky;left:0;background:var(--panel);z-index:1}
+  tbody tr:hover td:first-child{background:#1b2430}
   th{color:var(--dim);font-weight:600;font-size:12px}
   tbody tr:hover{background:#1b2430}
   .tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;
@@ -560,6 +572,9 @@ if ($action === 'api') {
   .tag.kuwo{color:#60a5fa;border-color:#2b4a6b}
   .bar{height:8px;background:var(--panel2);border-radius:4px;overflow:hidden;margin-top:4px}
   .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent))}
+  .swipe-tip{display:none;font-size:11px;color:var(--dim);padding:6px 14px 0;
+             text-align:right;letter-spacing:.3px}
+  @media(max-width:640px){.swipe-tip{display:block}}
   .kw{display:flex;flex-wrap:wrap;gap:8px}
   .kw span{background:var(--panel2);border:1px solid var(--line);border-radius:999px;
            padding:4px 10px;font-size:12px}
@@ -594,35 +609,44 @@ if ($action === 'api') {
   <div class="panel">
     <h2>用户（按 GUID 聚合）</h2>
     <div class="body" style="padding:0">
+      <div class="swipe-tip">← 左右滑动查看更多列 →</div>
+      <div class="tw">
       <table>
         <thead><tr><th>GUID</th><th>系统</th><th>事件数</th><th>最后活跃</th></tr></thead>
         <tbody id="userBody"></tbody>
       </table>
+      </div>
     </div>
   </div>
 
   <div class="panel">
     <h2>最近播放</h2>
     <div class="body" style="padding:0">
+      <div class="swipe-tip">← 左右滑动查看更多列 →</div>
+      <div class="tw">
       <table>
         <thead><tr><th>时间</th><th>平台</th><th>歌曲</th><th>歌手</th><th>专辑</th>
           <th>音质</th><th>GUID</th><th>播放链接</th></tr></thead>
         <tbody id="playBody"></tbody>
       </table>
+      </div>
     </div>
   </div>
 
   <div class="panel">
     <h2>最近搜索</h2>
     <div class="body" style="padding:0">
+      <div class="swipe-tip">← 左右滑动查看更多列 →</div>
+      <div class="tw">
       <table>
         <thead><tr><th>时间</th><th>平台</th><th>关键词</th><th>结果数</th><th>GUID</th></tr></thead>
         <tbody id="searchBody"></tbody>
       </table>
+      </div>
     </div>
   </div>
 
-  <div class="footer">白姬音乐 v2.4.0 · upload.php 数据面板</div>
+  <div class="footer">白姬音乐 v2.4.0-fix1 · upload.php 数据面板</div>
 </div>
 
 <script>

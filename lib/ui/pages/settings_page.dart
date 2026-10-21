@@ -26,9 +26,9 @@ import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
-import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
+import '../widgets/info_dialog.dart';
 import '../widgets/lyric_style_sheet.dart';
 import 'qq_login_page.dart';
 import 'netease_login_page.dart';
@@ -687,9 +687,23 @@ class _SettingsPageState extends State<SettingsPage> {
                     summary: '本机唯一标识（用于数据统计去重）',
                     startAction: const Icon(Icons.fingerprint_rounded,
                         color: AppColors.violet, size: 22),
-                    onClick: () {
-                      final guid = DeviceGuid.instance;
-                      showAppSnack(guid.isEmpty ? '生成中…' : 'GUID: $guid');
+                    onClick: () async {
+                      // GUID 可能还没生成（首次启动读平台设备 ID 是异步的），
+                      // 这里 await ensure() 拿到真值再展示。
+                      final guid = await DeviceGuid.ensure();
+                      if (!context.mounted) return;
+                      await showAppInfoDialog(
+                        context,
+                        title: '设备 GUID',
+                        summary: '本机唯一标识，用于数据统计去重。'
+                            '已随搜索/播放记录一起上报，可直接复制。',
+                        lines: [
+                          guid,
+                          '',
+                          '平台: ${DeviceGuid.platformName}',
+                        ],
+                        copyText: guid,
+                      );
                     },
                   ),
                   const MiuixHorizontalDivider(),

@@ -12,6 +12,7 @@ import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 import 'decrypt_keys_page.dart';
 import 'decrypt_page.dart';
+import 'kuwo_direct_page.dart';
 import 'log_page.dart';
 
 class ToolboxPage extends StatelessWidget {
@@ -38,6 +39,17 @@ class ToolboxPage extends StatelessWidget {
                   description: '批量解密已下载的加密音频文件，支持导入密钥与手动填写，'
                       '可自定义保存位置。解密后的文件可直接在「本地音乐」里播放。',
                   page: DecryptPage(),
+                ),
+                MiuixHorizontalDivider(
+                    thickness: 1, color: AppColors.strokeGlass),
+                _ToolRow(
+                  icon: Icons.bolt_rounded,
+                  color: AppColors.violet,
+                  title: '酷我 ID 直达播放',
+                  tag: 'rid · 单曲链接',
+                  description: '输入酷我歌曲 ID 或单曲链接，直接跳到播放。'
+                      'QMC 加密音轨会自动走本地流式解密。',
+                  page: const KuwoDirectPage(),
                 ),
                 MiuixHorizontalDivider(
                     thickness: 1, color: AppColors.strokeGlass),

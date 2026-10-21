@@ -13,6 +13,7 @@ import 'play_stats_page.dart';
 import 'download_page.dart';
 import 'favorite_page.dart';
 import 'history_page.dart';
+import 'kuwo_direct_page.dart';
 import 'local_music_page.dart';
 import 'log_page.dart';
 import 'netease_login_page.dart';
@@ -294,6 +295,16 @@ class _LibraryHomeState extends State<LibraryHome> {
                           onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
                                   builder: (_) => const SharePlaylistPage())),
+                        ),
+                        // 酷我 ID 直达播放（v2.4.0-fix1）
+                        _SettingTile(
+                          icon: Icons.bolt_rounded,
+                          title: '酷我 ID 直达播放',
+                          subtitle: '输入酷我歌曲 ID / 单曲链接直接播放',
+                          color: AppColors.violet,
+                          onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                  builder: (_) => const KuwoDirectPage())),
                         ),
                         _SettingTile(
                           icon: Icons.settings_outlined,
