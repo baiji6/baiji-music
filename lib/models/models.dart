@@ -13,8 +13,73 @@ class Source {
   static const String qq = 'qq';
   static const String netease = 'netease';
 
+  /// 酷我音乐（v2.4.0 新增平台）。
+  static const String kuwo = 'kuwo';
+
   /// 本地文件（扫描本机磁盘得到，不走任何网络接口）。
   static const String local = 'local';
+}
+
+/// 酷我音质枚举（v2.4.0 新增平台）。
+///
+/// 酷我的音质用 `br` 串标识（`{bitrate}k{format}`），与 QQ/网易云的
+/// 「档位」概念一致但参数不同，因此单列一套枚举。
+class KuwoQuality {
+  /// 音质 id（与酷我接口的 N_MINFO 一致，如 `master` / `flac` / `320k`）。
+  final String id;
+
+  /// 展示名。
+  final String label;
+
+  /// 容器格式（flac / mflac / mp3 / ogg / aac）。
+  final String format;
+
+  /// 比特率（kbps）。
+  final int bitrate;
+
+  /// 落盘扩展名。
+  final String ext;
+
+  const KuwoQuality(this.id, this.label, this.format, this.bitrate, this.ext);
+
+  /// 酷我接口的 `br` 参数。
+  String get br => '${bitrate}k$format';
+
+  static const master =
+      KuwoQuality('master', '臻品母带', 'mflac', 20900, '.flac');
+  static const hires = KuwoQuality('hires', 'Hi-Res 无损', 'flac', 4000, '.flac');
+  static const flac = KuwoQuality('flac', '无损 FLAC', 'flac', 2000, '.flac');
+  static const ogg = KuwoQuality('300k', 'OGG 300k', 'ogg', 300, '.ogg');
+  static const mp3_320 = KuwoQuality('320k', '极高 320k', 'mp3', 320, '.mp3');
+  static const mp3_128 = KuwoQuality('128k', '标准 128k', 'mp3', 128, '.mp3');
+  static const aac = KuwoQuality('48k', '省流 AAC', 'aac', 48, '.aac');
+
+  /// 可选音质（高 → 低）。
+  static const downloadOptions = [
+    master,
+    hires,
+    flac,
+    ogg,
+    mp3_320,
+    mp3_128,
+    aac,
+  ];
+
+  /// 播放默认：未登录时无损不可用，128k 最稳。
+  static const playbackDefault = mp3_128;
+
+  static const playbackOptions = downloadOptions;
+
+  static KuwoQuality? fromId(String? id) {
+    if (id == null) return null;
+    for (final q in downloadOptions) {
+      if (q.id == id) return q;
+    }
+    return null;
+  }
+
+  @override
+  String toString() => 'KuwoQuality($id,$label)';
 }
 
 // ==================== QQ 音质枚举 ====================
@@ -208,6 +273,9 @@ class Song {
   });
 
   bool get isNetease => source == Source.netease;
+
+  /// 是否酷我歌曲（v2.4.0）。
+  bool get isKuwo => source == Source.kuwo;
 
   /// 是否本地文件歌曲。判定依据是 [localPath]，比看 `source` 更可靠——
   /// 历史持久化数据可能缺 `source` 字段但仍有路径。

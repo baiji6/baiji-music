@@ -17,6 +17,7 @@ import '../lyrics/lyric_model.dart';
 import '../lyrics/lyric_parser.dart';
 import '../models/models.dart';
 import 'music_api.dart';
+import 'kuwo/kuwo_api.dart';
 import 'netease/netease_client.dart';
 import 'qq_music_client.dart';
 
@@ -33,6 +34,7 @@ class LyricApi {
     try {
       if (song.isLocal) return await local(song);
       if (song.isNetease) return await netease(song);
+      if (song.isKuwo) return await kuwo(song);
       return await qq(song);
     } catch (e) {
       AppLog.w('LyricApi', '获取歌词失败: $e');
@@ -51,6 +53,21 @@ class LyricApi {
     final raw = await LocalScanner.readLyricFor(song);
     if (raw.trim().isEmpty) {
       AppLog.i('LyricApi', '本地歌曲无歌词: ${song.localPath}');
+      return Lyrics.empty;
+    }
+    return LyricParser.parse(raw);
+  }
+
+  // ==================== 酷我音乐 ====================
+
+  /// 酷我歌词（v2.4.0 新增平台）。
+  ///
+  /// 酷我返回的是 KRC（逐字带 `<时长,起始>` 标记），[KuwoApi.lyric]
+  /// 已剥离逐字标记转成普通 LRC，这里交给 [LyricParser] 解析成逐行歌词。
+  static Future<Lyrics> kuwo(Song song) async {
+    final raw = await KuwoApi.lyric(song.mid);
+    if (raw.trim().isEmpty) {
+      AppLog.i('LyricApi', '酷我歌词为空 song=${song.name}');
       return Lyrics.empty;
     }
     return LyricParser.parse(raw);

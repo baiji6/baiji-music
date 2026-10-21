@@ -9,13 +9,16 @@ import 'package:media_kit/media_kit.dart';
 
 import 'core/agreement_store.dart';
 import 'core/app_logger.dart';
+import 'core/app_version.dart';
 import 'core/cache_manager.dart';
 import 'core/capture_trust.dart';
+import 'core/device_guid.dart';
 import 'core/dev_mode.dart';
 import 'core/kv_store.dart';
 import 'core/lyric_settings.dart';
 import 'core/play_stats.dart';
 import 'core/signature_guard.dart';
+import 'core/telemetry.dart';
 import 'core/theme_controller.dart';
 import 'core/ui_settings.dart';
 import 'core/update_checker.dart';
@@ -49,6 +52,12 @@ Future<void> main() async {
   CacheManager.applyMemoryLimit();
   // 本地播放统计（听歌时长/次数/循环，纯本地）：KvStore 就绪后即开始采集
   PlayStatsService.instance.start();
+  // 数据上报（v2.4.0）：GUID + 平台 + 搜索 / 播放行为 → 自建服务器。
+  // 队列 + 批量发送，失败只记日志，绝不阻塞主流程。
+  Telemetry.instance.start();
+  Telemetry.instance.appStart(AppVersion.current);
+  // 设备 GUID：App 启动时就生成好（设置页要展示、上报要用）
+  unawaited(DeviceGuid.ensure());
   // 日志落盘 + 回读当天历史：v2.2.6 起日志不再"每次打开软件就清空"，
   // 闪退后打开日志页能看到崩之前发生了什么。
   await AppLog.instance.initFileSink();

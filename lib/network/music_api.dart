@@ -1,5 +1,6 @@
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/models/models.dart';
+import 'package:baiji_music/network/kuwo/kuwo_api.dart';
 import 'package:baiji_music/network/netease/netease_client.dart';
 import 'package:baiji_music/network/qq_music_client.dart';
 
@@ -31,10 +32,13 @@ class PlayUrlResult {
   /// 网易云实际音质（网易云歌曲才有，QQ 为 null）。
   final NeteaseQuality? ne;
 
+  /// 酷我实际音质（酷我歌曲才有，其余为 null）。
+  final KuwoQuality? kuwo;
+
   /// 覆盖扩展名（网易云响应里的真实 `type`）；为空时按音质枚举推断。
   final String? _extOverride;
 
-  const PlayUrlResult._(this.url, this.qq, this.ne, [this._extOverride]);
+  const PlayUrlResult._(this.url, this.qq, this.ne, [this._extOverride, this.kuwo]);
 
   static const empty = PlayUrlResult._('', null, null);
 
@@ -42,10 +46,10 @@ class PlayUrlResult {
   bool get isNotEmpty => url.isNotEmpty;
 
   /// 落盘扩展名。
-  String get ext => _extOverride ?? ne?.ext ?? qq?.ext ?? '.mp3';
+  String get ext => _extOverride ?? kuwo?.ext ?? ne?.ext ?? qq?.ext ?? '.mp3';
 
   /// 音质标签；无则空串。
-  String get label => qq?.label ?? ne?.label ?? '';
+  String get label => kuwo?.label ?? qq?.label ?? ne?.label ?? '';
 
   @override
   String toString() => 'PlayUrlResult($label)';
@@ -66,9 +70,42 @@ class MusicApi {
       return AppServices.instance.netease.api
           .search(keyword, limit: num, offset: (page - 1) * num);
     }
+    if (source == Source.kuwo) {
+      return searchKuwo(keyword, page: page, num: num);
+    }
     return AppServices.instance.qq.search.searchByType(keyword,
         page: page, num: num);
   }
+
+  /// 酷我搜索（v2.4.0 新增平台）。
+  ///
+  /// 酷我搜索接口用 `pn`（页码，0 起）+ `rn`（每页条数）分页，
+  /// 与 QQ/网易云的语义不同，这里做一次换算。
+  static Future<List<Song>> searchKuwo(String keyword,
+      {int page = 1, int num = 20}) async {
+    final list = await KuwoApi.search(
+      keyword,
+      pn: (page - 1) * num,
+      rn: num,
+    );
+    return list.map(kuwoSongToSong).toList();
+  }
+
+  /// 酷我歌曲 → 通用 [Song]。
+  ///
+  /// 酷我用 `rid` 做主键，统一塞进 [Song.mid]（与 QQ 的 mid 位置一致，
+  /// 便于复用到历史/收藏/队列等已有逻辑）。
+  static Song kuwoSongToSong(KuwoSong s) => Song(
+        mid: s.rid,
+        songId: int.tryParse(s.rid) ?? 0,
+        name: s.name,
+        singer: s.artist,
+        album: s.album,
+        albumMid: '',
+        duration: s.durationSeconds * 1000,
+        cover: s.pic,
+        source: Source.kuwo,
+      );
 
   /// 按来源获取相关搜索建议；失败时返回空列表。
   static Future<List<String>> suggestions(String source, String keyword,
@@ -97,7 +134,17 @@ class MusicApi {
   /// - QQ：从直链文件名前缀（如 `M500003N9y0a72Ioo.mp3`）反查；
   /// - 网易云：直接取响应里的 `level` 字段。
   static Future<PlayUrlResult> playUrlInfo(
-      Song song, Quality qqQuality, NeteaseQuality neQuality) async {
+    Song song, Quality qqQuality, NeteaseQuality neQuality,
+    {KuwoQuality? kuwoQuality}) async {
+    if (song.isKuwo) {
+      final r = await KuwoApi.playUrlWithFallback(
+        song.mid,
+        kuwoQuality ?? KuwoQuality.playbackDefault,
+      );
+      if (r.playUrl.isEmpty) return PlayUrlResult.empty;
+      return PlayUrlResult._(r.playUrl, null, null, r.ext,
+          KuwoQuality.fromId(r.qualityId) ?? kuwoQuality);
+    }
     if (song.isNetease) {
       final r =
           await AppServices.instance.netease.api.songUrl(song.songId, neQuality);
@@ -139,6 +186,9 @@ class MusicApi {
 
   /// 按来源取歌词。
   static Future<String> lyric(Song song) async {
+    if (song.isKuwo) {
+      return KuwoApi.lyric(song.mid);
+    }
     if (song.isNetease) {
       return AppServices.instance.netease.api.lyric(song.songId);
     }

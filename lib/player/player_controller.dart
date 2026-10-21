@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/kv_store.dart';
+import 'package:baiji_music/core/telemetry.dart';
 import 'package:baiji_music/local/local_scanner.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/music_api.dart';
@@ -40,6 +41,7 @@ class PlayerController {
 
   static const String _defaultQualityKey = 'default_quality';
   static const String _neteaseQualityKey = 'default_netease_quality';
+  static const String _kuwoQualityKey = 'default_kuwo_quality';
   static const String _playModeKey = 'play_mode';
   static const String _rateKey = 'play_rate';
 
@@ -51,6 +53,9 @@ class PlayerController {
   Quality currentQuality = Quality.playbackDefault;
   NeteaseQuality currentNeteaseQuality = NeteaseQuality.playbackDefault;
 
+  /// 酷我当前音质（v2.4.0）。
+  KuwoQuality currentKuwoQuality = KuwoQuality.playbackDefault;
+
   /// 当前曲目实际生效的 QQ 音质（可能与请求音质不同：服务端降级或本地自动降级）。
   Quality? _actualQqQuality;
 
@@ -60,6 +65,11 @@ class PlayerController {
   NeteaseQuality? _actualNeQuality;
 
   NeteaseQuality? get actualNeteaseQuality => _actualNeQuality;
+
+  /// 当前曲目实际生效的酷我音质。
+  KuwoQuality? _actualKuwoQuality;
+
+  KuwoQuality? get actualKuwoQuality => _actualKuwoQuality;
 
   PlayMode _playMode = PlayMode.sequential;
   PlayMode get playMode => _playMode;
@@ -124,6 +134,11 @@ class PlayerController {
   final StreamController<NeteaseQuality?> _neQualityStream =
       StreamController.broadcast();
   Stream<NeteaseQuality?> get onNeteaseQualityChanged => _neQualityStream.stream;
+
+  /// 酷我音质实际生效值变化（v2.4.0）。
+  final StreamController<KuwoQuality?> _kuwoQualityStream =
+      StreamController.broadcast();
+  Stream<KuwoQuality?> get onKuwoQualityChanged => _kuwoQualityStream.stream;
 
   /// 播放模式变化。
   final StreamController<PlayMode> _modeStream = StreamController.broadcast();
@@ -371,6 +386,20 @@ class PlayerController {
       return local;
     }
 
+    // 酷我（v2.4.0）：音质降级链在 [KuwoApi.playUrlWithFallback] 内部处理，
+    // 这里只需要带当前选中的酷我音质即可。
+    if (song.isKuwo) {
+      final r = await _fetch(song, currentQuality, currentNeteaseQuality,
+          kuwo: currentKuwoQuality);
+      if (r.isNotEmpty) {
+        _applyActual(r);
+        _reportPlay(song, r);
+        return r.url;
+      }
+      _clearActual();
+      return '';
+    }
+
     final chain = song.isNetease
         ? MusicApi.neteaseDowngradeChain(currentNeteaseQuality)
             .map((q) => _FetchPlan(qq: currentQuality, ne: q))
@@ -387,6 +416,7 @@ class PlayerController {
           AppLog.i('PlayerController', '降级成功 -> ${r.label}');
         }
         _applyActual(r);
+        _reportPlay(song, r);
         return r.url;
       }
       AppLog.w('PlayerController',
@@ -398,28 +428,41 @@ class PlayerController {
   }
 
   /// 单次取流，异常统一吞掉（降级链需要继续往下走）。
-  Future<PlayUrlResult> _fetch(Song song, Quality qq, NeteaseQuality ne) async {
+  Future<PlayUrlResult> _fetch(Song song, Quality qq, NeteaseQuality ne,
+      {KuwoQuality? kuwo}) async {
     try {
-      return await MusicApi.playUrlInfo(song, qq, ne);
+      return await MusicApi.playUrlInfo(song, qq, ne, kuwoQuality: kuwo);
     } catch (e) {
       AppLog.w('PlayerController', '取流异常: $e');
       return PlayUrlResult.empty;
     }
   }
 
+  /// 上报播放行为（GUID / 平台 / 歌曲 / 音质 / 播放链接，v2.4.0）。
+  ///
+  /// 只上报网络音源；本地文件不上报（不涉及任何平台信息）。
+  void _reportPlay(Song song, PlayUrlResult r) {
+    if (song.isLocal) return;
+    Telemetry.instance.playSong(song, quality: r.label, playUrl: r.url);
+  }
+
   /// 记录实际生效音质并广播。
   void _applyActual(PlayUrlResult r) {
     _actualQqQuality = r.qq;
     _actualNeQuality = r.ne;
+    _actualKuwoQuality = r.kuwo;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(_actualNeQuality);
+    if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(_actualKuwoQuality);
   }
 
   void _clearActual() {
     _actualQqQuality = null;
     _actualNeQuality = null;
+    _actualKuwoQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(null);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
+    if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
   }
 
   /// 切换 QQ 音质并重新取流（保留播放位置）。
@@ -431,6 +474,12 @@ class PlayerController {
   /// 切换网易云音质并重新取流（保留播放位置）。
   Future<void> switchNeteaseQuality(NeteaseQuality q) async {
     saveNeteaseQuality(q);
+    await _reResolve(q.label);
+  }
+
+  /// 切换酷我音质并重新取流（保留播放位置，v2.4.0）。
+  Future<void> switchKuwoQuality(KuwoQuality q) async {
+    saveKuwoQuality(q);
     await _reResolve(q.label);
   }
 
@@ -524,6 +573,9 @@ class PlayerController {
     final savedNe = KvStore.instance.getString(_neteaseQualityKey);
     currentNeteaseQuality =
         NeteaseQuality.fromLevel(savedNe) ?? NeteaseQuality.playbackDefault;
+    final savedKuwo = KvStore.instance.getString(_kuwoQualityKey);
+    currentKuwoQuality =
+        KuwoQuality.fromId(savedKuwo) ?? KuwoQuality.playbackDefault;
 
     final savedMode = KvStore.instance.getString(_playModeKey);
     if (savedMode != null) {
@@ -548,6 +600,12 @@ class PlayerController {
   void saveNeteaseQuality(NeteaseQuality quality) {
     currentNeteaseQuality = quality;
     KvStore.instance.setString(_neteaseQualityKey, quality.level);
+  }
+
+  /// 保存酷我音质偏好（v2.4.0）。
+  void saveKuwoQuality(KuwoQuality quality) {
+    currentKuwoQuality = quality;
+    KvStore.instance.setString(_kuwoQualityKey, quality.id);
   }
 }
 

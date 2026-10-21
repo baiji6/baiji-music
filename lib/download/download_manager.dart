@@ -22,6 +22,7 @@ class DownloadManager {
   static const String _keyPath = 'download_path';
   static const String _keyQq = 'download_qq_quality';
   static const String _keyNe = 'download_ne_quality';
+  static const String _keyKuwo = 'download_kuwo_quality';
 
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 15),
@@ -88,11 +89,30 @@ class DownloadManager {
   Future<void> saveNeQuality(NeteaseQuality q) =>
       KvStore.instance.setString('$_prefs:$_keyNe', q.level);
 
+  /// 上次选择的酷我下载音质（v2.4.0）；未选过则跟随播放器当前音质。
+  KuwoQuality get kuwoQuality => KuwoQuality.fromId(
+          KvStore.instance.getString('$_prefs:$_keyKuwo')) ??
+      PlayerController.instance.currentKuwoQuality;
+
+  Future<void> saveKuwoQuality(KuwoQuality q) =>
+      KvStore.instance.setString('$_prefs:$_keyKuwo', q.id);
+
   /// 尝试为指定歌曲获取可用直链；当前音质不可用时沿降级链自动往下试。
   ///
   /// 返回直链 + 服务端**实际**音质；全部失败返回 [PlayUrlResult.empty]。
   Future<PlayUrlResult> resolveUrl(
-      Song song, Quality qqQuality, NeteaseQuality neQuality) async {
+      Song song, Quality qqQuality, NeteaseQuality neQuality,
+      {KuwoQuality? kuwoQuality}) async {
+    if (song.isKuwo) {
+      try {
+        final r = await MusicApi.playUrlInfo(song, qqQuality, neQuality,
+            kuwoQuality: kuwoQuality ?? this.kuwoQuality);
+        if (r.isNotEmpty) return r;
+      } catch (e) {
+        AppLog.w('DownloadManager', '酷我取直链失败: $e');
+      }
+      return PlayUrlResult.empty;
+    }
     if (song.isNetease) {
       for (final q in MusicApi.neteaseDowngradeChain(neQuality)) {
         final r = await _try(song, qqQuality, q);
@@ -135,13 +155,15 @@ class DownloadManager {
     Song song, {
     required Quality qqQuality,
     required NeteaseQuality neQuality,
+    KuwoQuality? kuwoQuality,
     void Function(int downloaded, int total)? onProgress,
     CancelToken? cancelToken,
     String? partPath,
     void Function(String partPath)? onPart,
   }) async {
     try {
-      final resolved = await resolveUrl(song, qqQuality, neQuality);
+      final resolved =
+          await resolveUrl(song, qqQuality, neQuality, kuwoQuality: kuwoQuality);
       if (resolved.isEmpty) {
         AppLog.e('DownloadManager', '无可用直链: ${song.name}');
         return null;

@@ -424,6 +424,7 @@ Future<String?> runManagedDownload(
   Song song, {
   required Quality qqQuality,
   required NeteaseQuality neQuality,
+  KuwoQuality? kuwoQuality,
   LyricDownloadMode? lyricMode,
   String? resumeTaskId,
 }) async {
@@ -465,6 +466,7 @@ Future<String?> runManagedDownload(
       song,
       qqQuality: qqQuality,
       neQuality: neQuality,
+      kuwoQuality: kuwoQuality,
       onProgress: markProgress,
       cancelToken: token,
       partPath: resumePart.isEmpty ? null : resumePart,
@@ -504,7 +506,7 @@ Future<String?> runManagedDownload(
           filePath: path!,
           partPath: '',
           extras: extras,
-          qualityLabel: _qualityLabelOf(song, qqQuality, neQuality),
+          qualityLabel: _qualityLabelOf(song, qqQuality, neQuality, kuwoQuality),
           received: t.total > 0 ? t.total : t.received,
           finishedAt: DateTime.now().millisecondsSinceEpoch,
         ));
@@ -550,8 +552,11 @@ Future<String?> runManagedDownload(
   }
 }
 
-String _qualityLabelOf(Song song, Quality qq, NeteaseQuality ne) =>
-    song.isNetease ? ne.label : qq.label;
+String _qualityLabelOf(Song song, Quality qq, NeteaseQuality ne,
+        [KuwoQuality? kuwo]) =>
+    song.isKuwo
+        ? (kuwo?.label ?? '酷我')
+        : (song.isNetease ? ne.label : qq.label);
 
 /// 把已完成的下载任务转成可直接播放的本地 [Song]。
 ///

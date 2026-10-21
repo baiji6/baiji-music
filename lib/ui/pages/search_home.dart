@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/app_logger.dart';
+import '../../core/telemetry.dart';
 import '../../data/history_store.dart';
 import '../../download/download_extras.dart';
 import '../../download/download_manager.dart';
 import '../../download/download_task.dart';
 import '../../models/models.dart';
+import '../../network/hot_search_api.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
@@ -16,6 +18,7 @@ import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
 import '../widgets/download_options_sheet.dart';
+import '../widgets/platform_picker.dart';
 
 /// 搜索页：霓虹搜索框 + 音源切换 + 搜索结果列表 + 搜索历史。
 class SearchHome extends StatefulWidget {
@@ -33,6 +36,12 @@ class _SearchHomeState extends State<SearchHome> {
   List<Song> _results = [];
   List<String> _history = [];
   String _source = Source.qq; // 当前搜索音源
+
+  /// 当前平台的真实热搜榜（v2.4.0）。
+  List<HotKeyword> _hotKeywords = [];
+
+  /// 热搜榜是否正在加载。
+  bool _hotLoading = false;
 
   /// 当前显示到第几页（1 起）。
   int _page = 1;
@@ -70,15 +79,44 @@ class _SearchHomeState extends State<SearchHome> {
   /// `MusicApi.search` 已把两者统一为 [page]/[num]，两个音源行为一致。
   static const int pageSize = 20;
 
-  static const _hotTags = [
-    '周杰伦', '林俊杰', '陈奕迅', '邓紫棋', '薛之谦',
-    '纯音乐', '夜曲', '晴天', '大海', '稻香',
-  ];
+  /// 搜索框占位文案（跟随平台）。
+  static String _searchHintFor(String source) {
+    switch (source) {
+      case Source.netease:
+        return '搜索网易云音乐曲库…';
+      case Source.kuwo:
+        return '搜索酷我音乐曲库…';
+      default:
+        return '搜索 QQ 音乐曲库…';
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _history = HistoryStore.searchHistory();
+    // 首屏拉当前平台热搜榜（视频里搜索框下方的「热搜榜」）
+    _loadHotKeywords(_source);
+  }
+
+  /// 拉取指定平台的热搜榜。失败静默降级为空列表（不影响搜索功能）。
+  Future<void> _loadHotKeywords(String source) async {
+    setState(() => _hotLoading = true);
+    try {
+      final list = await hotKeywordsOf(source, limit: 20);
+      if (!mounted || source != _source) return;
+      setState(() {
+        _hotKeywords = list;
+        _hotLoading = false;
+      });
+    } catch (e) {
+      AppLog.w('SearchHome', '热搜榜加载失败: $e');
+      if (!mounted) return;
+      setState(() {
+        _hotKeywords = [];
+        _hotLoading = false;
+      });
+    }
   }
 
   @override
@@ -120,7 +158,8 @@ class _SearchHomeState extends State<SearchHome> {
         _loading = false;
       });
       AppLog.i('SearchHome',
-          '搜索「$k」(${_source == Source.qq ? 'QQ' : '网易云'}) 第 1 页命中 ${results.length} 首');
+          '搜索「$k」(${_source == Source.qq ? 'QQ' : (_source == Source.netease ? '网易云' : '酷我')}) 第 1 页命中 ${results.length} 首');
+      Telemetry.instance.search(_source, k, results.length);
     } catch (e) {
       if (!mounted || gen != _requestGen) return;
       setState(() {
@@ -237,7 +276,11 @@ class _SearchHomeState extends State<SearchHome> {
 
   void _switchSource(String source) {
     if (_source == source) return;
+    final from = _source;
     setState(() => _source = source);
+    Telemetry.instance.platformSwitch(from, source);
+    // 热搜榜跟着平台走
+    _loadHotKeywords(source);
     // 如果有搜索关键词，自动重新搜索
     if (_keyword.isNotEmpty) {
       _search(_keyword);
@@ -365,43 +408,47 @@ class _SearchHomeState extends State<SearchHome> {
                       ),
                     ),
                     const Spacer(),
-                    // 音源切换按钮
-                    _SourceSwitch(
-                      current: _source,
-                      onSwitch: _switchSource,
-                    ),
                   ],
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.all(20),
-                child: AppTextField(
-                  controller: _controller,
-                  label: _source == Source.qq
-                      ? '搜索 QQ 音乐曲库…'
-                      : '搜索网易云音乐曲库…',
-                  useLabelAsPlaceholder: true,
-                  singleLine: true,
-                  autofocus: false,
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: _search,
-                  onChanged: (v) {
-                    if (v.trim().isEmpty && _keyword.isNotEmpty) {
-                      _clear();
-                    }
-                    setState(() {});
-                  },
-                  textStyle: TextStyle(
-                      color: AppColors.textPrimary, fontSize: 15),
-                  leadingIcon: Icon(Icons.search_rounded,
-                      color: sourceColor, size: 22),
-                  trailingIcon: _controller.text.isEmpty
-                      ? null
-                      : MiuixIconButton(
-                          onPressed: _clear,
-                          child: Icon(Icons.close_rounded,
-                              color: AppColors.textTertiary, size: 18),
-                        ),
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                child: Row(
+                  children: [
+                    PlatformPicker(
+                      current: _source,
+                      onChanged: _switchSource,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: AppTextField(
+                        controller: _controller,
+                        label: _searchHintFor(_source),
+                        useLabelAsPlaceholder: true,
+                        singleLine: true,
+                        autofocus: false,
+                        textInputAction: TextInputAction.search,
+                        onSubmitted: _search,
+                        onChanged: (v) {
+                          if (v.trim().isEmpty && _keyword.isNotEmpty) {
+                            _clear();
+                          }
+                          setState(() {});
+                        },
+                        textStyle: TextStyle(
+                            color: AppColors.textPrimary, fontSize: 15),
+                        leadingIcon: Icon(Icons.search_rounded,
+                            color: sourceColor, size: 22),
+                        trailingIcon: _controller.text.isEmpty
+                            ? null
+                            : MiuixIconButton(
+                                onPressed: _clear,
+                                child: Icon(Icons.close_rounded,
+                                    color: AppColors.textTertiary, size: 18),
+                              ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               Expanded(
@@ -560,58 +607,91 @@ class _SearchHomeState extends State<SearchHome> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SectionHeader(
-            title: '热门搜索',
-            trailing: Icon(Icons.local_fire_department_rounded,
-                size: 20, color: AppColors.accentAlt),
-          ),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              for (var i = 0; i < _hotTags.length; i++)
-                MiuixPressable(
-                  onPressed: () {
-                    _controller.text = _hotTags[i];
-                    _search(_hotTags[i]);
-                  },
-                  borderRadius: BorderRadius.circular(14),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceGlass,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: i < 3
-                            ? Colors.orangeAccent.withValues(alpha: 0.5)
-                            : AppColors.strokeGlass,
+            title: '${PlatformPicker.infoOf(_source).label}热搜榜',
+            trailing: _hotLoading
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : MiuixPressable(
+                    onPressed: () => _loadHotKeywords(_source),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.refresh_rounded,
+                              size: 15, color: AppColors.textTertiary),
+                          const SizedBox(width: 4),
+                          Text(
+                            '刷新',
+                            style: TextStyle(
+                                fontSize: 12, color: AppColors.textTertiary),
+                          ),
+                        ],
                       ),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '${i + 1}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
-                            color: i < 3 ? Colors.orangeAccent : AppColors.textTertiary,
-                          ),
+                  ),
+          ),
+          if (_hotKeywords.isEmpty)
+            Text(
+              _hotLoading ? '正在加载热搜榜…' : '暂无热搜数据',
+              style: TextStyle(fontSize: 13, color: AppColors.textTertiary),
+            )
+          else
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                for (var i = 0; i < _hotKeywords.length; i++)
+                  MiuixPressable(
+                    onPressed: () {
+                      _controller.text = _hotKeywords[i].word;
+                      _search(_hotKeywords[i].word);
+                    },
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceGlass,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: i < 3
+                              ? Colors.orangeAccent.withValues(alpha: 0.5)
+                              : AppColors.strokeGlass,
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _hotTags[i],
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            color: AppColors.textSecondary,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '${i + 1}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: i < 3
+                                  ? Colors.orangeAccent
+                                  : AppColors.textTertiary,
+                            ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 8),
+                          Text(
+                            _hotKeywords[i].word,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-            ],
-          ),
+              ],
+            ),
           const SizedBox(height: 30),
           SectionHeader(
             title: '搜索历史',
@@ -846,92 +926,6 @@ class _PageButton extends StatelessWidget {
 }
 
 /// 音源切换按钮组。
-class _SourceSwitch extends StatelessWidget {
-  const _SourceSwitch({required this.current, required this.onSwitch});
-
-  final String current;
-  final ValueChanged<String> onSwitch;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(2),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceGlass,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.strokeGlass),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _SourceChip(
-            label: 'QQ',
-            color: AppColors.accent,
-            active: current == Source.qq,
-            onTap: () => onSwitch(Source.qq),
-          ),
-          _SourceChip(
-            label: '网易',
-            color: AppColors.accentAlt,
-            active: current == Source.netease,
-            onTap: () => onSwitch(Source.netease),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SourceChip extends StatelessWidget {
-  const _SourceChip({
-    required this.label,
-    required this.color,
-    required this.active,
-    required this.onTap,
-  });
-
-  final String label;
-  final Color color;
-  final bool active;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return MiuixPressable(
-      onPressed: onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-        decoration: BoxDecoration(
-          gradient: active
-              ? LinearGradient(colors: [color, color.withValues(alpha: 0.7)])
-              : null,
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: active
-              ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.4),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : null,
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-            color: active ? Colors.white : AppColors.textTertiary,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 搜索结果歌曲行。
 class _SongTile extends StatelessWidget {
   const _SongTile({required this.song, required this.onTap, this.onLongPress});
 

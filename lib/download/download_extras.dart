@@ -148,7 +148,9 @@ class DownloadExtras {
       final resp = await dio.get<List<int>>(
         url,
         options: Options(headers: <String, String>{
-          'Referer': song.isNetease ? 'https://music.163.com/' : 'https://y.qq.com/',
+          'Referer': song.isNetease
+              ? 'https://music.163.com/'
+              : (song.isKuwo ? 'http://www.kuwo.cn/' : 'https://y.qq.com/'),
           'User-Agent': 'Mozilla/5.0',
         }),
       );

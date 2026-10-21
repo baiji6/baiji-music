@@ -13,8 +13,10 @@ import '../../core/app_logger.dart';
 import '../../core/backup_service.dart';
 import '../../core/cache_manager.dart';
 import '../../core/capture_trust.dart';
+import '../../core/device_guid.dart';
 import '../../core/dev_mode.dart';
 import '../../core/lyric_settings.dart';
+import '../../core/telemetry.dart';
 import '../../core/theme_controller.dart';
 import '../../core/ui_settings.dart';
 import '../../core/update_checker.dart';
@@ -24,6 +26,7 @@ import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
 import '../widgets/lyric_style_sheet.dart';
@@ -661,6 +664,33 @@ class _SettingsPageState extends State<SettingsPage> {
                       onClick: () =>
                           setState(() => _showCornerDialog = true),
                     ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  // 数据上报（v2.4.0）：把 GUID / 平台 / 搜索 / 播放行为
+                  // 上报到自建服务器（upload.php）。默认开启，可随时关闭。
+                  MiuixSwitchPreference(
+                    title: '数据上报',
+                    summary: '上报设备 GUID、使用的平台、搜索与播放记录'
+                        '（用于统计，关闭后不再发送任何数据）',
+                    startAction: const Icon(Icons.cloud_upload_outlined,
+                        color: AppColors.aqua, size: 22),
+                    value: Telemetry.instance.enabled,
+                    onChanged: (v) async {
+                      await Telemetry.instance.setEnabled(v);
+                      if (!mounted) return;
+                      setState(() {});
+                    },
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '设备 GUID',
+                    summary: '本机唯一标识（用于数据统计去重）',
+                    startAction: const Icon(Icons.fingerprint_rounded,
+                        color: AppColors.violet, size: 22),
+                    onClick: () {
+                      final guid = DeviceGuid.instance;
+                      showAppSnack(guid.isEmpty ? '生成中…' : 'GUID: $guid');
+                    },
                   ),
                   const MiuixHorizontalDivider(),
 MiuixArrowPreference(

@@ -4,7 +4,19 @@
 UI 采用暗色玻璃拟态 + 霓虹渐变的现代化未来感设计，构建期自动执行**加壳与混淆**防逆向。
 
 > 本工程由「白姬音乐 Android 原生 v1.1.1」重构而来：C 算法库（hash33 / zzc_sign / tripledes / qrc / qimei / comm）全部移植为纯 Dart，
-> 网络层支持 QQ 音乐与网易云双音源，功能模块覆盖搜索、播放、歌单、下载、扫码登录与本地音乐。
+> 网络层支持 **QQ 音乐 / 网易云音乐 / 酷我音乐** 三音源，功能模块覆盖搜索、播放、歌单、下载、扫码登录与本地音乐。
+
+---
+
+## v2.4.0 新增速览
+
+| 能力 | 说明 |
+| --- | --- |
+| 🎵 **酷我音乐音源** | 搜索 / 歌曲详情 / 播放地址 / 歌词全链路；含 **QMC 加密音轨解密**与**本地中继播放**、**18 档音质**与**自动降级链** |
+| 🎨 **内嵌平台切换 + 热搜榜** | 搜索框左侧内嵌「酷我 ▾」下拉平台选择器；搜索框下方为带序号的「{平台}热搜榜」，点击即搜 |
+| 🆔 **设备 GUID** | 每台设备一个永久唯一 UUID：Android `ANDROID_ID` / iOS `identifierForVendor` / 桌面 machine-id，落盘永不变 |
+| 📡 **数据上报 + 服务端面板** | 客户端轻量埋点上报 GUID / 平台 / 搜索 / 歌曲 / 音质 / 播放链接；服务端 `upload.php` 带图形界面，**每 10 秒自动刷新** |
+| 🎵 **分享歌单一键导入** | 粘贴 QQ / 网易云 / 酷我歌单链接即可解析、全部播放或存进本地歌单 |
 
 ---
 
@@ -14,7 +26,7 @@ UI 采用暗色玻璃拟态 + 霓虹渐变的现代化未来感设计，构建�
 | --- | --- |
 | UI / 业务 | Flutter 3.47.x + Dart 3.13.x |
 | 算法层 | 纯 Dart（QQ 音乐签名 / 设备指纹 / QRC 歌词解密，与原 C 实现逐字节对照） |
-| 网络层 | dio（Cookie 管理、流式下载、超时）+ QQ 音乐 / 网易云双协议 |
+| 网络层 | dio（Cookie 管理、流式下载、超时）+ QQ 音乐 / 网易云 / 酷我三协议 |
 | 音频 | media_kit（libmpv + ffmpeg 软解，一套解码器通吃 MP3 / FLAC / M4A / OGG / WAV） |
 | 存储 | shared_preferences + path_provider |
 | 权限 | permission_handler（仅 Android 需要；桌面端无运行时存储权限） |
@@ -29,13 +41,13 @@ baiji_music/
 │   ├── theme/                  # 主题：暗色玻璃拟态 + 霓虹渐变
 │   ├── ui/                     # 页面：发现 / 搜索 / 我的 / 播放条 / 小组件
 │   ├── crypto/                 # QQ 音乐签名算法（纯 Dart，含向量测试）
-│   ├── network/                # QQ 音乐 + 网易云网络层
+│   ├── network/                # QQ 音乐 + 网易云 + 酷我网络层（含 QMC 解密、歌词解码、热搜榜、分享歌单解析）
 │   ├── data/                   # 设备指纹 / 历史 / 歌单 / 本地音乐库存储
 │   ├── player/                 # 播放控制
 │   ├── download/               # 音质降级下载链
 │   ├── local/                  # 本地音乐扫描（Isolate + 增量指纹）
 │   ├── metadata/               # 音频元数据读写（写入 / 读取）
-│   └── core/                   # 日志 / KV / 封面 URL / 版本号 / 工具
+│   └── core/                   # 日志 / KV / 封面 URL / 版本号 / 工具 / 设备 GUID / 数据上报
 ├── android/                    # Android（R8 全量混淆 + 资源混淆）
 ├── ios/                        # iOS（Xcode Release 自动 strip 符号）
 ├── macos/                      # macOS（构建后 strip 符号）
@@ -44,7 +56,8 @@ baiji_music/
 ├── ohos/                       # HarmonyOS 鸿蒙（方舟混淆自动生效）
 ├── scripts/protect/build_all.sh# 统一构建·加壳·混淆流水线
 ├── tools/upx/                  # 固化 UPX 可执行文件（无需系统安装）
-└── test/                       # 算法向量对照测试（22 项全绿）
+├── upload.php                  # 服务端数据接收与可视化面板（PHP 7.4+，每 10 秒自动刷新）
+└── test/                       # 算法向量对照测试与全量回归测试
 ```
 
 ## 快速开始
@@ -87,10 +100,73 @@ flutter test
 > 说明：鸿蒙需在 DevEco Studio 5.0+（API 12）环境构建；iOS/macOS 需 macOS + Xcode；Windows/Linux 需对应平台工具链。
 > Android 的 `build.gradle.kts` 已内置 R8 与资源混淆配置，release 会签名自动生效（默认 debug 签名便于一键出包，正式发布时替换 keystore）。
 
-## 双音源能力
+## 三音源能力
 
 - **QQ 音乐**：登录（扫码 / Cookie，Cookie 登录同时支持 QQ 与微信账号）、搜索（综合 + 单曲）、歌曲详情、播放地址（320→192→128 降级链）、歌词解密（QRC）、下载。
 - **网易云**：搜索、播放地址（EAPI 加密）、加密 ID（encryptId）。
+- **酷我音乐**（v2.4.0 新增）：搜索、歌曲详情、播放地址、歌词（Base64 → XOR → zlib → GB18030 解码）、下载。
+
+### 酷我：QMC 加密音轨解密
+
+酷我部分音轨为 QMC 加密流，本工程纯 Dart 实现了完整解密链路：
+
+| 环节 | 实现 |
+| --- | --- |
+| 密钥解包 | `EkeyCipher`（DES 变体）解出 ekey |
+| 密钥派生 | TEA 派生八字节密钥 |
+| 主体解密 | `MapCipher` / `Rc4Cipher`（QMC v2） |
+| 播放通道 | 内置本地 HTTP 中继（支持 Range 随机访问），边下载边解密喂给 media_kit |
+
+同时提供 **18 档音质规则**（母带 / HiRes / FLAC / OGG / 320K / 128K / AAC 等），
+播放与下载各自独立记忆偏好；高档音质不可用（未登录等）时按
+**降级链**逐档回落，不直接报错。
+
+### 搜索页：内嵌平台切换 + 真实热搜榜
+
+- 搜索框**左侧内嵌平台下拉选择器**（「酷我 ▾」样式），在 QQ 音乐 / 网易云音乐 / 酷我 之间直接切换；
+- 搜索框下方为**「{平台}热搜榜」**：真实抓取三平台热搜词，带**序号**排布，点击任一热词直接发起搜索；
+- 平台切换后热词自动刷新，并上报平台切换埋点。
+
+### 分享歌单一键导入
+
+「我的 → 更多 → 导入分享歌单」：粘贴 QQ 音乐 / 网易云 / 酷我 的歌单分享链接或整段分享文本，
+自动识别平台并解析出曲目列表，可**全部播放**或**保存到本地歌单**。
+
+## 设备 GUID 与数据上报
+
+### 唯一设备标识
+
+每台设备生成一个**永久唯一 GUID**（UUID 形态，由 sha256 派生）：
+
+| 平台 | 设备 ID 来源 |
+| --- | --- |
+| Android | 原生 `Settings.Secure.ANDROID_ID`（MethodChannel `baiji/device`） |
+| iOS | `identifierForVendor`（MethodChannel `baiji/device`） |
+| 桌面端 | 系统 machine-id / IOPlatformUUID / MachineGuid |
+| 兜底 | 本地随机种子派生（保证同一设备恒定） |
+
+GUID 首次生成后落盘保存，**永不重新生成**，避免服务端重复计数。
+
+### 上报通道
+
+`lib/core/telemetry.dart` 实现了轻量上报：内存队列（上限 200）+ 批量 10 条 +
+30 秒定时发送 + 失败保留重试，POST JSON 到
+`http://molan.guoyue2010.cn/upload.php`，内容包含 GUID、平台、搜索词、
+歌曲、音质、播放链接等。**fire-and-forget，不阻塞**播放与搜索主流程；
+设置 → 通用里可一键关闭「数据上报」并查看本机 GUID。
+
+### 服务端面板 `upload.php`
+
+仓库根目录提供 `upload.php`（PHP 7.4+，无第三方依赖）：
+
+- 接收 `POST` JSON 事件，落库存储：优先 **SQLite**（`data/baiji.db`），
+  宿主无 `pdo_sqlite` 时**自动降级为 JSON 文件**（`data/baiji.json`），功能一致；
+- `?action=api` 输出聚合统计（stats / platforms / keywords / users / plays / searches）；
+- 自带**暗色图形界面面板**：统计卡片、平台分布条、热词云、用户表、播放明细、搜索明细，
+  页面**每 10 秒自动刷新**（`setInterval(load, 10000)`，局部刷新不整页闪烁）。
+
+部署：把 `upload.php` 放到网站根目录，确保 `data/` 目录可写（脚本会自动创建），
+访问 `http://<你的域名>/upload.php` 即可。
 
 ## 本地音乐
 
@@ -113,7 +189,7 @@ flutter test
 
 ## 测试与质量
 
-- `flutter test`：186 项测试全绿。覆盖 QQ 音乐签名算法（hash33 / zzc_sign / tripledes / qrc 解密，与 C 源码参考向量逐字节对照，含 15 字节 zzc_2 修复）、网易云加密、模型解析、二维码登录状态码语义、Cookie 登录的 QQ/微信两种账号形态（15 项）、封面 URL 降级、协议弹窗交互、版本检查，以及本地音乐的元数据解析（五种容器 38 项）、扫描与增量（30 项）、持久化与页面（13 项）。
+- `flutter test`：738 项测试全绿。覆盖 QQ 音乐签名算法（hash33 / zzc_sign / tripledes / qrc 解密，与 C 源码参考向量逐字节对照，含 15 字节 zzc_2 修复）、网易云加密、**酷我 QMC 解密与歌词解码**、模型解析、二维码登录状态码语义、Cookie 登录的 QQ/微信两种账号形态（15 项）、封面 URL 降级、协议弹窗交互、版本检查，以及本地音乐的元数据解析（五种容器 38 项）、扫描与增量（30 项）、持久化与页面（13 项）。
 - `flutter analyze`：No issues found。
 - 版本号的唯一真相来源是 `pubspec.yaml`：`test/app_version_test.dart` 会校验 UI 常量与之一致，CI 的 `read-version` 复合动作也从这里读取，避免「关于页显示旧版本」「Release 标题错位」。
 - 自 **v2.2.1** 起，Release 正文里的更新日志统一写在仓库根目录的 `CHANGELOG.md`：CI 的 `Extract changelog` 步骤会抽出与 tag 同版本的那一节填进 Release 正文，**抽不到就直接让流水线失败**；同时 `app_version_test.dart` 也会校验 `CHANGELOG.md` 里有对应条目，避免改了 tag 却忘了写日志。
@@ -126,4 +202,6 @@ flutter test
 
 ## 许可与声明
 
-本工程仅作学习与技术演示使用。QQ 音乐、网易云相关接口与算法仅用于个人研究，请遵守目标平台服务条款与著作权法规。
+本工程仅作学习与技术演示使用。QQ 音乐、网易云音乐、酷我音乐相关接口与算法仅用于个人研究，
+请遵守目标平台服务条款与著作权法规。数据上报功能默认开启，可在「设置 → 通用 → 数据上报」中随时关闭，
+服务端仅收集设备 GUID、平台、搜索词、歌曲与音质等统计信息，不含个人身份信息。

@@ -2,7 +2,7 @@ name: baiji_music
 description: "白姬音乐 - 跨平台音乐播放客户端（iOS / macOS / Windows / Linux / Android / HarmonyOS）"
 publish_to: 'none'
 
-version: 2.3.1-fix1
+version: 2.4.0
 
 environment:
   sdk: ^3.13.5
@@ -62,6 +62,8 @@ dependencies:
   ed25519_edwards: ^0.3.2
   # 网易云扫码登录的二维码本地渲染（内容形如 https://music.163.com/login?codekey=…）。
   qr_flutter: ^4.1.0
+  fast_gbk: ^1.0.0
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

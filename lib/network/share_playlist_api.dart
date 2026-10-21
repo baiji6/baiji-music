@@ -1,0 +1,265 @@
+// 三平台 —— 分享歌单链接解析（提取歌单 id → 拉取曲目列表）
+//   QQ音乐   : 链接 /playlist/{disstid}    详情 fcg_v8_playlist_cp.fcg
+//   网易云   : 链接 /playlist?id={id}       详情 api/playlist/detail
+//   酷我音乐 : 链接 /playlist_detail/{pid}  详情 nplserver pl.svc (op=getlistinfo)
+library;
+
+
+import 'hot_search_api.dart';
+
+String _joinArtists(List<dynamic>? arr) =>
+    (arr ?? []).map((a) => a is Map ? (a['name'] ?? '') : a).join('/');
+
+/// 解析出的歌单曲目。
+class PlaylistTrack {
+  final String name;
+  final String artist;
+  final String album;
+  final int durationSeconds;
+  final String rid;
+
+  const PlaylistTrack({
+    required this.name,
+    required this.artist,
+    required this.album,
+    required this.durationSeconds,
+    required this.rid,
+  });
+}
+
+/// 分享歌单解析结果。
+class SharedPlaylist {
+  final String source;
+  final String id;
+  final String name;
+  final String creator;
+  final String cover;
+  final int trackCount;
+  final List<PlaylistTrack> tracks;
+
+  const SharedPlaylist({
+    required this.source,
+    required this.id,
+    required this.name,
+    required this.creator,
+    required this.cover,
+    required this.trackCount,
+    required this.tracks,
+  });
+}
+
+// ───────────────────────────── QQ音乐 ─────────────────────────────
+class QqPlaylist {
+  static const Map<String, String> headers = {
+    'Referer': 'https://y.qq.com/',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+  };
+
+  /// 从分享链接/文本提取歌单 disstid
+  static String? parseId(String input) {
+    final s = input.trim();
+    final url = RegExp(r'https?://[^\s]+').firstMatch(s)?.group(0) ?? s;
+    for (final re in [
+      RegExp(r'disstid=(\d+)'),
+      RegExp(r'/playlist/(\d+)'),
+      RegExp(r'[?&]id=(\d+)'),
+    ]) {
+      final m = re.firstMatch(url);
+      if (m != null) return m.group(1);
+    }
+    return null;
+  }
+
+  /// 拉取歌单详情
+  static Future<SharedPlaylist> detail(String disstid,
+      {int limit = 1000}) async {
+    final url = Uri.parse('https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg')
+        .replace(queryParameters: {
+      'type': '1',
+      'id': disstid,
+      'utf8': '1',
+      'format': 'json',
+    }).toString();
+    final data = await getJsonWithRetry(url, headers: headers);
+    final cdlist = (data['data']?['cdlist'] ?? const []) as List<dynamic>;
+    final cd = cdlist.isEmpty
+        ? null
+        : Map<String, dynamic>.from(cdlist.first as Map);
+    if (cd == null) throw Exception('歌单不存在: $disstid');
+    final songs =
+        (cd['songlist'] as List<dynamic>? ?? const []).take(limit).map((e) {
+      final song = Map<String, dynamic>.from(e as Map);
+      return PlaylistTrack(
+        name: (song['songname'] ?? '').toString(),
+        artist: _joinArtists(song['singer'] as List<dynamic>?),
+        album: (song['albumname'] ?? '').toString(),
+        durationSeconds: (song['interval'] as num?)?.toInt() ?? 0,
+        rid: (song['songmid'] ?? '').toString(),
+      );
+    }).toList();
+    return SharedPlaylist(
+      source: 'qq',
+      id: disstid,
+      name: (cd['dissname'] ?? '').toString(),
+      creator: '',
+      cover: (cd['logo'] ?? cd['headurl'] ?? '').toString(),
+      trackCount: songs.length,
+      tracks: songs,
+    );
+  }
+
+  static Future<SharedPlaylist> parse(String input, {int limit = 1000}) async {
+    final id = parseId(input);
+    if (id == null) throw ArgumentError('无法从输入解析出 QQ 歌单 id');
+    return detail(id, limit: limit);
+  }
+}
+
+// ───────────────────────────── 网易云音乐 ─────────────────────────────
+class NeteasePlaylist {
+  static const Map<String, String> headers = {
+    'Referer': 'https://music.163.com/',
+    'User-Agent': 'Mozilla/5.0',
+  };
+
+  /// 从分享链接/文本提取歌单 id
+  static String? parseId(String input) {
+    final s = input.trim();
+    final url = RegExp(r'https?://[^\s]+').firstMatch(s)?.group(0) ?? s;
+    for (final re in [
+      RegExp(r'/playlist/(\d+)'),
+      RegExp(r'[?&]id=(\d+)'),
+    ]) {
+      final m = re.firstMatch(url);
+      if (m != null) return m.group(1);
+    }
+    return null;
+  }
+
+  /// 拉取歌单详情
+  static Future<SharedPlaylist> detail(String id,
+      {int limit = 1000}) async {
+    final url = Uri.parse('https://music.163.com/api/playlist/detail')
+        .replace(queryParameters: {'id': id}).toString();
+    final data = await getJsonWithRetry(url, headers: headers);
+    final pl = (data['result'] ?? data['playlist']) as Map<String, dynamic>?;
+    if (pl == null) throw Exception('歌单不存在: $id');
+    final songs =
+        ((pl['tracks'] ?? const []) as List<dynamic>).take(limit).map((e) {
+      final song = Map<String, dynamic>.from(e as Map);
+      return PlaylistTrack(
+        name: (song['name'] ?? '').toString(),
+        artist: _joinArtists(song['artists'] as List<dynamic>?),
+        album: (song['album']?['name'] ?? '').toString(),
+        durationSeconds: ((song['dt'] ?? 0) as num).toInt() ~/ 1000,
+        rid: (song['id'] ?? '').toString(),
+      );
+    }).toList();
+    return SharedPlaylist(
+      source: 'netease',
+      id: id,
+      name: (pl['name'] ?? '').toString(),
+      creator: (pl['creator']?['nickname'] ?? '').toString(),
+      cover: (pl['coverImgUrl'] ?? '').toString(),
+      trackCount: songs.length,
+      tracks: songs,
+    );
+  }
+
+  static Future<SharedPlaylist> parse(String input, {int limit = 1000}) async {
+    final id = parseId(input);
+    if (id == null) throw ArgumentError('无法从输入解析出网易云歌单 id');
+    return detail(id, limit: limit);
+  }
+}
+
+// ───────────────────────────── 酷我音乐 ─────────────────────────────
+class KuwoPlaylist {
+  static const Map<String, String> headers = {'User-Agent': 'Mozilla/5.0'};
+
+  /// 从分享链接/文本提取歌单 pid
+  static String? parseId(String input) {
+    final s = input.trim();
+    final url = RegExp(r'https?://[^\s]+').firstMatch(s)?.group(0) ?? s;
+    final m = RegExp(r'/playlist(?:_detail)?/(\d+)').firstMatch(url) ??
+        RegExp(r'[?&]pid=(\d+)').firstMatch(url);
+    return m?.group(1);
+  }
+
+  /// 拉取歌单详情
+  static Future<SharedPlaylist> detail(String pid,
+      {int limit = 1000}) async {
+    final url = Uri.parse('http://nplserver.kuwo.cn/pl.svc').replace(
+        queryParameters: {
+      'op': 'getlistinfo',
+      'pid': pid,
+      'pn': '0',
+      'rn': limit.toString(),
+      'encode': 'utf8',
+      'keyset': 'pl2012',
+      'identity': 'kuwo',
+      'pcmp4': '1',
+      'vipver': 'MUSIC_9.0.5.0_W1',
+      'newver': '1',
+    }).toString();
+    final data = await getJsonWithRetry(url, headers: headers);
+    final songs =
+        ((data['musiclist'] ?? const []) as List<dynamic>).take(limit).map((e) {
+      final song = Map<String, dynamic>.from(e as Map);
+      return PlaylistTrack(
+        name: (song['name'] ?? '').toString(),
+        artist: (song['artist'] ?? '').toString(),
+        album: (song['album'] ?? '').toString(),
+        durationSeconds:
+            int.tryParse((song['duration'] ?? '0').toString()) ?? 0,
+        rid: (song['id'] ?? '').toString(),
+      );
+    }).toList();
+    return SharedPlaylist(
+      source: 'kuwo',
+      id: pid,
+      name: (data['name'] ?? data['listname'] ?? data['title'] ??
+              data['list_title'] ?? '')
+          .toString(),
+      creator: (data['uname'] ?? '').toString(),
+      cover: (data['img'] ?? '').toString(),
+      trackCount: songs.length,
+      tracks: songs,
+    );
+  }
+
+  static Future<SharedPlaylist> parse(String input, {int limit = 1000}) async {
+    final id = parseId(input);
+    if (id == null) throw ArgumentError('无法从输入解析出酷我歌单 id');
+    return detail(id, limit: limit);
+  }
+}
+
+// ───────────────────────────── 统一入口 ─────────────────────────────
+class SharePlaylist {
+  /// 自动识别平台并解析分享歌单
+  static Future<SharedPlaylist> parse(String input,
+      {int limit = 1000}) async {
+    final s = input.trim();
+    if (s.contains('qq.com')) {
+      return QqPlaylist.parse(s, limit: limit);
+    }
+    if (s.contains('music.163.com') || s.contains('163cn.tv')) {
+      return NeteasePlaylist.parse(s, limit: limit);
+    }
+    if (s.contains('kuwo.cn') || s.contains('kw.cn')) {
+      return KuwoPlaylist.parse(s, limit: limit);
+    }
+    // 无域名线索: 依次尝试
+    try {
+      return await QqPlaylist.parse(s, limit: limit);
+    } catch (_) {}
+    try {
+      return await NeteasePlaylist.parse(s, limit: limit);
+    } catch (_) {}
+    try {
+      return await KuwoPlaylist.parse(s, limit: limit);
+    } catch (_) {}
+    throw ArgumentError('无法识别的歌单链接: $input');
+  }
+}

@@ -19,6 +19,7 @@ import 'netease_login_page.dart';
 import 'playlist_page.dart';
 import 'qq_login_page.dart';
 import 'settings_page.dart';
+import 'share_playlist_page.dart';
 import 'toolbox_page.dart';
 
 /// 我的页：账号卡片（QQ 登录 + 网易云 Cookie 登录）+ 本地歌单 / 下载 / 历史 / 收藏 / 设置 / 日志 / 关于。
@@ -283,6 +284,16 @@ class _LibraryHomeState extends State<LibraryHome> {
                           onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
                                   builder: (_) => const PlayStatsPage())),
+                        ),
+                        // 分享歌单导入（v2.4.0）
+                        _SettingTile(
+                          icon: Icons.playlist_add_rounded,
+                          title: '导入分享歌单',
+                          subtitle: 'QQ / 网易云 / 酷我 歌单链接一键导入',
+                          color: AppColors.accentAlt,
+                          onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                  builder: (_) => const SharePlaylistPage())),
                         ),
                         _SettingTile(
                           icon: Icons.settings_outlined,

@@ -29,6 +29,27 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // 设备唯一 ID（v2.4.0）：用于生成用户 GUID。
+        // Android ID 是系统级稳定标识（同一台设备同一用户签名的 App 恒定，
+        // 换签名/清数据会变），不涉及任何隐私敏感字段。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "baiji/device")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "deviceId" -> result.success(readAndroidId())
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /** Android ID（Settings.Secure.ANDROID_ID）；读不到返回空串。 */
+    private fun readAndroidId(): String {
+        return try {
+            val id = android.provider.Settings.Secure.getString(
+                contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+            id ?: ""
+        } catch (e: Exception) {
+            ""
+        }
     }
 
     /** 当前 APK 签名证书 SHA-256（hex 小写）；读不到返回 null。 */
