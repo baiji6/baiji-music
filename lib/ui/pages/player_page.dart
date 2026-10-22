@@ -1039,9 +1039,25 @@ class _SourceChip extends StatelessWidget {
 
   final Song song;
 
+  /// 酷我品牌蓝（与 `platform_picker.dart` 的平台色一致）。
+  static const Color _kuwoBrand = Color(0xFF3B82F6);
+
   @override
   Widget build(BuildContext context) {
-    final ne = song.isNetease;
+    // v2.4.0-fix2：原来是 `ne ? 网易云 : QQ 音乐`，酷我歌曲会落到
+    // QQ 分支，播放页显示「QQ 音乐」。这里三分支显式判定。
+    final String label;
+    final Color color;
+    if (song.isKuwo) {
+      label = '酷我音乐';
+      color = _kuwoBrand;
+    } else if (song.isNetease) {
+      label = '网易云音乐';
+      color = AppPalette.dark.accentAlt;
+    } else {
+      label = 'QQ 音乐';
+      color = AppPalette.dark.accent;
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
@@ -1050,11 +1066,11 @@ class _SourceChip extends StatelessWidget {
         border: Border.all(color: AppPalette.dark.strokeGlass),
       ),
       child: Text(
-        ne ? '网易云音乐' : 'QQ 音乐',
+        label,
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
-          color: ne ? AppPalette.dark.accentAlt : AppPalette.dark.accent,
+          color: color,
         ),
       ),
     );
@@ -1490,7 +1506,10 @@ class _QualityButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = song;
-    if (s == null) return _pill(label: '音质', downgraded: false, netease: false);
+    if (s == null) {
+      return _pill(
+          label: '音质', downgraded: false, accent: AppPalette.dark.accent);
+    }
     if (s.isKuwo) return _kuwoMenu();
     return s.isNetease ? _neteaseMenu() : _qqMenu();
   }
@@ -1507,7 +1526,7 @@ class _QualityButton extends StatelessWidget {
       child: _pill(
         label: effective.label,
         downgraded: downgraded,
-        netease: false,
+        accent: AppPalette.dark.accent,
       ),
     );
   }
@@ -1524,7 +1543,7 @@ class _QualityButton extends StatelessWidget {
       child: _pill(
         label: effective.label,
         downgraded: downgraded,
-        netease: true,
+        accent: AppPalette.dark.accentAlt,
       ),
     );
   }
@@ -1541,7 +1560,7 @@ class _QualityButton extends StatelessWidget {
       child: _pill(
         label: effective.label,
         downgraded: downgraded,
-        netease: true,
+        accent: _SourceChip._kuwoBrand,
       ),
     );
   }
@@ -1549,7 +1568,7 @@ class _QualityButton extends StatelessWidget {
   static Widget _pill({
     required String label,
     required bool downgraded,
-    required bool netease,
+    required Color accent,
   }) =>
       Container(
         height: 38,
@@ -1564,11 +1583,7 @@ class _QualityButton extends StatelessWidget {
           children: [
             Icon(Icons.high_quality_rounded,
                 size: 16,
-                color: downgraded
-                    ? AppColors.warning
-                    : (netease
-                        ? AppPalette.dark.accentAlt
-                        : AppPalette.dark.accent)),
+                color: downgraded ? AppColors.warning : accent),
             const SizedBox(width: 6),
             Text(
               label,

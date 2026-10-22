@@ -26,6 +26,41 @@ import 'kuwo_link.dart';
 import 'kuwo_lyric.dart';
 import 'qmc_stream.dart';
 
+/// 酷我封面尺寸档位（v2.4.0-fix2：默认取最高质量）。
+///
+/// 酷我封面 URL 形如
+/// `http://img2.kuwo.cn/star/albumcover/120/xxx.jpg`，路径里的数字就是尺寸档位。
+/// 实测可用档位：120 / 200 / 500 / 800 / 1000 / 1080 / 1200 / 1500，
+/// **1500 是最高有效档**（真实像素 1477×1477），2500 及以上会被服务端
+/// 截断回 1500 那张，所以没有再大的意义。
+const String kuwoCoverSize = '1500';
+
+/// 酷我封面地址归一化：统一提到最高质量档位。
+///
+/// 输入可能是
+///   - 完整 URL：`http://img1.kuwo.cn/star/albumcover/120/xxx.jpg`
+///   - 纯短路径：`xxx/yyy/12345.jpg`（老接口偶见）
+/// 输出统一为 `.../albumcover/1500/...` 的完整 URL。
+String kuwoCoverUrl(String? raw) {
+  final s = (raw ?? '').trim();
+  if (s.isEmpty) return '';
+  if (s.startsWith('http://') || s.startsWith('https://')) {
+    final hasSize = RegExp(r'albumcover/\d+/').hasMatch(s);
+    if (hasSize) {
+      return s.replaceFirst(
+          RegExp(r'albumcover/\d+/'), 'albumcover/$kuwoCoverSize/');
+    }
+    // 有域名但没有尺寸段：保持原样（避免猜错路径结构）
+    return s;
+  }
+  // 短路径：可能带尺寸段前缀（如 `120/xxx/yyy/123.jpg`），先剥掉再拼
+  var path = s.startsWith('/') ? s.substring(1) : s;
+  path = path.replaceFirst(RegExp(r'^\d+/'), '');
+  if (path.isEmpty) return '';
+  // img2 是酷我封面主力域名
+  return 'http://img2.kuwo.cn/star/albumcover/$kuwoCoverSize/$path';
+}
+
 /// 酷我单首歌曲的元信息 + 可用音质列表。
 class KuwoSong {
   final String rid;
@@ -201,7 +236,8 @@ class KuwoApi {
         name: (m['SONGNAME'] ?? '').toString(),
         artist: (m['ARTIST'] ?? '').toString(),
         album: (m['ALBUM'] ?? '').toString(),
-        pic: pic.isNotEmpty ? 'http://img2.kuwo.cn/star/albumcover/$pic' : '',
+        // 接口只给 120 小图，统一提到最高质量档位（v2.4.0-fix2）
+        pic: kuwoCoverUrl(pic),
         durationSeconds:
             int.tryParse((m['DURATION'] ?? '0').toString()) ?? 0,
         qualities: _qualitiesOf(m['N_MINFO']?.toString()),
@@ -222,7 +258,7 @@ class KuwoApi {
       name: (m['name'] ?? '').toString(),
       artist: (m['artist'] ?? '').toString(),
       album: (m['album'] ?? '').toString(),
-      pic: (m['albumPic'] ?? '').toString(),
+      pic: kuwoCoverUrl(m['albumPic']?.toString()),
       durationSeconds:
           int.tryParse((m['duration'] ?? '0').toString()) ?? 0,
       qualities: _qualitiesOf(m['N_MINFO']?.toString()),

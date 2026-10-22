@@ -94,12 +94,7 @@ class _FavoritePageState extends State<FavoritePage> {
                               ],
                             ),
                           ),
-                          TagBadge(
-                            song.isNetease ? '网易云' : 'QQ',
-                            color: song.isNetease
-                                ? AppColors.accentAlt
-                                : AppColors.accent,
-                          ),
+                          SourceBadge(song),
                           const SizedBox(width: 4),
                           MiuixIconButton(
                             onPressed: () {

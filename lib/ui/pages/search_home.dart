@@ -91,6 +91,18 @@ class _SearchHomeState extends State<SearchHome> {
     }
   }
 
+  /// 平台展示名（v2.4.0-fix2：原来只判 QQ/网易云，酷我显示成「网易云音乐」）。
+  static String _sourceLabelOf(String source) {
+    switch (source) {
+      case Source.netease:
+        return '网易云音乐';
+      case Source.kuwo:
+        return '酷我音乐';
+      default:
+        return 'QQ 音乐';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -358,16 +370,25 @@ class _SearchHomeState extends State<SearchHome> {
     final dm = DownloadManager.instance;
     final Quality qq;
     final NeteaseQuality ne;
-    if (song.isNetease) {
+    final KuwoQuality? kw;
+    if (song.isKuwo) {
+      final q = picked as KuwoQuality;
+      await dm.saveKuwoQuality(q);
+      qq = dm.qqQuality;
+      ne = dm.neQuality;
+      kw = q;
+    } else if (song.isNetease) {
       final q = picked as NeteaseQuality;
       await dm.saveNeQuality(q);
       qq = dm.qqQuality;
       ne = q;
+      kw = null;
     } else {
       final q = picked as Quality;
       await dm.saveQqQuality(q);
       qq = q;
       ne = dm.neQuality;
+      kw = null;
     }
 
     _showSnack('已加入下载队列');
@@ -375,6 +396,7 @@ class _SearchHomeState extends State<SearchHome> {
       song,
       qqQuality: qq,
       neQuality: ne,
+      kuwoQuality: kw,
       lyricMode: lyric,
     );
     if (!mounted) return;
@@ -468,21 +490,27 @@ class _SearchHomeState extends State<SearchHome> {
   /// 下载选项弹层：歌词粒度（默认逐字，无逐字回退逐行）+ 音质（按平台）。
   Widget _buildDownloadSheet() {
     final song = _pendingDownloadSong;
+    final kuwo = song != null && song.isKuwo;
     final netease = song != null && song.isNetease;
     return MiuixOverlayBottomSheet(
       show: _showDownloadSheet && song != null,
-      title: netease ? '下载 · 网易云音乐' : '下载 · QQ 音乐',
+      title: kuwo
+          ? '下载 · 酷我音乐'
+          : netease
+              ? '下载 · 网易云音乐'
+              : '下载 · QQ 音乐',
       backgroundColor: AppColors.bg2,
       onDismissRequest: () => setState(() {
         _showDownloadSheet = false;
         _pendingDownloadSong = null;
       }),
-      content: netease
-          ? DownloadOptionsSheet<NeteaseQuality>(
-              options: NeteaseQuality.downloadOptions,
-              current: DownloadManager.instance.neQuality,
+      content: kuwo
+          ? DownloadOptionsSheet<KuwoQuality>(
+              options: KuwoQuality.downloadOptions,
+              current: DownloadManager.instance.kuwoQuality,
               label: (q) => q.label,
-              subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
+              subtitle: (q) =>
+                  '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}',
               lyricMode: DownloadExtras.lyricMode,
               onConfirm: _onDownloadPicked,
               onLyricOnly: (mode) {
@@ -494,24 +522,41 @@ class _SearchHomeState extends State<SearchHome> {
                 if (s != null) _downloadLyricOnly(s, mode);
               },
             )
-          : DownloadOptionsSheet<Quality>(
-              options: Quality.downloadOptions,
-              current: DownloadManager.instance.qqQuality,
-              label: (q) => q.label,
-              subtitle: (q) => q.bitrate > 0
-                  ? '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}'
-                  : q.ext.replaceFirst('.', '').toUpperCase(),
-              lyricMode: DownloadExtras.lyricMode,
-              onConfirm: _onDownloadPicked,
-              onLyricOnly: (mode) {
-                final s = _pendingDownloadSong;
-                setState(() {
-                  _showDownloadSheet = false;
-                  _pendingDownloadSong = null;
-                });
-                if (s != null) _downloadLyricOnly(s, mode);
-              },
-            ),
+          : netease
+              ? DownloadOptionsSheet<NeteaseQuality>(
+                  options: NeteaseQuality.downloadOptions,
+                  current: DownloadManager.instance.neQuality,
+                  label: (q) => q.label,
+                  subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
+                  lyricMode: DownloadExtras.lyricMode,
+                  onConfirm: _onDownloadPicked,
+                  onLyricOnly: (mode) {
+                    final s = _pendingDownloadSong;
+                    setState(() {
+                      _showDownloadSheet = false;
+                      _pendingDownloadSong = null;
+                    });
+                    if (s != null) _downloadLyricOnly(s, mode);
+                  },
+                )
+              : DownloadOptionsSheet<Quality>(
+                  options: Quality.downloadOptions,
+                  current: DownloadManager.instance.qqQuality,
+                  label: (q) => q.label,
+                  subtitle: (q) => q.bitrate > 0
+                      ? '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}'
+                      : q.ext.replaceFirst('.', '').toUpperCase(),
+                  lyricMode: DownloadExtras.lyricMode,
+                  onConfirm: _onDownloadPicked,
+                  onLyricOnly: (mode) {
+                    final s = _pendingDownloadSong;
+                    setState(() {
+                      _showDownloadSheet = false;
+                      _pendingDownloadSong = null;
+                    });
+                    if (s != null) _downloadLyricOnly(s, mode);
+                  },
+                ),
     );
   }
 
@@ -794,7 +839,7 @@ class _SearchHomeState extends State<SearchHome> {
             children: [
               Expanded(
                 child: Text(
-                  '「$_keyword」· ${_results.length} 首 · ${_source == Source.qq ? 'QQ 音乐' : '网易云音乐'} 第 $_page 页',
+                  '「$_keyword」· ${_results.length} 首 · ${_sourceLabelOf(_source)} 第 $_page 页',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -979,10 +1024,7 @@ class _SongTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              TagBadge(
-                song.isNetease ? '网易云' : 'QQ',
-                color: song.isNetease ? AppColors.accentAlt : AppColors.accent,
-              ),
+              SourceBadge(song),
               const SizedBox(width: 6),
               Icon(
                 isCurrent

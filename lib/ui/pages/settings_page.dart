@@ -381,8 +381,22 @@ class _SettingsPageState extends State<SettingsPage> {
     // 删不掉的条目要如实上报：静默吞掉异常会让「权限不足 / 文件占用」
     // 表现为「点了没反应」，比报错更让人困惑。
     final issues = <String>[];
-    final freed = await CacheManager.clear(
+    var freed = await CacheManager.clear(
         onIssue: (path, reason) => issues.add(path));
+
+    // v2.4.0-fix2：歌曲播放缓存。
+    // - 受管的 `playback` 目录已由 CacheManager.clear() 一并清掉（它就在
+    //   managedDirNames 里）；
+    // - libmpv 在各平台的默认缓存目录是额外的残留，**只在没有在播放时动**：
+    //   播放中删它的活动句柄，Windows 上直接失败，POSIX 上也可能读到截断数据。
+    String? playbackNote;
+    if (PlayerController.instance.isPlaying) {
+      playbackNote = '播放中，libmpv 缓存目录未清理';
+    } else {
+      freed += await CacheManager.clearPlaybackExtras(
+          onIssue: (path, reason) => issues.add(path));
+    }
+
     // 本地歌曲封面另有一份独立内存缓存，在 ui 层，这里一并清掉
     LocalCoverCache.clear();
     if (!mounted) return;
@@ -391,6 +405,10 @@ class _SettingsPageState extends State<SettingsPage> {
         '已释放 ${CacheManager.formatBytes(freed)}，'
         '但有 ${issues.length} 个文件删不掉（可能正被占用）',
       );
+    } else if (playbackNote != null) {
+      _showSnack(freed <= 0
+          ? '缓存已清理（$playbackNote）'
+          : '缓存已清理，释放 ${CacheManager.formatBytes(freed)}（$playbackNote）');
     } else {
       _showSnack(freed <= 0
           ? '缓存已清理'

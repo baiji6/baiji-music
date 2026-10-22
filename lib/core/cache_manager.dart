@@ -49,6 +49,14 @@ class CacheManager {
   /// 既绕过了自定义路径，也永远清不掉。
   static const String tempDirName = 'tmp';
 
+  /// 歌曲播放缓存（v2.4.0-fix2）。
+  ///
+  /// libmpv 自带的 `--cache-on-disk` 在本项目用法下不落盘（见
+  /// `player/playback_cache.dart` 顶部说明），所以播放缓存由 App 自己写：
+  /// 酷我加密音轨走本地解密中继，中继把解密后的音频按 256 KiB 块落在这里。
+  /// 「清理缓存」会连它一起清空。
+  static const String playbackDirName = 'playback';
+
   /// [clear] 会清空内容的子目录。
   ///
   /// **统计与清理必须用同一个列表**（[breakdown] 也用它）：
@@ -59,7 +67,42 @@ class CacheManager {
     imagesDirName,
     miscDirName,
     tempDirName,
+    playbackDirName,
   ];
+
+  /// libmpv 在各平台的默认缓存目录（best-effort，只为「顺手清掉」）。
+  ///
+  /// media_kit 把 `cache-on-disk` 打开了，而 `PlayerConfiguration` 不暴露
+  /// `cache-dir`、`NativePlayer._create()` 的 options 又是硬编码的，
+  /// 外部没法在 `mpv_initialize()` 之前改缓存目录。万一某个版本/某个平台
+  /// 真的往这里写了东西，「清理缓存」至少能把历史残留扫掉。
+  ///
+  /// 只在**没有在播放**时才由 [clearPlaybackExtras] 处理——播放中删活动
+  /// 句柄在 Windows 上会直接失败，在 POSIX 上也可能让 libmpv 读错数据。
+  static List<Directory> libmpvDefaultCacheDirs() {
+    final out = <Directory>[];
+    try {
+      final home =
+          Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+      if (home == null || home.isEmpty) return out;
+      if (Platform.isLinux || Platform.isAndroid) {
+        final xdg = Platform.environment['XDG_CACHE_HOME'];
+        final base = (xdg != null && xdg.isNotEmpty)
+            ? xdg
+            : '$home${Platform.pathSeparator}.cache';
+        out.add(Directory('$base${Platform.pathSeparator}mpv'));
+      } else if (Platform.isMacOS) {
+        out.add(Directory(
+            '$home${Platform.pathSeparator}Library${Platform.pathSeparator}Caches${Platform.pathSeparator}mpv'));
+      } else if (Platform.isWindows) {
+        final local = Platform.environment['LOCALAPPDATA'];
+        if (local != null && local.isNotEmpty) {
+          out.add(Directory('$local${Platform.pathSeparator}mpv${Platform.pathSeparator}cache'));
+        }
+      }
+    } catch (_) {}
+    return out;
+  }
 
   /// 受管目录的绝对路径。
   static Future<List<Directory>> managedDirs() async {
@@ -199,6 +242,27 @@ class CacheManager {
       detail: '${root.path}\n（${managedDirNames.join(' / ')}，清理时会全部清空）',
     ));
 
+    // 歌曲播放缓存（v2.4.0-fix2）：受管的 playback 目录 + libmpv 默认缓存目录残留
+    var playbackBytes = 0;
+    final playbackDir = Directory(
+        '${root.path}${Platform.pathSeparator}$playbackDirName');
+    playbackBytes += await dirSize(playbackDir);
+    final libmpvDirs = libmpvDefaultCacheDirs();
+    for (final d in libmpvDirs) {
+      // 自定义缓存根目录可能就在 libmpv 目录里，别重复统计
+      if (d.path == root.path || root.path.startsWith('$d.path${Platform.pathSeparator}')) {
+        continue;
+      }
+      playbackBytes += await dirSize(d);
+    }
+    out.add(CacheEntry(
+      '歌曲播放缓存',
+      playbackBytes,
+      detail: playbackBytes > 0
+          ? '${playbackDir.path}\n${libmpvDirs.isEmpty ? '' : '（含 libmpv 缓存目录 ${libmpvDirs.map((d) => d.path).join(' / ')}）'}'
+          : '酷我加密音轨的边下边播缓存，按 256 KiB 块落盘',
+    ));
+
     return out;
   }
 
@@ -231,15 +295,43 @@ class CacheManager {
     // 清空 [managedDirNames] 里的全部子目录，范围与 breakdown() 严格一致。
     // 只删 App 自己建的目录，不碰根目录下用户可能自己放的东西。
     for (final dir in await managedDirs()) {
-      freed += await _emptyDir(dir, onIssue);
+      freed += await emptyDir(dir, onIssue);
     }
+
+    // libmpv 的默认缓存目录（v2.4.0-fix2）：见 [libmpvDefaultCacheDirs]。
+    // 由调用方通过 [clearPlaybackExtras] 在确认没有在播放时单独触发，
+    // 这里不重复处理。
 
     AppLog.i('CacheManager', '缓存已清理，释放约 ${formatBytes(freed)}');
     return freed;
   }
 
+  /// 清理「歌曲播放缓存」里**不属于** [managedDirNames] 的部分——
+  /// 即 libmpv 在各平台的默认缓存目录残留。
+  ///
+  /// **必须在确认没有在播放时调用**：播放中删 libmpv 的活动缓存文件，
+  /// Windows 上会直接失败，POSIX 上也可能让它读到截断的数据。
+  /// 返回释放的字节数。
+  static Future<int> clearPlaybackExtras(
+      {void Function(String path, String reason)? onIssue}) async {
+    var freed = 0;
+    final root = await cacheRoot();
+    for (final dir in libmpvDefaultCacheDirs()) {
+      if (dir.path == root.path ||
+          root.path.startsWith('$dir.path${Platform.pathSeparator}')) {
+        continue;
+      }
+      if (!await dir.exists()) continue;
+      freed += await emptyDir(dir, onIssue);
+    }
+    if (freed > 0) {
+      AppLog.i('CacheManager', 'libmpv 缓存目录已清理，释放约 ${formatBytes(freed)}');
+    }
+    return freed;
+  }
+
   /// 清空目录内容但保留目录本身。返回释放的字节数。
-  static Future<int> _emptyDir(Directory dir,
+  static Future<int> emptyDir(Directory dir,
       [void Function(String path, String reason)? onIssue]) async {
     if (!await dir.exists()) return 0;
     var freed = 0;

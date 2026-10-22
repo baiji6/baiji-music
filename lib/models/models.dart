@@ -45,27 +45,77 @@ class KuwoQuality {
   /// 酷我接口的 `br` 参数。
   String get br => '${bitrate}k$format';
 
+  // ==================== 全部音质（v2.4.0-fix2 补齐）====================
+  //
+  // 与 `network/kuwo/kuwo_link.dart` 的 `KuwoLink.qualityRules` 一一对应，
+  // 顺序即音质从高到低。id 与酷我接口 `N_MINFO` 里的 `level` 字段一致，
+  // 会被持久化（`DownloadManager.kuwoQuality` /
+  // `PlayerController.currentKuwoQuality`），因此 **id 不可随意变更**。
+  //
+  // v2.4.0 只有 7 档，用户反馈「音质不全」（接口实际支持 18 档），
+  // 这里按接口真实档位补齐；旧版本用过的 id（master / hires / flac /
+  // '300k' / '320k' / '128k' / '48k'）全部保留，无需迁移。
+
+  static const atmos714 =
+      KuwoQuality('atmos_714', '全景声 7.1.4', 'mgg', 24000, '.flac');
+  static const vinyl =
+      KuwoQuality('vinyl', '黑胶音质', 'flac', 23000, '.flac');
+  static const bcms =
+      KuwoQuality('bcms', '臻品音质 BCMS', 'mgg', 22000, '.flac');
   static const master =
       KuwoQuality('master', '臻品母带', 'mflac', 20900, '.flac');
-  static const hires = KuwoQuality('hires', 'Hi-Res 无损', 'flac', 4000, '.flac');
-  static const flac = KuwoQuality('flac', '无损 FLAC', 'flac', 2000, '.flac');
-  static const ogg = KuwoQuality('300k', 'OGG 300k', 'ogg', 300, '.ogg');
-  static const mp3_320 = KuwoQuality('320k', '极高 320k', 'mp3', 320, '.mp3');
-  static const mp3_128 = KuwoQuality('128k', '标准 128k', 'mp3', 128, '.mp3');
-  static const aac = KuwoQuality('48k', '省流 AAC', 'aac', 48, '.aac');
+  static const atmosPlus =
+      KuwoQuality('atmos_plus', '全景声 5.1', 'mflac', 20501, '.flac');
+  static const atmos =
+      KuwoQuality('atmos', '全景声 2.0', 'mflac', 20201, '.flac');
+  static const dolbyEac3 =
+      KuwoQuality('dolby_dd7', '杜比全景声 E-AC-3', 'mp4', 11700, '.mp4');
+  static const dolby640 =
+      KuwoQuality('dolby_640', '杜比全景声 640', 'mp4', 11600, '.mp4');
+  static const dolby448 =
+      KuwoQuality('dolby_448', '杜比全景声 448', 'mp4', 11500, '.mp4');
+  static const dolbyAc4 =
+      KuwoQuality('dolby_ac4', '杜比全景声 AC-4', 'mp4', 11000, '.mp4');
+  static const hires =
+      KuwoQuality('hires', 'Hi-Res 无损', 'flac', 4000, '.flac');
+  static const flac =
+      KuwoQuality('flac', '无损 FLAC', 'flac', 2000, '.flac');
+  static const mp3_320 =
+      KuwoQuality('320k', '极高 320k', 'mp3', 320, '.mp3');
+  static const ogg =
+      KuwoQuality('300k', '极高 OGG 300k', 'ogg', 300, '.ogg');
+  static const ogg192 =
+      KuwoQuality('192k', '高品质 OGG 192k', 'ogg', 192, '.ogg');
+  static const mp3_128 =
+      KuwoQuality('128k', '标准 128k', 'mp3', 128, '.mp3');
+  static const ogg100 =
+      KuwoQuality('100k', '高清 OGG 100k', 'ogg', 100, '.ogg');
+  static const aac =
+      KuwoQuality('48k', '省流 AAC', 'aac', 48, '.aac');
 
-  /// 可选音质（高 → 低）。
+  /// 可选音质（高 → 低），与 `KuwoLink.qualityRules` 同序同量。
   static const downloadOptions = [
+    atmos714,
+    vinyl,
+    bcms,
     master,
+    atmosPlus,
+    atmos,
+    dolbyEac3,
+    dolby640,
+    dolby448,
+    dolbyAc4,
     hires,
     flac,
-    ogg,
     mp3_320,
+    ogg,
+    ogg192,
     mp3_128,
+    ogg100,
     aac,
   ];
 
-  /// 播放默认：未登录时无损不可用，128k 最稳。
+  /// 播放默认：未登录时高档位普遍不可用，128k 最稳。
   static const playbackDefault = mp3_128;
 
   static const playbackOptions = downloadOptions;
@@ -276,6 +326,25 @@ class Song {
 
   /// 是否酷我歌曲（v2.4.0）。
   bool get isKuwo => source == Source.kuwo;
+
+  /// 平台短名（列表角标用）：网易云 / 酷我 / QQ / 本地。
+  ///
+  /// v2.4.0-fix2 之前各页面都写成 `isNetease ? '网易云' : 'QQ'`，
+  /// 酷我歌曲会显示成「QQ」。统一走这个 getter。
+  String get sourceShort {
+    if (isLocal) return '本地';
+    if (isKuwo) return '酷我';
+    if (isNetease) return '网易云';
+    return 'QQ';
+  }
+
+  /// 平台全名（弹层标题用）：网易云音乐 / 酷我音乐 / QQ 音乐。
+  String get sourceFull {
+    if (isLocal) return '本地音乐';
+    if (isKuwo) return '酷我音乐';
+    if (isNetease) return '网易云音乐';
+    return 'QQ 音乐';
+  }
 
   /// 是否本地文件歌曲。判定依据是 [localPath]，比看 `source` 更可靠——
   /// 历史持久化数据可能缺 `source` 字段但仍有路径。

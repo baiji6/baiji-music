@@ -4,6 +4,7 @@ import 'package:flutter_miuix/miuix.dart';
 
 import '../../core/ui_settings.dart';
 import 'app_localizations.dart';
+import '../../models/models.dart';
 import '../../theme/app_theme.dart';
 
 /// 更新日志的 Markdown 排版：字号压到 12~13，整体偏灰，和 App 暗色玻璃
@@ -582,6 +583,31 @@ class TagBadge extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 歌曲音源角标（v2.4.0-fix2）。
+///
+/// 之前各列表页都写成 `isNetease ? '网易云' : 'QQ'`，酷我歌曲在
+/// 搜索/收藏/历史/发现页的角标会显示成「QQ」。统一收口到这里，
+/// 按 [Song.sourceShort] + 平台品牌色渲染。
+class SourceBadge extends StatelessWidget {
+  const SourceBadge(this.song, {super.key});
+
+  /// 酷我品牌蓝（与 `platform_picker.dart` 一致）。
+  static const Color kuwoBrand = Color(0xFF3B82F6);
+
+  final Song song;
+
+  static Color colorOf(Song song) {
+    if (song.isLocal) return AppColors.textTertiary;
+    if (song.isKuwo) return kuwoBrand;
+    if (song.isNetease) return AppColors.accentAlt;
+    return AppColors.accent;
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      TagBadge(song.sourceShort, color: colorOf(song));
 }
 
 /// 空态视图。

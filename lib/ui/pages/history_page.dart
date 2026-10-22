@@ -93,12 +93,7 @@ class _HistoryPageState extends State<HistoryPage> {
                               ],
                             ),
                           ),
-                          TagBadge(
-                            song.isNetease ? '网易云' : 'QQ',
-                            color: song.isNetease
-                                ? AppColors.accentAlt
-                                : AppColors.accent,
-                          ),
+                          SourceBadge(song),
                           const SizedBox(width: 8),
                           Icon(Icons.play_arrow_rounded,
                               color: AppColors.accent, size: 24),

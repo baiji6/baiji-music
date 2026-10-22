@@ -162,7 +162,7 @@ class _AboutPageState extends State<AboutPage> {
                   _infoTile('平台支持', 'iOS / macOS / Windows / Linux / Android'),
                   MiuixHorizontalDivider(
                       thickness: 1, color: AppColors.strokeGlass),
-                  _infoTile('音源', 'QQ 音乐 + 网易云音乐'),
+                  _infoTile('音源', 'QQ 音乐 + 网易云音乐 + 酷我音乐'),
                   MiuixHorizontalDivider(
                       thickness: 1, color: AppColors.strokeGlass),
                   _infoTile('技术栈', 'Flutter 3.47 · Dart · 纯 Dart 加密'),
