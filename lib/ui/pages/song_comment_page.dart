@@ -11,9 +11,11 @@ import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../network/netease_comment_api.dart';
 import '../../network/qq_comment_api.dart';
+import '../../network/kuwo/kuwo_comment_api.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
+import 'kuwo_login_page.dart';
 import 'netease_login_page.dart';
 import 'qq_login_page.dart';
 
@@ -51,7 +53,14 @@ class _SongCommentPageState extends State<SongCommentPage> {
   /// QQ 最新评分页页码（从 0 起，首页已拉过）。
   int _qqPage = 0;
 
+  /// 酷我最新评论页码（从 1 起，首页已拉过）。
+  int _kuwoPage = 1;
+
   bool get _isLocal => widget.song.source == Source.local;
+
+  /// 酷我评论是只读的：服务端的发表/点赞/回复接口未对第三方开放
+  /// （沙箱内穷举验证过，见 kuwo_comment_api.dart 文件头）。
+  bool get _readOnly => widget.song.isKuwo;
 
   bool get _loggedIn =>
       AppServices.instance.isLoggedIn(widget.song.source);
@@ -116,6 +125,29 @@ class _SongCommentPageState extends State<SongCommentPage> {
           _data = page;
           _loading = false;
         });
+      } else if (song.isKuwo) {
+        // 酷我 rid 放在 Song.mid（见 MusicApi.kuwoSongToSong）
+        final rid = song.mid;
+        if (rid.isEmpty) {
+          throw Exception('该酷我歌曲缺少 rid，无法加载评论');
+        }
+        // 最热 + 最新各拉一页（评论接口免登录）
+        final results = await Future.wait([
+          KuwoCommentApi.getHotComments(rid),
+          KuwoCommentApi.getLatestComments(rid),
+        ]);
+        if (!mounted) return;
+        _kuwoPage = 1;
+        setState(() {
+          _data = CommentPage(
+            hot: results[0].latest,
+            latest: results[1].latest,
+            // 总数以最新评为准（total 是当前桶的条数）
+            total: results[1].total > 0 ? results[1].total : results[0].total,
+            hasMore: results[1].hasMore || results[0].hasMore,
+          );
+          _loading = false;
+        });
       } else {
         // QQ：热评 + 最新各拉一页。总数以最新评为准（实测与 GetCmCount
         // 一致：热评 Total 只是热评桶的条数）。
@@ -165,6 +197,21 @@ class _SongCommentPageState extends State<SongCommentPage> {
           );
           _neOffset += 15;
         });
+      } else if (song.isKuwo) {
+        final page = await KuwoCommentApi.getLatestComments(
+          song.mid,
+          page: _kuwoPage + 1,
+        );
+        if (!mounted) return;
+        setState(() {
+          _data = CommentPage(
+            hot: _data.hot,
+            latest: [..._data.latest, ...page.latest],
+            total: page.total > 0 ? page.total : _data.total,
+            hasMore: page.hasMore,
+          );
+          _kuwoPage += 1;
+        });
       } else {
         final page =
             await QqCommentApi.getNewComments(_qqBizId, page: _qqPage);
@@ -189,6 +236,10 @@ class _SongCommentPageState extends State<SongCommentPage> {
   // ================= 交互 =================
 
   Future<void> _onLike(Comment c) async {
+    if (_readOnly) {
+      showAppSnack('酷我评论暂不支持点赞');
+      return;
+    }
     if (!_loggedIn) {
       showAppSnack('登录后可点赞');
       return;
@@ -216,6 +267,10 @@ class _SongCommentPageState extends State<SongCommentPage> {
   }
 
   void _onReply(Comment c) {
+    if (_readOnly) {
+      showAppSnack('酷我评论暂不支持回复');
+      return;
+    }
     if (!_loggedIn) {
       showAppSnack('登录后可回复');
       return;
@@ -225,6 +280,7 @@ class _SongCommentPageState extends State<SongCommentPage> {
   }
 
   Future<void> _send() async {
+    if (_readOnly) return;
     final content = _inputController.text.trim();
     if (content.isEmpty || _sending) return;
     setState(() => _sending = true);
@@ -257,9 +313,11 @@ class _SongCommentPageState extends State<SongCommentPage> {
 
   void _goLogin() {
     final popped = Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => widget.song.isNetease
-          ? const NeteaseLoginPage()
-          : const QQLoginPage(),
+      builder: (_) => widget.song.isKuwo
+          ? const KuwoLoginPage()
+          : widget.song.isNetease
+              ? const NeteaseLoginPage()
+              : const QQLoginPage(),
     ));
     // 登录页返回后刷新一次，让输入栏即时切到可发送态
     popped.then((_) {
@@ -357,7 +415,11 @@ class _SongCommentPageState extends State<SongCommentPage> {
                 size: 40, color: AppColors.textTertiary),
             const SizedBox(height: 10),
             Text(
-              _isLocal ? '本地歌曲暂无评论' : '还没有评论，来抢沙发吧',
+              _isLocal
+                  ? '本地歌曲暂无评论'
+                  : _readOnly
+                      ? '这首歌还没有酷我评论'
+                      : '还没有评论，来抢沙发吧',
               style: TextStyle(fontSize: 13, color: AppColors.textTertiary),
             ),
           ],
@@ -427,6 +489,7 @@ class _SongCommentPageState extends State<SongCommentPage> {
   Widget _buildItem(Comment c) => _CommentItem(
         comment: c,
         liking: _likingIds.contains(c.id),
+        readOnly: _readOnly,
         onLike: () => _onLike(c),
         onReply: () => _onReply(c),
       );
@@ -493,6 +556,21 @@ class _SongCommentPageState extends State<SongCommentPage> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text('本地歌曲暂无评论',
+                        style: TextStyle(
+                            fontSize: 12.5,
+                            color: AppColors.textSecondary)),
+                  ),
+                ],
+              )
+            else if (_readOnly)
+              // 酷我的发表/点赞接口未对第三方开放，只读浏览
+              Row(
+                children: [
+                  Icon(Icons.visibility_outlined,
+                      size: 15, color: AppColors.textTertiary),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text('酷我评论仅支持浏览',
                         style: TextStyle(
                             fontSize: 12.5,
                             color: AppColors.textSecondary)),
@@ -581,12 +659,16 @@ class _CommentItem extends StatelessWidget {
   const _CommentItem({
     required this.comment,
     required this.liking,
+    required this.readOnly,
     required this.onLike,
     required this.onReply,
   });
 
   final Comment comment;
   final bool liking;
+
+  /// 只读（酷我）：隐藏「回复」入口，点赞不可点。
+  final bool readOnly;
   final VoidCallback onLike;
   final VoidCallback onReply;
 
@@ -608,7 +690,7 @@ class _CommentItem extends StatelessWidget {
                     Flexible(
                       child: Text(
                         comment.nickname.isEmpty
-                            ? '网易云音乐用户'
+                            ? (readOnly ? '酷我音乐用户' : '网易云音乐用户')
                             : comment.nickname,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -651,16 +733,17 @@ class _CommentItem extends StatelessWidget {
                       color: AppColors.textPrimary),
                 ),
                 if (comment.hasReplies) _buildReplies(comment.replies),
-                GestureDetector(
-                  onTap: onReply,
-                  behavior: HitTestBehavior.opaque,
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 5, bottom: 1),
-                    child: Text('回复',
-                        style: TextStyle(
-                            fontSize: 11.5, color: AppColors.textTertiary)),
+                if (!readOnly)
+                  GestureDetector(
+                    onTap: onReply,
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 5, bottom: 1),
+                      child: Text('回复',
+                          style: TextStyle(
+                              fontSize: 11.5, color: AppColors.textTertiary)),
+                    ),
                   ),
-                ),
               ],
             ),
           ),

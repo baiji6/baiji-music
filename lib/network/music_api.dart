@@ -1,6 +1,7 @@
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_api.dart';
+import 'package:baiji_music/network/kuwo/kuwo_auth.dart';
 import 'package:baiji_music/network/netease/netease_client.dart';
 import 'package:baiji_music/network/qq_music_client.dart';
 
@@ -15,8 +16,10 @@ class AppServices {
   late final QQMusicClient qq = QQMusicClient();
   late final NeteaseClient netease = NeteaseClient();
 
-  bool isLoggedIn(String source) =>
-      source == Source.netease ? netease.isLoggedIn() : qq.isLoggedIn();
+  bool isLoggedIn(String source) {
+    if (source == Source.kuwo) return KuwoAuth.isLoggedIn;
+    return source == Source.netease ? netease.isLoggedIn() : qq.isLoggedIn();
+  }
 }
 
 /// 取流结果：直链 + 服务端**实际**提供的音质。

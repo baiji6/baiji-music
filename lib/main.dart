@@ -22,6 +22,7 @@ import 'core/telemetry.dart';
 import 'core/theme_controller.dart';
 import 'core/ui_settings.dart';
 import 'core/update_checker.dart';
+import 'network/kuwo/kuwo_auth.dart';
 import 'player/player_controller.dart';
 import 'theme/app_theme.dart';
 import 'ui/pages/discover_home.dart';
@@ -37,6 +38,8 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await KvStore.ensureInit();
+  // 酷我会话：设置页账号区 / 评论页登录态都依赖它，启动时先从本地恢复
+  await KuwoAuth.restore();
   // 抓包支持：必须在任何 HttpClient 创建之前安装（release 构建同样生效）
   await CaptureTrust.load();
   HttpOverrides.global = CaptureHttpOverrides();

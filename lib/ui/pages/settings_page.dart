@@ -24,12 +24,14 @@ import '../../download/download_extras.dart';
 import '../../download/download_manager.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
+import '../../network/kuwo/kuwo_auth.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
 import '../widgets/info_dialog.dart';
 import '../widgets/lyric_style_sheet.dart';
+import 'kuwo_login_page.dart';
 import 'qq_login_page.dart';
 import 'netease_login_page.dart';
 
@@ -89,12 +91,19 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadSettings();
     // 开发者模式是进程级单例；这里兜底 load 一次（main 里也会 load，幂等）
     DevMode.instance.load();
+    // 酷我登录/退出后刷新账号区的登录态摘要
+    KuwoAuth.addListener(_onKuwoAuthChanged);
   }
 
   @override
   void dispose() {
+    KuwoAuth.removeListener(_onKuwoAuthChanged);
     _proxyController.dispose();
     super.dispose();
+  }
+
+  void _onKuwoAuthChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadSettings() async {
@@ -477,6 +486,26 @@ class _SettingsPageState extends State<SettingsPage> {
                       context,
                       MaterialPageRoute(
                           builder: (_) => const NeteaseLoginPage()),
+                    ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '酷我音乐',
+                    summary: KuwoAuth.isLoggedIn
+                        ? '已登录: ${KuwoAuth.session?.nickname.isNotEmpty == true ? KuwoAuth.session!.nickname : "UID ${KuwoAuth.session?.uid}"}'
+                        : '未登录 · 点击登录',
+                    startAction: Icon(
+                      KuwoAuth.isLoggedIn
+                          ? Icons.verified_rounded
+                          : Icons.person_outline,
+                      color: KuwoAuth.isLoggedIn
+                          ? AppColors.accent
+                          : AppColors.textTertiary,
+                      size: 22,
+                    ),
+                    onClick: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(builder: (_) => const KuwoLoginPage()),
                     ),
                   ),
                 ],

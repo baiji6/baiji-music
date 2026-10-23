@@ -150,6 +150,26 @@ class EkeyCipher {
     return out;
   }
 
+  /// DES 加密(ECB, 8 字节分组; 补 \0 到 8 的倍数, 不足一整块时补满整块)
+  ///
+  /// 与 [decrypt] 互为逆运算, 同一套表与轮密钥(顺序而非逆序)。
+  /// 用途: 酷我 `f=ar` 登录/短信协议的 q 参数, key = `"kwks&@69"`
+  /// (见 kuwo_cipher.dart)。
+  static Uint8List encrypt(Uint8List plain, Uint8List key) {
+    if (key.length != 8) {
+      throw ArgumentError('key 必须是 8 字节');
+    }
+    // 补 \0: len%8==0 时也补满一整块(与酷我官方客户端一致),
+    // 这样 openResponse 侧的去填充恒为 1..=8
+    final padded = Uint8List(plain.length + 8 - plain.length % 8);
+    padded.setRange(0, plain.length, plain);
+    final rk = _buildRoundKeys(_readU64LE(key, 0), false);
+    for (var i = 0; i < padded.length; i += 8) {
+      _writeU64LE(padded, i, _execBlock(_readU64LE(padded, i), rk));
+    }
+    return padded;
+  }
+
   /// Kuwo ekey 解密: Base64 -> DES 解密 -> 去尾部 \0
   static Uint8List decryptEkeyBase64(String b64) {
     final raw = base64Decode(b64);
