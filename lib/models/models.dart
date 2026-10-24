@@ -144,7 +144,10 @@ class Quality {
   const Quality(this.code, this.ext, this.label, this.bitrate);
 
   static const dtsX = Quality('DT03', '.mp4', 'DTS:X', 0);
-  static const atmosDb = Quality('D004', '.mp4', '杜比全景声', 0);
+  static const atmosEac3Plus = Quality('D003', '.mp4', '杜比全景声 815k', 0);
+  static const atmosEac3 = Quality('D002', '.mp4', '杜比全景声 680k', 0);
+  static const atmosEac3Lite = Quality('D001', '.mp4', '杜比全景声 475k', 0);
+  static const atmosDb = Quality('D004', '.mp4', '杜比全景声 AC-4', 0);
   static const atmos71 = Quality('Q003', '.ogg', '臻品全景声 7.1', 0);
   static const atmos51 = Quality('Q001', '.flac', '臻品全景声 5.1', 0);
   static const atmos2 = Quality('Q000', '.flac', '臻品音质', 0);
@@ -165,8 +168,17 @@ class Quality {
   static const playbackDefault = mp3_128;
 
   /// 下载可选音质（与 Kotlin DOWNLOAD_OPTIONS 顺序一致）。
+  ///
+  /// v2.4.2 补齐 QQ 杜比全景声系列的 E-AC-3 档（D001~D003）：
+  /// 官方「杜比全景声」默认给 AC-4（D004，本机无解码器，见
+  /// [undecodableCodes]），但同系列 D001~D003 是 E-AC-3(JOC)
+  /// （≈475k/680k/815k），media_kit 的 ffmpeg 有 eac3 解码器，
+  /// 选它们才能在本机真正听到杜比全景声。
   static const downloadOptions = [
     dtsX,
+    atmosEac3Plus,
+    atmosEac3,
+    atmosEac3Lite,
     atmosDb,
     atmos71,
     atmos51,
@@ -195,13 +207,44 @@ class Quality {
     return null;
   }
 
+  /// 本机播放器**无法解码**的音质 code（v2.4.2）。
+  ///
+  /// 播放走 media_kit（libmpv + 预编译 ffmpeg）。其 ffmpeg 以白名单方式
+  /// 构建（见 media-kit/libmpv-android-audio-build 的 ffmpeg.sh）：
+  /// ac3 / eac3 / dca / truehd 有，**ac4 没有**——上游 FFmpeg 至今没有
+  /// 原生 AC-4 解码器（Jellyfin 靠自编译补丁才支持，见
+  /// jellyfin/jellyfin-ffmpeg#387）。
+  ///
+  /// QQ 音乐「杜比全景声」D004 实测为 AC-4/mp4（沙箱 ffprobe 验证），
+  /// 选中必然解码失败；同站「臻品全景声」Q003/Q001 是 ogg/flac 多声道，
+  /// 可正常播放。命中这里的档位时取流层直接跳过并沿降级链下探
+  /// （见 [MusicApi.qqDowngradeChain] / [PlayerController] 的解码重试），
+  /// 用户无感切换到最近的可用档。
+  ///
+  /// 后续若换成带 AC-4 补丁的自编译 libmpv，把 code 从集合里删掉即可恢复。
+  static const Set<String> undecodableCodes = {'D004'};
+
+  /// QQ 音乐杜比全景声档位别名（v2.4.2）：官方客户端实际请求的是
+  /// D005~D008，与 D001~D004 是**同一批文件**（D001=D005、D002=D006、
+  /// D003=D007、D004=D008），其中 D001~D003 是 E-AC-3(JOC) 可解码，
+  /// D004/D008 是 AC-4 不可解码。取流返回的 URL 前缀可能是任一写法，
+  /// 这里统一归一到 D001~D004。
+  static const Map<String, String> dolbyAlias = {
+    'D005': 'D001',
+    'D006': 'D002',
+    'D007': 'D003',
+    'D008': 'D004',
+  };
+
   /// 从播放链接的文件名前缀推断服务器实际提供音质。
   static Quality? fromUrlPrefix(String url) {
     final name = url.split('/').last.split('?').first;
     if (name.isEmpty) return null;
-    final prefix4 = name.length >= 4 ? name.substring(0, 4) : name;
+    var code4 = name.length >= 4 ? name.substring(0, 4) : name;
+    // 杜比别名归一（D005~D008 → D001~D004）
+    code4 = dolbyAlias[code4] ?? code4;
     for (final q in downloadOptions) {
-      if (q.code == prefix4) return q;
+      if (q.code == code4) return q;
     }
     for (final q in downloadOptions) {
       if (name.startsWith(q.code)) return q;

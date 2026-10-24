@@ -142,6 +142,11 @@ class _BaijiMusicAppState extends State<BaijiMusicApp> with WidgetsBindingObserv
     PlayerController.instance.onError.listen((msg) {
       if (mounted) showAppSnack(msg);
     });
+    // v2.4.2：非致命提示（AC-4 自动降级等）。与 error 用同一种 snackbar，
+    // 文案是告知性的（「已自动切换」），不吓唬用户。
+    PlayerController.instance.onNotice.listen((msg) {
+      if (mounted) showAppSnack(msg);
+    });
     // 首帧渲染完成后再弹协议 / 查更新：此刻 Navigator 已挂载，启动也不会白屏。
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }

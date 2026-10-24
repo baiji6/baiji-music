@@ -6,6 +6,7 @@ import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/core/telemetry.dart';
 import 'package:baiji_music/local/local_scanner.dart';
 import 'package:baiji_music/models/models.dart';
+import 'package:baiji_music/network/kuwo/kuwo_link.dart';
 import 'package:baiji_music/network/music_api.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
@@ -126,6 +127,30 @@ class PlayerController {
   final StreamController<String> _errorStream = StreamController.broadcast();
   Stream<String> get onError => _errorStream.stream;
 
+  /// 非致命提示流（v2.4.2）：自动降级、AC-4 跳过等 informational 通知。
+  ///
+  /// 与 [onError] 的分工：error 是「这条播放失败了」，notice 是
+  /// 「我们替你换了一档，歌还在放」。UI 对 notice 用轻量 snackbar，
+  /// 对 error 用错误样式。
+  final StreamController<String> _noticeStream = StreamController.broadcast();
+  Stream<String> get onNotice => _noticeStream.stream;
+
+  // ===== AC-4 运行时防护（v2.4.2） =====
+
+  /// 单曲 AC-4 自动降级次数预算。
+  ///
+  /// 取流层已按「已知 AC-4 档位」过滤（QQ D004、酷我 dolby_ac4），
+  /// 这里是兜底：服务端 mislabel（请求可解码档却回 AC-4 文件）时，
+  /// 靠 libmpv 轨道信息当场发现并重取。给 2 次是防服务端顽固——
+  /// 第 3 次还拿到 AC-4 就认命报错，不死循环。
+  static const int _maxAc4Retries = 2;
+
+  int _ac4Budget = _maxAc4Retries;
+
+  /// 上次 AC-4 降级的时间（tracks 与 error 两条信号可能同时触发，做去重）。
+  DateTime? _lastAc4Retry;
+  static const _ac4RetryCooldown = Duration(seconds: 3);
+
   /// QQ 音质实际生效值变化（供播放页显示"实际音质/已降级"）。
   final StreamController<Quality?> _qualityStream = StreamController.broadcast();
   Stream<Quality?> get onQualityChanged => _qualityStream.stream;
@@ -212,10 +237,29 @@ class PlayerController {
     _player!.stream.error.listen((error) {
       try {
         AppLog.e('PlayerController', 'media_kit 错误: $error');
+        // AC-4 第二信号：部分容器/旧 mpv 下轨道信息不全，直接报解码器
+        // 缺失，消息里会带 codec 名。命中则走降级，不再向 UI 抛错误。
+        if (error.toLowerCase().contains('ac4')) {
+          _onAc4Detected('error: $error');
+          return;
+        }
         _errorStream.add('播放错误: $error');
         _playState.add(false);
       } catch (e, s) {
         AppLog.e('PlayerController', 'error 回调异常: $e\n$s');
+      }
+    });
+
+    // v2.4.2：libmpv 轨道列表回调——AC-4 兜底检测的第一信号。
+    // avformat 在解容器阶段就能报出 codec，即使没有解码器，
+    // track-list 里依然带着 codec=ac4，比等 error 更早也更可靠。
+    _player!.stream.tracks.listen((tracks) {
+      try {
+        final hasAc4 = tracks.audio
+            .any((t) => (t.codec ?? '').toLowerCase().contains('ac4'));
+        if (hasAc4) _onAc4Detected('tracks codec=ac4');
+      } catch (e, s) {
+        AppLog.e('PlayerController', 'tracks 回调异常: $e\n$s');
       }
     });
   }
@@ -265,9 +309,61 @@ class PlayerController {
   }
 
   Future<void> play(Song song, String url) async {
+    // 每次开播重置 AC-4 降级预算（v2.4.2）。play() 是所有曲目启动的
+    // 唯一入口（playQueue/_playAt/切歌/单曲循环重播都汇到这里），在
+    // 这里重置最稳；内部降级重试走 _playUrlInternal，不经过这里，
+    // 不会把预算半路刷满。注意不能拿 _currentSong 做 identical 判断——
+    // 调用方都是先赋 _currentSong 再进 play()，那样恒真、永不重置。
+    _ac4Budget = _maxAc4Retries;
+    _lastAc4Retry = null;
     _currentSong = song;
     _songStream.add(song);
     await _playUrlInternal(url);
+  }
+
+  /// AC-4 兜底命中（v2.4.2）：预算内则换一档可解码音质重取，保留播放位置。
+  ///
+  /// 触发源有两个：tracks 里的 codec=ac4（主信号，解容器即知），
+  /// mpv 报解码器缺失的 error 消息（备信号）。两条可能同时到达，
+  /// 用冷却时间去重；预算耗尽则报错放弃，不死循环。
+  void _onAc4Detected(String source) {
+    final now = DateTime.now();
+    if (_lastAc4Retry != null &&
+        now.difference(_lastAc4Retry!) < _ac4RetryCooldown) {
+      return;
+    }
+    final song = _currentSong;
+    if (song == null) return;
+    if (_ac4Budget <= 0) {
+      AppLog.e('PlayerController', 'AC-4 降级预算已用完（$source），放弃重试');
+      _errorStream.add('该曲目的杜比全景声(AC-4)本机暂不支持播放');
+      _playState.add(false);
+      return;
+    }
+    _ac4Budget--;
+    _lastAc4Retry = now;
+    AppLog.w('PlayerController',
+        '检测到 AC-4 音轨（$source），自动降级重试（剩余 $_ac4Budget 次）');
+    if (!_noticeStream.isClosed) {
+      _noticeStream.add('「杜比全景声(AC-4)」本机暂不支持，已自动切换到可播放音质');
+    }
+    _downgradeAndReplay(song);
+  }
+
+  /// 跳过当前这档，沿降级链重取并续播（保留位置，v2.4.2）。
+  ///
+  /// 只改本次播放链路，**不写偏好**——用户的默认音质选择不受影响
+  /// （与 #141「播放页调音质不污染默认偏好」同一原则）。
+  Future<void> _downgradeAndReplay(Song song) async {
+    final pos = position;
+    final url = await _resolveUrl(song, skipCurrent: true);
+    if (url.isEmpty) {
+      _errorStream.add('该歌曲没有可用的备用音质');
+      _playState.add(false);
+      return;
+    }
+    await _playUrlInternal(url);
+    if (pos > Duration.zero) await seek(pos);
   }
 
   Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {
@@ -374,7 +470,11 @@ class PlayerController {
   ///
   /// 服务端还可能"请求成功但返回更低音质"（未登录/无版权/未开通会员），
   /// 这种情况由 [MusicApi.playUrlInfo] 反查真实音质并同步给 UI。
-  Future<String> _resolveUrl(Song song) async {
+  ///
+  /// [skipCurrent]（v2.4.2 AC-4 兜底）：从**当前实际生效档的下一档**开始，
+  /// 避免运行时发现 AC-4 后又拿到同一条链接。仅由 [_downgradeAndReplay]
+  /// 使用，正常取流不走这条路。
+  Future<String> _resolveUrl(Song song, {bool skipCurrent = false}) async {
     // 本地文件不需要联网取流：直接把路径转成 media_kit 认得的 file:// URI。
     if (song.isLocal) {
       final local = LocalScanner.playUri(song);
@@ -389,8 +489,26 @@ class PlayerController {
     // 酷我（v2.4.0）：音质降级链在 [KuwoApi.playUrlWithFallback] 内部处理，
     // 这里只需要带当前选中的酷我音质即可。
     if (song.isKuwo) {
+      var q = currentKuwoQuality;
+      if (skipCurrent) {
+        q = _actualKuwoQuality ?? q;
+        // 沿规则表往下找第一档可解码的（跳过刚放不出的那档）
+        KuwoQuality? next;
+        for (final r in KuwoLink.downgradeRules(q.id).skip(1)) {
+          final id = r[2] as String;
+          if (KuwoLink.undecodableIds.contains(id)) continue;
+          next = KuwoQuality.fromId(id);
+          if (next != null) break;
+        }
+        if (next == null) {
+          AppLog.w('PlayerController', '酷我 AC-4 降级：没有更低的可用档');
+          _clearActual();
+          return '';
+        }
+        q = next;
+      }
       final r = await _fetch(song, currentQuality, currentNeteaseQuality,
-          kuwo: currentKuwoQuality);
+          kuwo: q);
       if (r.isNotEmpty) {
         _applyActual(r);
         _reportPlay(song, r);
@@ -400,13 +518,23 @@ class PlayerController {
       return '';
     }
 
+    // AC-4 兜底重取时以「实际生效档」为起点；正常取流以偏好为起点
+    // （避免某首歌的服务端降级黏到下首歌）。
+    final startQq =
+        skipCurrent ? (_actualQqQuality ?? currentQuality) : currentQuality;
+    final startNe = skipCurrent
+        ? (_actualNeQuality ?? currentNeteaseQuality)
+        : currentNeteaseQuality;
+
     final chain = song.isNetease
-        ? MusicApi.neteaseDowngradeChain(currentNeteaseQuality)
-            .map((q) => _FetchPlan(qq: currentQuality, ne: q))
+        ? MusicApi.neteaseDowngradeChain(startNe)
+            .map((q) => _FetchPlan(qq: startQq, ne: q))
             .toList()
-        : MusicApi.qqDowngradeChain(currentQuality)
-            .map((q) => _FetchPlan(qq: q, ne: currentNeteaseQuality))
+        : MusicApi.qqDowngradeChain(startQq)
+            .map((q) => _FetchPlan(qq: q, ne: startNe))
             .toList();
+    // 跳过当前档（AC-4 兜底）：链首即刚放不出的那一档
+    if (skipCurrent && chain.length > 1) chain.removeAt(0);
 
     for (var i = 0; i < chain.length; i++) {
       final plan = chain[i];

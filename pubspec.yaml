@@ -63,6 +63,9 @@ dependencies:
   # 网易云扫码登录的二维码本地渲染（内容形如 https://music.163.com/login?codekey=…）。
   qr_flutter: ^4.1.0
   fast_gbk: ^1.0.0
+  # @visibleForTesting 注解（kuwo_api 的 qualityOfBr 等测试钩子）。
+  # 提升为直接依赖不改变解析结果，只是让 import 它名正言顺。
+  meta: ^1.16.0
   http: ^1.6.0
 
 dev_dependencies:

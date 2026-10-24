@@ -159,25 +159,58 @@ class MusicApi {
         r.ext.isNotEmpty ? r.ext : null,
       );
     }
-    final url =
-        await AppServices.instance.qq.song.getPlayUrl(song.mid, qqQuality);
+    // QQ：v2.4.2 起「杜比全景声」D004 是 AC-4，本机（media_kit 的
+    // ffmpeg 白名单没有 ac4 解码器）放不出。先把请求档位换成最近的
+    // 可用档；服务端还会"请求高档位返回低档位"，回来的若是 AC-4 就
+    // 按实际档位再换一次（下载等直连入口没有降级链兜底）。
+    var useQq = qqDecodableSubstitute(qqQuality);
+    var url = await AppServices.instance.qq.song.getPlayUrl(song.mid, useQq);
     if (url.isEmpty) return PlayUrlResult.empty;
-    return PlayUrlResult._(url, Quality.fromUrlPrefix(url) ?? qqQuality, null);
+    var actual = Quality.fromUrlPrefix(url) ?? useQq;
+    if (Quality.undecodableCodes.contains(actual.code)) {
+      final retry = qqDecodableSubstitute(actual);
+      AppLog.w('MusicApi',
+          'QQ 请求 ${useQq.code} 实际返回 ${actual.code}（AC-4 本机不可解码），改请求 ${retry.code}');
+      final url2 = await AppServices.instance.qq.song.getPlayUrl(song.mid, retry);
+      if (url2.isNotEmpty) {
+        url = url2;
+        actual = Quality.fromUrlPrefix(url2) ?? retry;
+      }
+    }
+    return PlayUrlResult._(url, actual, null);
   }
 
   /// QQ 音质降级链：[from] 起向下最多 6 档，并保证末档兜底到 MP3 128。
   ///
   /// `downloadOptions` 已按高→低排列；从 [from] 之后截取即为"只降不升"。
+  /// v2.4.2：过滤本机无法解码的档位（QQ「杜比全景声」D004 是 AC-4，
+  /// 见 [Quality.undecodableCodes]）——选中必然失败，直接给最近的可用档。
   static List<Quality> qqDowngradeChain(Quality from) {
     final all = Quality.downloadOptions;
     // 按 code 比对而非 identity，避免将来换成值相等枚举时出错
     final i = all.indexWhere((q) => q.code == from.code);
     final rest = i < 0 ? all : all.sublist(i + 1);
-    final chain = <Quality>[from, ...rest.take(5)];
+    final chain = <Quality>[from, ...rest.take(5)]
+        .where((q) => !Quality.undecodableCodes.contains(q.code))
+        .toList();
     if (!chain.any((q) => q.code == Quality.mp3_128.code)) {
       chain.add(Quality.mp3_128);
     }
     return chain;
+  }
+
+  /// 把 [q] 替换成本机可解码的最近档位（同站向下找第一档）。
+  ///
+  /// 用于下载等**不走降级链**的直连入口：用户选了 AC-4（D004）时，
+  /// 与其下一个放不出的文件，不如直接给最近的可用档（v2.4.2）。
+  static Quality qqDecodableSubstitute(Quality q) {
+    if (!Quality.undecodableCodes.contains(q.code)) return q;
+    final all = Quality.downloadOptions;
+    final i = all.indexWhere((e) => e.code == q.code);
+    for (var k = i + 1; k < all.length; k++) {
+      if (!Quality.undecodableCodes.contains(all[k].code)) return all[k];
+    }
+    return Quality.mp3_128;
   }
 
   /// 网易云音质降级链：[from] 起向下，`downloadOptions` 已按高→低排列。

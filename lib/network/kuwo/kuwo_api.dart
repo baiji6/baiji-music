@@ -19,6 +19,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:fast_gbk/fast_gbk.dart';
+import 'package:meta/meta.dart';
 
 import '../../core/app_logger.dart';
 import '../../models/models.dart';
@@ -309,16 +310,34 @@ class KuwoApi {
   ///
   /// 酷我未登录时无损/母带档普遍不可用，必须有降级链，
   /// 否则搜索结果能点播放却直接失败。
+  ///
+  /// v2.4.2：跳过本机无法解码的档位（AC-4，见
+  /// [KuwoLink.undecodableIds]），并且**校验服务端实际返回的档位**——
+  /// 酷我会"请求 A 档返回 B 档"，回来的若是 AC-4 同样放不出，
+  /// 必须继续下探。用户无感切换到最近的可用杜比档（E-AC-3）。
   static Future<KuwoPlayLink> playUrlWithFallback(
     String rid,
     KuwoQuality from,
   ) async {
-    final chain = KuwoLink.downgradeChain(from.id);
+    if (KuwoLink.undecodableIds.contains(from.id)) {
+      AppLog.i('KuwoApi',
+          '音质 ${from.label} 本机无法解码（AC-4 无解码器），自动切换最近可用档');
+    }
     Exception? last;
-    for (final br in chain) {
+    for (final rule in KuwoLink.downgradeRules(from.id)) {
+      final id = rule[2] as String;
+      if (KuwoLink.undecodableIds.contains(id)) continue;
+      final quality = KuwoQuality.fromId(id);
+      if (quality == null) continue;
       try {
-        final link = await playUrl(rid, quality: _qualityOfBr(br));
-        if (link.playUrl.isNotEmpty) return link;
+        final link = await playUrl(rid, quality: quality);
+        if (link.playUrl.isEmpty) continue;
+        if (KuwoLink.undecodableIds.contains(link.qualityId)) {
+          AppLog.w('KuwoApi',
+              'rid=$rid 请求 ${quality.label} 但服务端返回 ${link.qualityId}（本机不可解码），继续降级');
+          continue;
+        }
+        return link;
       } catch (e) {
         last = e is Exception ? e : Exception('$e');
       }
@@ -327,7 +346,11 @@ class KuwoApi {
   }
 
   /// br 串 → 音质对象（找不到时退化为同 bitrate 的常见档）。
-  static KuwoQuality? _qualityOfBr(String br) {
+  ///
+  /// 供下载等**指定 br** 的入口使用；播放降级走
+  /// [playUrlWithFallback]（按规则对象遍历，可过滤 AC-4）。
+  @visibleForTesting
+  static KuwoQuality? qualityOfBr(String br) {
     for (final q in KuwoQuality.downloadOptions) {
       if (q.br == br) return q;
     }
@@ -338,7 +361,8 @@ class KuwoApi {
     );
     if (rule.isEmpty) return null;
     final id = rule[2] as String;
-    return KuwoQuality.fromId(id) ?? _qualityByBitrate(int.tryParse(rule[0] as String) ?? 0);
+    return KuwoQuality.fromId(id) ??
+        _qualityByBitrate(int.tryParse(rule[0] as String) ?? 0);
   }
 
   static KuwoQuality? _qualityByBitrate(int bitrate) {
