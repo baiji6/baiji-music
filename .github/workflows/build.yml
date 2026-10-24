@@ -478,6 +478,9 @@ jobs:
         env:
           CHANGELOG_BODY: ${{ steps.changelog.outputs.changelog }}
         with:
+          # 预发布：版本号带 -pre 后缀（如 2.4.2-pre1）时标记为
+          # GitHub Pre-release，不占用「最新 Release」位（v2.4.2 开发期约定）。
+          prerelease: ${{ contains(env.APP_VERSION, '-pre') }}
           files: |
             dist/baiji-music-${{ env.APP_VERSION }}-android.apk
             dist/baiji-music-${{ env.APP_VERSION }}-ios.ipa
