@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +8,8 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../core/app_logger.dart';
 import '../../core/cache_manager.dart';
+import '../../core/log_store.dart';
+import '../../download/download_manager.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
@@ -48,6 +51,85 @@ class _LogPageState extends State<LogPage> {
   /// 隐藏「整条都是崩溃转储」的条目（有正文的条目保留，转储由卡片折叠）。
   bool _hideNoise = false;
 
+  // ===== 历史日期查看（v2.4.2 #144）=====
+  //
+  // 落盘本来就按天保留 7 天，但页面之前只能看「内存缓冲 + 当天回读」，
+  // 隔天再进来昨天出问题时的日志就看不到了——用户感知就是
+  // 「日志无法持久化保存」。现在把落盘的每一天都列出来可翻。
+  List<(String label, File file)> _historyDays = const [];
+
+  /// null = 实时（内存缓冲）；否则为选中的历史日期文件。
+  File? _viewingDay;
+
+  List<LogEntry> _historyEntries = const [];
+  bool _historyLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistoryDays();
+  }
+
+  Future<void> _loadHistoryDays() async {
+    try {
+      final files = await LogStore.instance.historyFiles();
+      if (!mounted) return;
+      setState(() {
+        _historyDays = [
+          for (final f in files)
+            (
+              _dayLabel(f.uri.pathSegments.last),
+              f,
+            ),
+        ];
+      });
+    } catch (_) {
+      // 历史列表拿不到就只显示实时日志，不影响其它功能
+    }
+  }
+
+  /// `baiji_20261025.log` → `10-25`。
+  static String _dayLabel(String fileName) {
+    final m = RegExp(r'baiji_(\d{4})(\d{2})(\d{2})\.log$').firstMatch(fileName);
+    if (m == null) return fileName;
+    return '${m.group(2)!}-${m.group(3)!}';
+  }
+
+  Future<void> _selectDay(File? day) async {
+    if (day == null) {
+      setState(() {
+        _viewingDay = null;
+        _historyEntries = const [];
+      });
+      return;
+    }
+    setState(() {
+      _historyLoading = true;
+      _viewingDay = day;
+    });
+    try {
+      final text = await day.readAsString();
+      final lines = text
+          .split('\n')
+          .where((l) => l.trim().isNotEmpty)
+          .toList(growable: false);
+      // 一天最多可能上万行，页面只回看最近 3000 条足够定位问题
+      final tail = lines.length > 3000 ? lines.sublist(lines.length - 3000) : lines;
+      if (!mounted) return;
+      setState(() {
+        _historyEntries = AppLog.parseLines(tail);
+        _historyLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _historyEntries = const [];
+        _historyLoading = false;
+      });
+      showAppSnack('读取历史日志失败: $e');
+    }
+  }
+
   /// 单条日志超过这个长度就把尾部折叠起来。
   static const int _collapseAt = 140;
 
@@ -59,22 +141,42 @@ class _LogPageState extends State<LogPage> {
 
   Future<void> _exportLogs() async {
     setState(() => _exporting = true);
+    File? file;
+    var where = '下载目录';
     try {
-      final logs = AppLog.instance.dump();
-      if (logs.isEmpty) {
+      // 合并近 7 天落盘 + 当前实时缓冲（#144：之前只导内存条目，
+      // 且落在缓存目录里会被「清理缓存」顺手删掉，用户拿到的
+      // 「保存的日志」经常第二天就没了）。
+      final text = await _collectExportText();
+      if (text.trim().isEmpty) {
         showAppSnack('暂无日志可导出');
         return;
       }
-      final text = logs.join('\n');
-      // 放进可管理的缓存目录，这样「设置 → 清理缓存」能把导出残留一并清掉
-      final file = await CacheManager.cacheFile('baiji_music_logs.txt');
-      await file.writeAsString(text, encoding: utf8);
+      final stamp = DateTime.now();
+      final name = 'baiji_music_logs_'
+          '${stamp.year}${stamp.month.toString().padLeft(2, '0')}'
+          '${stamp.day.toString().padLeft(2, '0')}_'
+          '${stamp.hour.toString().padLeft(2, '0')}'
+          '${stamp.minute.toString().padLeft(2, '0')}.txt';
+      try {
+        final dir = await DownloadManager.instance.getDefaultDownloadDir();
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        file = File('${dir.path}${Platform.pathSeparator}$name');
+        await file.writeAsString(text, encoding: utf8, flush: true);
+      } catch (_) {
+        // 下载目录不可写（权限/平台差异）：退回缓存目录，至少分享能用
+        file = await CacheManager.cacheFile(name);
+        await file.writeAsString(text, encoding: utf8);
+        where = '缓存目录';
+      }
       if (!mounted) return;
       await Share.shareXFiles(
         [XFile(file.path)],
         text: '白姬音乐运行日志',
-        subject: 'baiji_music_logs.txt',
+        subject: name,
       );
+      if (!mounted) return;
+      showAppSnack('日志已保存到$where：${file.path}');
     } catch (e) {
       // 这里 await 过了，context 可能已经失效——和 finally 一样要先判 mounted
       if (!mounted) return;
@@ -82,6 +184,33 @@ class _LogPageState extends State<LogPage> {
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
+  }
+
+  /// 近 7 天落盘日志 + 当前实时缓冲，合并成导出文本。
+  Future<String> _collectExportText() async {
+    final buf = StringBuffer();
+    var persisted = 0;
+    try {
+      for (final f in await LogStore.instance.historyFiles()) {
+        final text = await f.readAsString();
+        if (text.trim().isEmpty) continue;
+        buf
+          ..writeln('===== ${f.uri.pathSegments.last} =====')
+          ..writeln(text.trim())
+          ..writeln();
+        persisted++;
+      }
+    } catch (_) {
+      // 落盘读不了就只导内存
+    }
+    final memory = AppLog.instance.dump();
+    if (memory.isNotEmpty) {
+      buf
+        ..writeln('===== 实时缓冲 =====')
+        ..writeln(memory.join('\n'));
+    }
+    if (persisted == 0 && memory.isEmpty) return '';
+    return buf.toString();
   }
 
   Color _levelColor(String level) {
@@ -105,11 +234,17 @@ class _LogPageState extends State<LogPage> {
 
   @override
   Widget build(BuildContext context) {
-    final all = AppLog.instance.snapshot(
+    final viewingHistory = _viewingDay != null;
+    final sourceEntries =
+        viewingHistory ? _historyEntries : AppLog.instance.snapshot(
       minLevel: AppLog.trace,
       hideNoise: false,
     );
-    final logs = AppLog.instance.snapshot(
+    final all = viewingHistory
+        ? sourceEntries
+        : AppLog.instance.snapshot(minLevel: AppLog.trace, hideNoise: false);
+    final logs = AppLog.filterEntries(
+      sourceEntries,
       minLevel: _filterLevel,
       keyword: _keyword,
       hideNoise: _hideNoise,
@@ -145,6 +280,58 @@ class _LogPageState extends State<LogPage> {
       ],
       child: Column(
         children: [
+          // 日期切换（#144：近 7 天落盘日志都能翻）
+          if (_historyDays.isNotEmpty)
+            SizedBox(
+              height: 38,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: _historyDays.length + 1,
+                itemBuilder: (ctx, i) {
+                  final isToday = i == 0;
+                  final day = isToday ? null : _historyDays[i - 1].$2;
+                  final label = isToday ? '实时' : _historyDays[i - 1].$1;
+                  final active = isToday
+                      ? _viewingDay == null
+                      : _viewingDay?.path == day!.path;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: MiuixPressable(
+                      onPressed: () => _selectDay(day),
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 11, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: active
+                              ? AppColors.accent.withValues(alpha: 0.18)
+                              : AppColors.surfaceGlass,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: active
+                                ? AppColors.accent
+                                : AppColors.strokeGlass,
+                          ),
+                        ),
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: active
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: active
+                                ? AppColors.accent
+                                : AppColors.textTertiary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
           // 关键词搜索
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
@@ -275,7 +462,11 @@ class _LogPageState extends State<LogPage> {
           MiuixHorizontalDivider(thickness: 1, color: AppColors.strokeGlass),
           // 日志列表（条目卡）
           Expanded(
-            child: logs.isEmpty
+            child: _historyLoading
+                ? const Center(
+                    child: MiuixCircularProgressIndicator(size: 24),
+                  )
+                : logs.isEmpty
                 ? Center(
                     child: Text(
                       _keyword.isEmpty ? '该级别暂无日志' : '没有匹配「$_keyword」的日志',

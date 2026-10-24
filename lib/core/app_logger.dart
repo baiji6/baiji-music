@@ -233,10 +233,24 @@ class AppLog {
     String minLevel = trace,
     String keyword = '',
     bool hideNoise = false,
+  }) =>
+      filterEntries(_entries, minLevel: minLevel, keyword: keyword,
+          hideNoise: hideNoise);
+
+  /// 把落盘的原始行还原成结构化条目（日志页查看历史日期用，v2.4.2 #144）。
+  static List<LogEntry> parseLines(Iterable<String> lines) =>
+      lines.map(_parseLine).toList();
+
+  /// 通用过滤（内存缓冲与历史日期共用同一套规则，v2.4.2 #144）。
+  static List<LogEntry> filterEntries(
+    List<LogEntry> entries, {
+    String minLevel = trace,
+    String keyword = '',
+    bool hideNoise = false,
   }) {
     final minIdx = levelIndex(minLevel);
     final kw = keyword.trim().toLowerCase();
-    return _entries.where((e) {
+    return entries.where((e) {
       if (levelIndex(e.level) < minIdx) return false;
       if (kw.isNotEmpty &&
           !e.tag.toLowerCase().contains(kw) &&
