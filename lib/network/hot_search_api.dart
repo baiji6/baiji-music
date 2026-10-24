@@ -61,17 +61,41 @@ Future<Map<String, dynamic>> getJsonWithRetry(
 }
 
 /// 一条热搜词。
+///
+/// 三平台字段名各不相同（v2.4.2 #142 修复）：
+///   - QQ 音乐：`{"k":"词","n":765562}`
+///   - 网易云：`{"first":"词","second":1}`（`second` 是热度档位不是次数，不展示）
+///   - 酷我：XML `<music name= artist= rid=>`，直接用构造函数拼装
+/// 之前统一按 `word` / `count` 解析，QQ / 网易云全部读成空串被过滤掉，
+/// 表现就是「热搜榜一片空白」。
 class HotKeyword {
   final String word;
   final String? count;
 
   const HotKeyword(this.word, this.count);
 
+  /// QQ 音乐热搜词：`k` = 词，`n` = 搜索热度。
+  factory HotKeyword.fromQq(Map<String, dynamic> j) => HotKeyword(
+        (j['k'] ?? '').toString().trim(),
+        j['n']?.toString(),
+      );
+
+  /// 网易云热搜词：`first` = 词；`second` 是热度档位（几乎都是 1），
+  /// 当次数展示没有意义，故置空。
+  factory HotKeyword.fromNetease(Map<String, dynamic> j) =>
+      HotKeyword((j['first'] ?? '').toString().trim(), null);
+
+  /// 通用容错解析：几种字段名都认，便于单测与旧调用方。
   factory HotKeyword.fromJson(Map<String, dynamic> j) => HotKeyword(
-        (j['word'] ?? '').toString(),
-        j['count']?.toString(),
+        (j['word'] ?? j['k'] ?? j['first'] ?? '').toString().trim(),
+        (j['count'] ?? j['n'])?.toString(),
       );
 }
+
+/// 封面转 https：QQ / 网易云返回的都是 http，Android 9+ 默认禁明文流量，
+/// 直接拿来加载会失败（表现为封面全空）。两个图床都支持 https。
+String _httpsCover(String url) =>
+    url.startsWith('http://') ? 'https://${url.substring(7)}' : url;
 
 /// 一个热门歌单摘要。
 class HotPlaylist {
@@ -91,12 +115,45 @@ class HotPlaylist {
     this.trackCount,
   });
 
+  /// QQ 音乐歌单：`dissid` / `dissname` / `imgurl` / `creator.name` /
+  /// `listennum`。接口不返回曲目数，故 [trackCount] 为空。
+  factory HotPlaylist.fromQq(Map<String, dynamic> j) {
+    final cr = j['creator'];
+    final creator = cr is Map ? (cr['name'] ?? '') : (cr ?? '');
+    return HotPlaylist(
+      id: (j['dissid'] ?? '').toString(),
+      name: (j['dissname'] ?? '').toString(),
+      cover: _httpsCover((j['imgurl'] ?? '').toString()),
+      creator: creator.toString(),
+      playCount: j['listennum']?.toString(),
+    );
+  }
+
+  /// 网易云歌单：`id` / `name` / `coverImgUrl` / `creator.nickname` /
+  /// `playCount` / `trackCount`。
+  factory HotPlaylist.fromNetease(Map<String, dynamic> j) {
+    final cr = j['creator'];
+    final creator = cr is Map ? (cr['nickname'] ?? '') : (cr ?? '');
+    return HotPlaylist(
+      id: (j['id'] ?? '').toString(),
+      name: (j['name'] ?? '').toString(),
+      cover: _httpsCover((j['coverImgUrl'] ?? '').toString()),
+      creator: creator.toString(),
+      playCount: (j['playCount'] ?? j['subscribedCount'])?.toString(),
+      trackCount: (j['trackCount'] as num?)?.toInt(),
+    );
+  }
+
   factory HotPlaylist.fromJson(Map<String, dynamic> j) => HotPlaylist(
-        id: (j['id'] ?? '').toString(),
-        name: (j['name'] ?? '').toString(),
-        cover: (j['cover'] ?? '').toString(),
-        creator: (j['creator'] ?? '').toString(),
-        playCount: j['playCount']?.toString(),
+        id: (j['id'] ?? j['dissid'] ?? '').toString(),
+        name: (j['name'] ?? j['dissname'] ?? '').toString(),
+        cover: _httpsCover(
+            (j['cover'] ?? j['coverImgUrl'] ?? j['imgurl'] ?? '').toString()),
+        creator: (j['creator'] is Map
+                ? ((j['creator']['nickname'] ?? j['creator']['name']) ?? '')
+                : (j['creator'] ?? ''))
+            .toString(),
+        playCount: (j['playCount'] ?? j['listennum'])?.toString(),
         trackCount: (j['trackCount'] as num?)?.toInt(),
       );
 }
@@ -123,7 +180,7 @@ class QqHot {
     final list = (data['data']?['hotkey'] ?? const []) as List<dynamic>;
     return list
         .take(limit)
-        .map((e) => HotKeyword.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map((e) => HotKeyword.fromQq(Map<String, dynamic>.from(e as Map)))
         .where((e) => e.word.isNotEmpty)
         .toList();
   }
@@ -151,7 +208,7 @@ class QqHot {
     final data = await getJsonWithRetry(url, headers: headers);
     final list = (data['data']?['list'] ?? const []) as List<dynamic>;
     return list
-        .map((e) => HotPlaylist.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map((e) => HotPlaylist.fromQq(Map<String, dynamic>.from(e as Map)))
         .where((e) => e.id.isNotEmpty)
         .toList();
   }
@@ -173,7 +230,8 @@ class NeteaseHot {
     final list = (data['result']?['hots'] ?? const []) as List<dynamic>;
     return list
         .take(limit)
-        .map((e) => HotKeyword.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map((e) =>
+            HotKeyword.fromNetease(Map<String, dynamic>.from(e as Map)))
         .where((e) => e.word.isNotEmpty)
         .toList();
   }
@@ -189,7 +247,8 @@ class NeteaseHot {
     final data = await getJsonWithRetry(url, headers: headers);
     final list = (data['playlists'] ?? const []) as List<dynamic>;
     return list
-        .map((e) => HotPlaylist.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map((e) =>
+            HotPlaylist.fromNetease(Map<String, dynamic>.from(e as Map)))
         .where((e) => e.id.isNotEmpty)
         .toList();
   }

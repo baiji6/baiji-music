@@ -527,7 +527,7 @@ class _PlayerPageState extends State<PlayerPage> {
           content: song != null && song.isKuwo
               ? _QualitySheet<KuwoQuality>(
                   options: KuwoQuality.playbackOptions,
-                  current: _player.currentKuwoQuality,
+                  current: _player.effectiveKuwoQuality,
                   label: (q) => q.label,
                   onSelect: (q) {
                     setState(() => _showPlayQualitySheet = false);
@@ -537,7 +537,7 @@ class _PlayerPageState extends State<PlayerPage> {
               : song != null && song.isNetease
               ? _QualitySheet<NeteaseQuality>(
                   options: NeteaseQuality.playbackOptions,
-                  current: _player.currentNeteaseQuality,
+                  current: _player.effectiveNeteaseQuality,
                   label: (q) => q.label,
                   onSelect: (q) {
                     setState(() => _showPlayQualitySheet = false);
@@ -546,7 +546,7 @@ class _PlayerPageState extends State<PlayerPage> {
                 )
               : _QualitySheet<Quality>(
                   options: Quality.playbackOptions,
-                  current: _player.currentQuality,
+                  current: _player.effectiveQuality,
                   label: (q) => q.label,
                   onSelect: (q) {
                     setState(() => _showPlayQualitySheet = false);

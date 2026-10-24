@@ -53,6 +53,7 @@ class _SettingsPageState extends State<SettingsPage> {
   String _cacheSize = '计算中…';
   Quality _qqQuality = Quality.playbackDefault;
   NeteaseQuality _neQuality = NeteaseQuality.playbackDefault;
+  KuwoQuality _kuwoQuality = KuwoQuality.playbackDefault;
   bool _checkingUpdate = false;
   bool _captureEnabled = false;
   String _captureProxy = '';
@@ -70,6 +71,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _showLyricStyleSheet = false;
   bool _showQQQualitySheet = false;
   bool _showNeteaseQualitySheet = false;
+  bool _showKuwoQualitySheet = false;
   bool _showCacheLimitSheet = false;
   bool _showBackupDialog = false;
   bool _showBackupImportConfirm = false;
@@ -117,6 +119,7 @@ class _SettingsPageState extends State<SettingsPage> {
       _cacheMemoryMb = CacheManager.memoryLimitMb;
       _qqQuality = player.currentQuality;
       _neQuality = player.currentNeteaseQuality;
+      _kuwoQuality = player.currentKuwoQuality;
       _captureEnabled = CaptureTrust.enabled;
       _captureProxy = CaptureTrust.proxy;
       _lyricMode = DownloadExtras.lyricMode;
@@ -244,6 +247,13 @@ class _SettingsPageState extends State<SettingsPage> {
     PlayerController.instance.saveNeteaseQuality(q);
     setState(() => _neQuality = q);
     _showSnack('网易云音质已设为 ${q.label}');
+  }
+
+  void _selectKuwoQuality(KuwoQuality q) {
+    setState(() => _showKuwoQualitySheet = false);
+    PlayerController.instance.saveKuwoQuality(q);
+    setState(() => _kuwoQuality = q);
+    _showSnack('酷我音质已设为 ${q.label}');
   }
 
   Future<void> _resetDownloadDir() async {
@@ -533,6 +543,15 @@ class _SettingsPageState extends State<SettingsPage> {
                         color: AppColors.accentAlt, size: 22),
                     onClick: () =>
                         setState(() => _showNeteaseQualitySheet = true),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '酷我音乐播放音质',
+                    summary: _kuwoQuality.label,
+                    startAction: Icon(Icons.equalizer_rounded,
+                        color: AppColors.violet, size: 22),
+                    onClick: () =>
+                        setState(() => _showKuwoQualitySheet = true),
                   ),
                 ],
               ),
@@ -1331,6 +1350,20 @@ MiuixArrowPreference(
             current: _neQuality,
             label: (q) => q.label,
             onSelect: _selectNeteaseQuality,
+          ),
+        ),
+        // 酷我音质（v2.4.2 #140：之前只有 QQ / 网易云，酷我无法设默认）
+        MiuixOverlayBottomSheet(
+          show: _showKuwoQualitySheet,
+          title: '酷我音乐播放音质',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showKuwoQualitySheet = false),
+          content: _QualitySheet<KuwoQuality>(
+            options: KuwoQuality.playbackOptions,
+            current: _kuwoQuality,
+            label: (q) => q.label,
+            onSelect: _selectKuwoQuality,
           ),
         ),
         // 内存缓存上限

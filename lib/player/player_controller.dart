@@ -57,6 +57,38 @@ class PlayerController {
   /// 酷我当前音质（v2.4.0）。
   KuwoQuality currentKuwoQuality = KuwoQuality.playbackDefault;
 
+  // ===== 临时音质（v2.4.2 #141）=====
+  //
+  // 从**播放页**切音质只作用于当前这一首，不写偏好、不影响下一首；
+  // 只有设置页才写偏好（saveXxxQuality）。之前 switchXxxQuality 直接落
+  // preference，用户在播放页试听一档就把默认音质改掉了——这就是
+  // 「播放页调音质污染默认偏好」。
+  //
+  // [_tempSong] 记录临时音质归属的曲目：换歌（play() 收到别的 song）
+  // 时清空，同一首重取（切音质后的 _reResolve）则保留。
+  Song? _tempSong;
+  Quality? _tempQuality;
+  NeteaseQuality? _tempNeteaseQuality;
+  KuwoQuality? _tempKuwoQuality;
+
+  /// 取流真正使用的 QQ 音质（临时覆盖优先于偏好）。
+  Quality get effectiveQuality => _tempQuality ?? currentQuality;
+
+  /// 取流真正使用的网易云音质。
+  NeteaseQuality get effectiveNeteaseQuality =>
+      _tempNeteaseQuality ?? currentNeteaseQuality;
+
+  /// 取流真正使用的酷我音质。
+  KuwoQuality get effectiveKuwoQuality =>
+      _tempKuwoQuality ?? currentKuwoQuality;
+
+  void _clearTempQuality() {
+    _tempSong = null;
+    _tempQuality = null;
+    _tempNeteaseQuality = null;
+    _tempKuwoQuality = null;
+  }
+
   /// 当前曲目实际生效的 QQ 音质（可能与请求音质不同：服务端降级或本地自动降级）。
   Quality? _actualQqQuality;
 
@@ -316,6 +348,16 @@ class PlayerController {
     // 调用方都是先赋 _currentSong 再进 play()，那样恒真、永不重置。
     _ac4Budget = _maxAc4Retries;
     _lastAc4Retry = null;
+    // 换了别的曲目 → 播放页临时音质作废（只影响同一首，见 _tempSong 注释）。
+    // 注意：不能拿 _currentSong 比较——调用方都是先赋 _currentSong 再进
+    // play()，那样恒真、永不清空。
+    //
+    // 注意用的是「不等于归属曲目就清」而不是「归属为空才保留」：
+    // _tempSong 为 null（切音质时还没有当前曲目）时，临时档同样不该
+    // 带到下一首。
+    if (!identical(_tempSong, song)) {
+      _clearTempQuality();
+    }
     _currentSong = song;
     _songStream.add(song);
     await _playUrlInternal(url);
@@ -489,7 +531,7 @@ class PlayerController {
     // 酷我（v2.4.0）：音质降级链在 [KuwoApi.playUrlWithFallback] 内部处理，
     // 这里只需要带当前选中的酷我音质即可。
     if (song.isKuwo) {
-      var q = currentKuwoQuality;
+      var q = effectiveKuwoQuality;
       if (skipCurrent) {
         q = _actualKuwoQuality ?? q;
         // 沿规则表往下找第一档可解码的（跳过刚放不出的那档）
@@ -507,7 +549,7 @@ class PlayerController {
         }
         q = next;
       }
-      final r = await _fetch(song, currentQuality, currentNeteaseQuality,
+      final r = await _fetch(song, effectiveQuality, effectiveNeteaseQuality,
           kuwo: q);
       if (r.isNotEmpty) {
         _applyActual(r);
@@ -521,10 +563,10 @@ class PlayerController {
     // AC-4 兜底重取时以「实际生效档」为起点；正常取流以偏好为起点
     // （避免某首歌的服务端降级黏到下首歌）。
     final startQq =
-        skipCurrent ? (_actualQqQuality ?? currentQuality) : currentQuality;
+        skipCurrent ? (_actualQqQuality ?? effectiveQuality) : effectiveQuality;
     final startNe = skipCurrent
-        ? (_actualNeQuality ?? currentNeteaseQuality)
-        : currentNeteaseQuality;
+        ? (_actualNeQuality ?? effectiveNeteaseQuality)
+        : effectiveNeteaseQuality;
 
     final chain = song.isNetease
         ? MusicApi.neteaseDowngradeChain(startNe)
@@ -593,21 +635,30 @@ class PlayerController {
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
   }
 
-  /// 切换 QQ 音质并重新取流（保留播放位置）。
+  // ===== 播放页切音质（v2.4.2 #141：只作用于当前曲目，不写偏好）=====
+  //
+  // 与 [saveDefaultQuality] / [saveNeteaseQuality] / [saveKuwoQuality] 的
+  // 区别：那三个是设置页入口，落 preference；这三个只设临时覆盖，
+  // 换歌即失效。
+
+  /// 播放页切换 QQ 音质并重新取流（保留播放位置）。
   Future<void> switchQuality(Quality q) async {
-    saveDefaultQuality(q);
+    _tempSong = _currentSong;
+    _tempQuality = q;
     await _reResolve(q.label);
   }
 
-  /// 切换网易云音质并重新取流（保留播放位置）。
+  /// 播放页切换网易云音质并重新取流（保留播放位置）。
   Future<void> switchNeteaseQuality(NeteaseQuality q) async {
-    saveNeteaseQuality(q);
+    _tempSong = _currentSong;
+    _tempNeteaseQuality = q;
     await _reResolve(q.label);
   }
 
-  /// 切换酷我音质并重新取流（保留播放位置，v2.4.0）。
+  /// 播放页切换酷我音质并重新取流（保留播放位置，v2.4.0）。
   Future<void> switchKuwoQuality(KuwoQuality q) async {
-    saveKuwoQuality(q);
+    _tempSong = _currentSong;
+    _tempKuwoQuality = q;
     await _reResolve(q.label);
   }
 
@@ -720,19 +771,27 @@ class PlayerController {
     }
   }
 
+  /// 设置页保存 QQ 默认音质偏好。
+  ///
+  /// 同时清掉播放页的临时覆盖——否则用户在设置页改了默认，当前这首
+  /// 仍按旧临时档走，看起来「改了没生效」。
   void saveDefaultQuality(Quality quality) {
     currentQuality = quality;
+    _tempQuality = null;
     KvStore.instance.setString(_defaultQualityKey, quality.code);
   }
 
+  /// 设置页保存网易云默认音质偏好。
   void saveNeteaseQuality(NeteaseQuality quality) {
     currentNeteaseQuality = quality;
+    _tempNeteaseQuality = null;
     KvStore.instance.setString(_neteaseQualityKey, quality.level);
   }
 
-  /// 保存酷我音质偏好（v2.4.0）。
+  /// 设置页保存酷我默认音质偏好（v2.4.0，v2.4.2 起设置页可选）。
   void saveKuwoQuality(KuwoQuality quality) {
     currentKuwoQuality = quality;
+    _tempKuwoQuality = null;
     KvStore.instance.setString(_kuwoQualityKey, quality.id);
   }
 }
