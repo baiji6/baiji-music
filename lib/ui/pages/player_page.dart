@@ -574,8 +574,8 @@ class _PlayerPageState extends State<PlayerPage> {
             const Spacer(),
             if (song != null) _SourceChip(song: song),
             const SizedBox(width: 4),
-            // 评论（QQ / 网易云 / 酷我）：未登录可看；QQ/网易云登录后可发，
-            // 酷我评论接口不开放发表，仅支持浏览；本地歌曲无评论
+            // 评论（QQ / 网易云 / 酷我）：未登录可看；登录后可发/回复/点赞
+            // （酷我走 App 私有 ar 协议，v2.4.2 真机验证）；本地歌曲无评论
             MiuixIconButton(
               onPressed: () {
                 final s = song;

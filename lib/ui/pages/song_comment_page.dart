@@ -11,6 +11,7 @@ import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../network/netease_comment_api.dart';
 import '../../network/qq_comment_api.dart';
+import '../../network/kuwo/kuwo_auth.dart';
 import '../../network/kuwo/kuwo_comment_api.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
@@ -53,14 +54,19 @@ class _SongCommentPageState extends State<SongCommentPage> {
   /// QQ 最新评分页页码（从 0 起，首页已拉过）。
   int _qqPage = 0;
 
-  /// 酷我最新评论页码（从 1 起，首页已拉过）。
+  /// 酷我最新评论页码（offset 式，首页已拉过；每页 [_kuwoPageSize] 条）。
   int _kuwoPage = 1;
+
+  /// 酷我富读每页条数（App 私有主列表，start/count offset 分页）。
+  static const int _kuwoPageSize = 20;
 
   bool get _isLocal => widget.song.source == Source.local;
 
-  /// 酷我评论是只读的：服务端的发表/点赞/回复接口未对第三方开放
-  /// （沙箱内穷举验证过，见 kuwo_comment_api.dart 文件头）。
-  bool get _readOnly => widget.song.isKuwo;
+  /// 酷我评论：未登录只读（登录后才能发表/回复/点赞）。
+  ///
+  /// v2.4.2 起酷我写接口已打通（App 私有 `f=ar` 协议，真机验证，
+  /// 见 kuwo_comment_api.dart 文件头），不再「仅支持浏览」。
+  bool get _readOnly => widget.song.isKuwo && !KuwoAuth.isLoggedIn;
 
   bool get _loggedIn =>
       AppServices.instance.isLoggedIn(widget.song.source);
@@ -84,15 +90,22 @@ class _SongCommentPageState extends State<SongCommentPage> {
     super.initState();
     _load();
     _scroll.addListener(_onScroll);
+    // 登录态变化（登录页返回 / 会话续期失败）时刷新只读判定
+    KuwoAuth.addListener(_onAuthChanged);
   }
 
   @override
   void dispose() {
+    KuwoAuth.removeListener(_onAuthChanged);
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _inputController.dispose();
     _inputFocus.dispose();
     super.dispose();
+  }
+
+  void _onAuthChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onScroll() {
@@ -131,20 +144,38 @@ class _SongCommentPageState extends State<SongCommentPage> {
         if (rid.isEmpty) {
           throw Exception('该酷我歌曲缺少 rid，无法加载评论');
         }
-        // 最热 + 最新各拉一页（评论接口免登录）
-        final results = await Future.wait([
-          KuwoCommentApi.getHotComments(rid),
-          KuwoCommentApi.getLatestComments(rid),
-        ]);
-        if (!mounted) return;
         _kuwoPage = 1;
+        CommentPage hotPage;
+        CommentPage latestPage;
+        try {
+          // 优先 App 富读（内嵌楼中楼 + 回复数，倾听同款；免登录）
+          final results = await Future.wait([
+            KuwoCommentApi.getFeed(rid, hot: true, count: _kuwoPageSize),
+            KuwoCommentApi.getFeed(rid, count: _kuwoPageSize),
+          ]);
+          hotPage = results[0];
+          latestPage = results[1];
+        } catch (_) {
+          // 回退 Web 公开读（v2.4.1 老路径）
+          final results = await Future.wait([
+            KuwoCommentApi.getHotComments(rid),
+            KuwoCommentApi.getLatestComments(rid),
+          ]);
+          hotPage = CommentPage(
+            hot: results[0].latest,
+            total: results[0].total,
+            hasMore: results[0].hasMore,
+          );
+          latestPage = results[1];
+        }
+        if (!mounted) return;
         setState(() {
           _data = CommentPage(
-            hot: results[0].latest,
-            latest: results[1].latest,
-            // 总数以最新评为准（total 是当前桶的条数）
-            total: results[1].total > 0 ? results[1].total : results[0].total,
-            hasMore: results[1].hasMore || results[0].hasMore,
+            hot: hotPage.hot,
+            latest: latestPage.latest,
+            // 总数以最新桶为准（comments_counts 是歌曲评论总数）
+            total: latestPage.total > 0 ? latestPage.total : hotPage.total,
+            hasMore: latestPage.hasMore || hotPage.hasMore,
           );
           _loading = false;
         });
@@ -198,17 +229,21 @@ class _SongCommentPageState extends State<SongCommentPage> {
           _neOffset += 15;
         });
       } else if (song.isKuwo) {
-        final page = await KuwoCommentApi.getLatestComments(
+        final page = await KuwoCommentApi.getFeed(
           song.mid,
-          page: _kuwoPage + 1,
+          start: _kuwoPage * _kuwoPageSize,
+          count: _kuwoPageSize,
         );
         if (!mounted) return;
+        // 空页止损：酷我富读过的是 offset，服务端总数偶尔偏大，
+        // 拉到空页就停，否则会一直转圈刷重复请求。
+        final gained = page.latest.length;
         setState(() {
           _data = CommentPage(
             hot: _data.hot,
             latest: [..._data.latest, ...page.latest],
             total: page.total > 0 ? page.total : _data.total,
-            hasMore: page.hasMore,
+            hasMore: page.hasMore && gained > 0,
           );
           _kuwoPage += 1;
         });
@@ -236,10 +271,6 @@ class _SongCommentPageState extends State<SongCommentPage> {
   // ================= 交互 =================
 
   Future<void> _onLike(Comment c) async {
-    if (_readOnly) {
-      showAppSnack('酷我评论暂不支持点赞');
-      return;
-    }
     if (!_loggedIn) {
       showAppSnack('登录后可点赞');
       return;
@@ -255,6 +286,12 @@ class _SongCommentPageState extends State<SongCommentPage> {
         await NeteaseCommentApi.likeComment(
             song.songId.toString(), c.id,
             like: !c.liked);
+      } else if (song.isKuwo) {
+        await KuwoCommentWriteApi.likeComment(
+          rid: song.mid,
+          commentId: c.id,
+          like: !c.liked,
+        );
       } else {
         await QqCommentApi.praiseComment(c.id, like: !c.liked);
       }
@@ -267,10 +304,6 @@ class _SongCommentPageState extends State<SongCommentPage> {
   }
 
   void _onReply(Comment c) {
-    if (_readOnly) {
-      showAppSnack('酷我评论暂不支持回复');
-      return;
-    }
     if (!_loggedIn) {
       showAppSnack('登录后可回复');
       return;
@@ -280,9 +313,9 @@ class _SongCommentPageState extends State<SongCommentPage> {
   }
 
   Future<void> _send() async {
-    if (_readOnly) return;
     final content = _inputController.text.trim();
     if (content.isEmpty || _sending) return;
+    final reply = _replyTo;
     setState(() => _sending = true);
     try {
       final song = widget.song;
@@ -290,24 +323,63 @@ class _SongCommentPageState extends State<SongCommentPage> {
         await NeteaseCommentApi.addComment(
           song.songId.toString(),
           content,
-          replyTo: _replyTo?.id,
+          replyTo: reply?.id,
+        );
+      } else if (song.isKuwo) {
+        await KuwoCommentWriteApi.postComment(
+          rid: song.mid,
+          content: content,
+          // 酷我楼中楼：一级回复时 reply 与 pcid 同为父评论 id
+          replyId: reply?.id,
+          parentId: reply?.id,
         );
       } else {
         await QqCommentApi.addComment(
           _qqBizId,
           content,
-          replyTo: _replyTo?.id,
+          replyTo: reply?.id,
         );
       }
       _inputController.clear();
       setState(() => _replyTo = null);
       _inputFocus.unfocus();
-      // 重新拉取，保证排序 / 计数一致（比本地插一条更接近服务端形态）
-      await _load();
+      if (song.isKuwo && reply != null) {
+        // 酷我回复不进主列表：拉父评论的楼中楼挂上去，给即时反馈
+        await _refreshReplies(reply);
+      } else {
+        // 重新拉取，保证排序 / 计数一致（比本地插一条更接近服务端形态）
+        await _load();
+      }
     } catch (e) {
       showAppSnack('$e');
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// 重拉某条酷我评论的楼中楼并挂到它的 replies 上（回复后即时反馈）。
+  Future<void> _refreshReplies(Comment parent) async {
+    try {
+      final children = await KuwoCommentWriteApi.getChildComments(
+        rid: widget.song.mid,
+        parentId: parent.id,
+      );
+      if (!mounted) return;
+      _replaceComment(parent, Comment(
+        id: parent.id,
+        nickname: parent.nickname,
+        avatarUrl: parent.avatarUrl,
+        content: parent.content,
+        timeMs: parent.timeMs,
+        likeCount: parent.likeCount,
+        liked: parent.liked,
+        replyCount:
+            children.length > parent.replyCount ? children.length : parent.replyCount,
+        isHot: parent.isHot,
+        replies: children,
+      ));
+    } catch (e) {
+      showAppSnack('$e');
     }
   }
 
@@ -490,6 +562,11 @@ class _SongCommentPageState extends State<SongCommentPage> {
         comment: c,
         liking: _likingIds.contains(c.id),
         readOnly: _readOnly,
+        fallbackNickname: widget.song.isKuwo
+            ? '酷我音乐用户'
+            : widget.song.isNetease
+                ? '网易云音乐用户'
+                : 'QQ音乐用户',
         onLike: () => _onLike(c),
         onReply: () => _onReply(c),
       );
@@ -556,21 +633,6 @@ class _SongCommentPageState extends State<SongCommentPage> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text('本地歌曲暂无评论',
-                        style: TextStyle(
-                            fontSize: 12.5,
-                            color: AppColors.textSecondary)),
-                  ),
-                ],
-              )
-            else if (_readOnly)
-              // 酷我的发表/点赞接口未对第三方开放，只读浏览
-              Row(
-                children: [
-                  Icon(Icons.visibility_outlined,
-                      size: 15, color: AppColors.textTertiary),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text('酷我评论仅支持浏览',
                         style: TextStyle(
                             fontSize: 12.5,
                             color: AppColors.textSecondary)),
@@ -660,6 +722,7 @@ class _CommentItem extends StatelessWidget {
     required this.comment,
     required this.liking,
     required this.readOnly,
+    required this.fallbackNickname,
     required this.onLike,
     required this.onReply,
   });
@@ -667,8 +730,11 @@ class _CommentItem extends StatelessWidget {
   final Comment comment;
   final bool liking;
 
-  /// 只读（酷我）：隐藏「回复」入口，点赞不可点。
+  /// 只读（酷我未登录）：隐藏「回复」入口，点赞不可点。
   final bool readOnly;
+
+  /// 昵称为空时的平台占位（酷我 / 网易云 / QQ）。
+  final String fallbackNickname;
   final VoidCallback onLike;
   final VoidCallback onReply;
 
@@ -690,7 +756,7 @@ class _CommentItem extends StatelessWidget {
                     Flexible(
                       child: Text(
                         comment.nickname.isEmpty
-                            ? (readOnly ? '酷我音乐用户' : '网易云音乐用户')
+                            ? fallbackNickname
                             : comment.nickname,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
