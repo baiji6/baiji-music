@@ -103,4 +103,22 @@ void main() {
           'https://x/1.jpg');
     });
   });
+
+  test('酷我：id / name / img / uname / listencnt / total', () {
+    final j = <String, dynamic>{
+      'img': 'http://img1.kwcdn.kuwo.cn/star/userpl2015/83/85/x.jpg',
+      'uname': 'Boom',
+      'total': '24',
+      'listencnt': '506688',
+      'id': '2399331172',
+      'name': '经典｜用粤语歌唤起年少的记忆',
+    };
+    final p = HotPlaylist.fromKuwo(j);
+    expect(p.id, '2399331172');
+    expect(p.name, '经典｜用粤语歌唤起年少的记忆');
+    expect(p.creator, 'Boom');
+    expect(p.playCount, '506688');
+    expect(p.trackCount, 24);
+    expect(p.cover.startsWith('https://'), isTrue);
+  });
 }

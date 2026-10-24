@@ -76,6 +76,10 @@ void main() {
         ),
       ),
     );
+    // 排空首屏拉取（发现页推荐歌单 / 搜索页热搜榜）失败重试的
+    // Future.delayed 定时器：不推假时钟的话，测试结束时会报
+    // 「Timer is still pending」（#143 起发现页也会发首屏请求）。
+    await tester.pump(const Duration(seconds: 3));
   }
 
   testWidgets('根域结构下 shell 能渲染并 settle（不卡死）', (tester) async {

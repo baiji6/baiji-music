@@ -144,6 +144,18 @@ class HotPlaylist {
     );
   }
 
+  /// 酷我歌单：`id` / `name` / `img` / `uname` / `listencnt` / `total`
+  /// （与 QQ、网易云的字段名又不一样，之前统一按 cover/creator 解析，
+  /// 结果封面和创建者全是空）。
+  factory HotPlaylist.fromKuwo(Map<String, dynamic> j) => HotPlaylist(
+        id: (j['id'] ?? '').toString(),
+        name: (j['name'] ?? '').toString(),
+        cover: _httpsCover((j['img'] ?? '').toString()),
+        creator: (j['uname'] ?? '').toString(),
+        playCount: (j['listencnt'] ?? j['favorcnt'])?.toString(),
+        trackCount: int.tryParse((j['total'] ?? '').toString()),
+      );
+
   factory HotPlaylist.fromJson(Map<String, dynamic> j) => HotPlaylist(
         id: (j['id'] ?? j['dissid'] ?? '').toString(),
         name: (j['name'] ?? j['dissname'] ?? '').toString(),
@@ -301,7 +313,7 @@ class KuwoHot {
     final data = await getJsonWithRetry(url, headers: headers);
     final list = (data['data']?['data'] ?? const []) as List<dynamic>;
     return list
-        .map((e) => HotPlaylist.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map((e) => HotPlaylist.fromKuwo(Map<String, dynamic>.from(e as Map)))
         .where((e) => e.id.isNotEmpty)
         .toList();
   }

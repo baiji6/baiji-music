@@ -3,10 +3,13 @@ import 'package:flutter_miuix/miuix.dart';
 
 import '../../data/history_store.dart';
 import '../../models/models.dart';
+import '../../network/hot_search_api.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
+import '../widgets/platform_picker.dart';
+import 'playlist_detail_page.dart';
 
 /// 发现页：欢迎 Header + 快捷入口 + 最近播放（接本地历史）。
 class DiscoverHome extends StatefulWidget {
@@ -17,18 +20,70 @@ class DiscoverHome extends StatefulWidget {
 }
 
 class _DiscoverHomeState extends State<DiscoverHome> {
-  static const _playlists = <(String, String, IconData)>[];
-
   static const _quickActions = <(String, IconData, Color)>[];
 
   /// 下拉刷新的转圈状态（提升给 MiuixPullToRefresh）。
   bool _refreshing = false;
+
+  // ===== 推荐歌单（#143，仿倾听：真实数据 + 三平台切换）=====
+  //
+  // 之前这两块是写死的空列表，页面上什么都出不来；现在按当前平台拉
+  // 「热门歌单」，点卡片进歌单详情（可整单播放）。
+  String _plSource = Source.qq;
+  List<HotPlaylist> _hotPlaylists = const [];
+  bool _plLoading = false;
+  String? _plError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPlaylists();
+  }
+
+  Future<void> _loadPlaylists() async {
+    setState(() {
+      _plLoading = true;
+      _plError = null;
+    });
+    try {
+      final list = await hotPlaylistsOf(_plSource, limit: 12);
+      if (!mounted) return;
+      setState(() {
+        _hotPlaylists = list;
+        _plLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _plLoading = false;
+        _plError = '推荐歌单加载失败';
+      });
+    }
+  }
+
+  void _switchPlSource(String source) {
+    if (source == _plSource) return;
+    setState(() => _plSource = source);
+    _loadPlaylists();
+  }
+
+  void _openPlaylist(HotPlaylist p) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => PlaylistDetailPage(
+        source: _plSource,
+        id: p.id,
+        name: p.name,
+        cover: p.cover,
+      ),
+    ));
+  }
 
   List<Song> get _recent => HistoryStore.playHistory();
 
   Future<void> _refresh() async {
     setState(() => _refreshing = true);
     await Future.delayed(const Duration(milliseconds: 450));
+    await _loadPlaylists();
     if (!mounted) return;
     setState(() => _refreshing = false);
   }
@@ -125,62 +180,53 @@ class _DiscoverHomeState extends State<DiscoverHome> {
               ),
               const SizedBox(height: 28),
 
-              // 推荐歌单（占位入口）
+              // 推荐歌单（#143：真实数据 + 三平台切换）
               SectionHeader(
                 title: '推荐歌单',
-                subtitle: '为您精选',
-                trailing: Icon(Icons.arrow_forward_ios_rounded,
-                    size: 16, color: AppColors.textTertiary),
+                subtitle: '${PlatformPicker.infoOf(_plSource).label}精选',
+                trailing: _PlatformChips(
+                  current: _plSource,
+                  onChanged: _switchPlSource,
+                ),
               ),
               SizedBox(
                 height: 210,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  physics: const BouncingScrollPhysics(),
-                  itemCount: _playlists.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 14),
-                  itemBuilder: (context, i) {
-                    final p = _playlists[i];
-                    return GlassCard(
-                      width: 150,
-                      padding: const EdgeInsets.all(12),
-                      glowColor: AppColors.violet,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          GradientCover(
-                            size: 126,
-                            icon: p.$3,
-                            gradient: [
-                              AppColors.accentGradient[i % 2],
-                              AppColors.playGradient[i % 2 == 0 ? 0 : 1],
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            p.$1,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
+                child: _plLoading && _hotPlaylists.isEmpty
+                    ? ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: 3,
+                        separatorBuilder: (_, _) => const SizedBox(width: 14),
+                        itemBuilder: (_, _) =>
+                            const GlassSkeleton(width: 150, height: 190),
+                      )
+                    : _hotPlaylists.isEmpty
+                        ? GlassCard(
+                            width: 260,
+                            padding: const EdgeInsets.all(18),
+                            child: Center(
+                              child: Text(
+                                _plError ?? '暂无推荐歌单',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textTertiary),
+                              ),
                             ),
+                          )
+                        : ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            physics: const BouncingScrollPhysics(),
+                            itemCount: _hotPlaylists.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(width: 14),
+                            itemBuilder: (context, i) {
+                              final p = _hotPlaylists[i];
+                              return _HotPlaylistCard(
+                                playlist: p,
+                                onTap: () => _openPlaylist(p),
+                              );
+                            },
                           ),
-                          const SizedBox(height: 3),
-                          Text(
-                            p.$2,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: AppColors.textTertiary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
               ),
               const SizedBox(height: 28),
 
@@ -332,6 +378,107 @@ class _QuickAction extends StatelessWidget {
               fontWeight: FontWeight.w600,
               color: AppColors.textSecondary,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+/// 推荐歌单的平台切换（#143）：三个小标签，仿倾听的分区切换条。
+///
+/// 与搜索页的 [PlatformPicker]（下拉）区分：这里是内联标签，点一下就切，
+/// 不必展开菜单。
+class _PlatformChips extends StatelessWidget {
+  const _PlatformChips({required this.current, required this.onChanged});
+
+  final String current;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final p in PlatformPicker.platforms) ...[
+          if (p.id != PlatformPicker.platforms.first.id)
+            const SizedBox(width: 6),
+          MiuixPressable(
+            onPressed: () => onChanged(p.id),
+            borderRadius: BorderRadius.circular(8),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: p.id == current
+                    ? p.color.withValues(alpha: 0.16)
+                    : Colors.transparent,
+                border: Border.all(
+                  color: p.id == current
+                      ? p.color.withValues(alpha: 0.55)
+                      : AppColors.strokeGlass,
+                ),
+              ),
+              child: Text(
+                _chipLabel(p.id),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight:
+                      p.id == current ? FontWeight.w700 : FontWeight.w500,
+                  color:
+                      p.id == current ? p.color : AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// 平台短标签（分区标题右侧空间有限，用两字简称）。
+String _chipLabel(String id) {
+  if (id == Source.netease) return '网易';
+  if (id == Source.kuwo) return '酷我';
+  return 'QQ';
+}
+
+/// 一张推荐歌单卡片：封面 + 名称 + 创建者 / 播放量。
+class _HotPlaylistCard extends StatelessWidget {
+  const _HotPlaylistCard({required this.playlist, required this.onTap});
+
+  final HotPlaylist playlist;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final sub = <String>[
+      if (playlist.creator.isNotEmpty) playlist.creator,
+      if (playlist.playCount != null) '${playlist.playCount} 次播放',
+    ].join(' · ');
+    return GlassCard(
+      width: 150,
+      padding: const EdgeInsets.all(12),
+      glowColor: AppColors.violet,
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          FrostedImage(url: playlist.cover, size: 126, radius: 14),
+          const SizedBox(height: 10),
+          Text(
+            playlist.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            sub.isEmpty ? '歌单' : sub,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
           ),
         ],
       ),

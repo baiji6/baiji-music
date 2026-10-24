@@ -156,6 +156,9 @@ void main() {
       );
       expect(e, isNull, reason: 'AppShell build 抛异常: $e');
       expect(find.text('白姬音乐'), findsOneWidget);
+      // #143 起发现页 initState 会拉推荐歌单：失败重试的 Future.delayed
+      // 也要在测试结束前排空，否则报 Timer is still pending。
+      await drainLogFlushTimer(tester);
     });
 
     testWidgets('设置页', (tester) async {
