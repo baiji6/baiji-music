@@ -5,7 +5,13 @@ import '../../core/app_version.dart';
 import '../../data/history_store.dart';
 import '../../data/local_music_store.dart';
 import '../../data/playlist_store.dart';
+import '../../models/models.dart';
+import '../../network/hot_search_api.dart';
 import '../../network/music_api.dart';
+import '../../network/playlist_api.dart';
+import '../widgets/platform_chips.dart';
+import '../widgets/platform_picker.dart';
+import 'playlist_detail_page.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 import 'about_page.dart';
@@ -43,6 +49,39 @@ class _LibraryHomeState extends State<LibraryHome> {
   /// 退出登录确认对话框显隐。
   bool _showLogoutDialog = false;
 
+  // ===== 我的歌单（#145，仿倾听：登录后按账号拉取，三平台切换）=====
+  String _mySource = Source.qq;
+  List<HotPlaylist> _myPlaylists = const [];
+  bool _myLoading = false;
+
+  /// 拉当前平台的「我的歌单」。未登录返回空 → UI 显示登录引导。
+  Future<void> _loadMyPlaylists() async {
+    setState(() => _myLoading = true);
+    final list = await PlaylistApi.myPlaylists(_mySource);
+    if (!mounted) return;
+    setState(() {
+      _myPlaylists = list;
+      _myLoading = false;
+    });
+  }
+
+  void _switchMySource(String source) {
+    if (source == _mySource) return;
+    setState(() => _mySource = source);
+    _loadMyPlaylists();
+  }
+
+  void _openMyPlaylist(HotPlaylist p) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => PlaylistDetailPage(
+        source: _mySource,
+        id: p.id,
+        name: p.name,
+        cover: p.cover,
+      ),
+    ));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -53,6 +92,7 @@ class _LibraryHomeState extends State<LibraryHome> {
     setState(() => _refreshing = true);
     // 让刷新指示器至少走完一轮动画，避免"拉一下就闪没"
     await Future.delayed(const Duration(milliseconds: 450));
+    await _loadMyPlaylists();
     if (!mounted) return;
     setState(() {
       _refreshing = false;
@@ -212,6 +252,76 @@ class _LibraryHomeState extends State<LibraryHome> {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 24),
+
+                  // 我的歌单（#145：登录后按账号拉取，三平台切换，仿倾听）
+                  SectionHeader(
+                    title: '我的歌单',
+                    subtitle: PlatformPicker.infoOf(_mySource).label,
+                    trailing: PlatformChips(
+                      current: _mySource,
+                      onChanged: _switchMySource,
+                      compact: true,
+                    ),
+                  ),
+                  Builder(builder: (context) {
+                    final loggedIn = MusicApi.isLoggedIn(_mySource);
+                    if (_myLoading) {
+                      return const GlassCard(
+                        padding: EdgeInsets.symmetric(vertical: 28),
+                        child: Center(
+                          child: MiuixCircularProgressIndicator(size: 22),
+                        ),
+                      );
+                    }
+                    if (!loggedIn) {
+                      return GlassCard(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: Text(
+                            '登录${PlatformPicker.infoOf(_mySource).label}'
+                            '后可同步你的歌单',
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: AppColors.textTertiary),
+                          ),
+                        ),
+                      );
+                    }
+                    if (_myPlaylists.isEmpty) {
+                      return GlassCard(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: Text(
+                            '这个账号暂无歌单，下拉刷新试试',
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: AppColors.textTertiary),
+                          ),
+                        ),
+                      );
+                    }
+                    return GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      padding: EdgeInsets.zero,
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        childAspectRatio: 0.72,
+                      ),
+                      itemCount: _myPlaylists.length,
+                      itemBuilder: (context, i) {
+                        final p = _myPlaylists[i];
+                        return _MyPlaylistCard(
+                          playlist: p,
+                          onTap: () => _openMyPlaylist(p),
+                        );
+                      },
+                    );
+                  }),
                   const SizedBox(height: 24),
 
                   // 本地数据入口
@@ -529,6 +639,48 @@ class _SettingTile extends StatelessWidget {
             Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 「我的歌单」卡片：封面 + 名字 + 曲目数（仿倾听三列网格）。
+class _MyPlaylistCard extends StatelessWidget {
+  const _MyPlaylistCard({required this.playlist, required this.onTap});
+
+  final HotPlaylist playlist;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: const EdgeInsets.all(8),
+      radius: 14,
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: SizedBox(
+              width: double.infinity,
+              child: FrostedImage(url: playlist.cover, size: 0, radius: 10),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            playlist.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            playlist.trackCount != null ? '${playlist.trackCount} 首' : '歌单',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 10, color: AppColors.textTertiary),
+          ),
+        ],
       ),
     );
   }

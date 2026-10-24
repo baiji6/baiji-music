@@ -6,7 +6,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/app_logger.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../network/netease_comment_api.dart';
@@ -350,6 +352,17 @@ class _SongCommentPageState extends State<SongCommentPage> {
         // 重新拉取，保证排序 / 计数一致（比本地插一条更接近服务端形态）
         await _load();
       }
+    } on QqCommentVerifyRequired catch (e) {
+      // QQ 音乐风控（code=10009）：评论已被记录但需完成一次安全验证。
+      // 自动跳外部浏览器验证，回来后重发即可（v2.4.2）。
+      AppLog.w('SongCommentPage', 'QQ 评论触发安全验证，跳转浏览器');
+      showAppSnack('需要安全验证，已打开浏览器；完成后请重新点发送');
+      unawaited(launchUrl(
+        Uri.parse(e.verifyUrl),
+        mode: LaunchMode.externalApplication,
+      ));
+      if (!mounted) return;
+      setState(() => _sending = false);
     } catch (e) {
       showAppSnack('$e');
     } finally {

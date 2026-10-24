@@ -32,6 +32,24 @@ abstract final class QqCommentBizType {
   static const int mv = 4;
 }
 
+/// 发表评论被风控拦截（code=10009）。
+///
+/// 2026-10-25 真机 cookie 实测：这个码**不是普通失败**——响应里带着
+/// `AddedCmId`（评论已记录，但不展示，State=0）、`HitType/HitReason`
+/// 和一个 `VerifyUrl`（安全验证页）。完成一次验证后账号解除拦截，
+/// 后续发表恢复正常。
+///
+/// 所以 UI 层拿到它应该弹「去验证」，而不是当失败报错。
+class QqCommentVerifyRequired implements Exception {
+  QqCommentVerifyRequired(this.verifyUrl);
+
+  /// 安全验证页（滑块/验证码），用外部浏览器打开。
+  final String verifyUrl;
+
+  @override
+  String toString() => '评论需要安全验证';
+}
+
 /// QQ 音乐评论。
 abstract final class QqCommentApi {
   // ================= 纯函数（可单测，样本为真实抓包） =================
@@ -237,7 +255,24 @@ abstract final class QqCommentApi {
         ? _toInt(req0['code'])
         : _toInt(biz['code']);
     if (code != 0) {
-      throw Exception('发表评论失败（$code）');
+      // 10009 = 风控拦截：评论已记录但需过一次安全验证才展示。
+      // 响应里的 VerifyUrl 是验证页，交给 UI 引导用户去验证。
+      if (code == 10009) {
+        // VerifyUrl 在 data 层（_bizLayer 对 AddComment 形状不会剥层，
+        // 这里两层都取，稳）。
+        final dataLayer =
+            biz['data'] is Map<String, dynamic> ? biz['data'] as Map<String, dynamic> : const <String, dynamic>{};
+        final verifyUrl =
+            ((biz['VerifyUrl'] ?? dataLayer['VerifyUrl']) ?? '').toString();
+        if (verifyUrl.isNotEmpty) {
+          AppLog.w('QqCommentApi',
+              '发表被风控拦截（HitType=${biz['HitType']} HitReason=${biz['HitReason']}），需完成安全验证');
+          throw QqCommentVerifyRequired(verifyUrl);
+        }
+      }
+      final serverMsg = (biz['Msg'] ?? '').toString();
+      throw Exception(
+          '发表评论失败（$code${serverMsg.isEmpty ? '' : '：$serverMsg'}）');
     }
     AppLog.i('QqCommentApi', '发表评论成功 song=$songId');
   }

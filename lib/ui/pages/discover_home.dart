@@ -8,6 +8,7 @@ import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
+import '../widgets/platform_chips.dart';
 import '../widgets/platform_picker.dart';
 import 'playlist_detail_page.dart';
 
@@ -184,9 +185,10 @@ class _DiscoverHomeState extends State<DiscoverHome> {
               SectionHeader(
                 title: '推荐歌单',
                 subtitle: '${PlatformPicker.infoOf(_plSource).label}精选',
-                trailing: _PlatformChips(
+                trailing: PlatformChips(
                   current: _plSource,
                   onChanged: _switchPlSource,
+                  compact: true,
                 ),
               ),
               SizedBox(
@@ -384,66 +386,6 @@ class _QuickAction extends StatelessWidget {
     );
   }
 }
-/// 推荐歌单的平台切换（#143）：三个小标签，仿倾听的分区切换条。
-///
-/// 与搜索页的 [PlatformPicker]（下拉）区分：这里是内联标签，点一下就切，
-/// 不必展开菜单。
-class _PlatformChips extends StatelessWidget {
-  const _PlatformChips({required this.current, required this.onChanged});
-
-  final String current;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final p in PlatformPicker.platforms) ...[
-          if (p.id != PlatformPicker.platforms.first.id)
-            const SizedBox(width: 6),
-          MiuixPressable(
-            onPressed: () => onChanged(p.id),
-            borderRadius: BorderRadius.circular(8),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                color: p.id == current
-                    ? p.color.withValues(alpha: 0.16)
-                    : Colors.transparent,
-                border: Border.all(
-                  color: p.id == current
-                      ? p.color.withValues(alpha: 0.55)
-                      : AppColors.strokeGlass,
-                ),
-              ),
-              child: Text(
-                _chipLabel(p.id),
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight:
-                      p.id == current ? FontWeight.w700 : FontWeight.w500,
-                  color:
-                      p.id == current ? p.color : AppColors.textSecondary,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-/// 平台短标签（分区标题右侧空间有限，用两字简称）。
-String _chipLabel(String id) {
-  if (id == Source.netease) return '网易';
-  if (id == Source.kuwo) return '酷我';
-  return 'QQ';
-}
-
 /// 一张推荐歌单卡片：封面 + 名称 + 创建者 / 播放量。
 class _HotPlaylistCard extends StatelessWidget {
   const _HotPlaylistCard({required this.playlist, required this.onTap});
