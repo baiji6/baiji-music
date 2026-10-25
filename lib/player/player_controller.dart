@@ -177,6 +177,10 @@ class PlayerController {
   /// 第 3 次还拿到 AC-4 就认命报错，不死循环。
   static const int _maxAc4Retries = 2;
 
+  /// 运行时探测结果：本机播放内核有 ac4 解码器（v2.4.2-pre4）。
+  /// true 时 tracks 监听的 AC-4 兜底防护短路（正常播放不当异常）。
+  bool _supportsAc4 = false;
+
   int _ac4Budget = _maxAc4Retries;
 
   /// 上次 AC-4 降级的时间（tracks 与 error 两条信号可能同时触发，做去重）。
@@ -225,6 +229,7 @@ class PlayerController {
         if (supportsAc4) {
           Quality.undecodableCodes.clear();
           KuwoLink.undecodableIds.clear();
+          _supportsAc4 = true;
         }
       } catch (e) {
         AppLog.w('PlayerController', 'AC-4 解码器探测失败（保持保守降级）: $e');
@@ -296,6 +301,9 @@ class PlayerController {
         // AC-4 第二信号：部分容器/旧 mpv 下轨道信息不全，直接报解码器
         // 缺失，消息里会带 codec 名。命中则走降级，不再向 UI 抛错误。
         if (error.toLowerCase().contains('ac4')) {
+          // 注意：这里不做 _supportsAc4 短路——探测成功后若仍出现
+          // 含 ac4 的 error（如特定 profile 初始化失败），是真故障信号，
+          // 降级兜底仍然正确。
           _onAc4Detected('error: $error');
           return;
         }
@@ -311,6 +319,13 @@ class PlayerController {
     // track-list 里依然带着 codec=ac4，比等 error 更早也更可靠。
     _player!.stream.tracks.listen((tracks) {
       try {
+        if (_supportsAc4) {
+          // v2.4.2-pre4：运行时探测已确认本机有 ac4 解码器——track 里
+          // 出现 codec=ac4 是**正常播放**，不是异常信号，直接放行。
+          // （pre4 首版实测：探测成功后这里仍把正常 AC-4 播放降级，
+          // 表现为「杜比全景声每次都被自动切换到别的音质」。）
+          return;
+        }
         final hasAc4 = tracks.audio
             .any((t) => (t.codec ?? '').toLowerCase().contains('ac4'));
         if (hasAc4) _onAc4Detected('tracks codec=ac4');
