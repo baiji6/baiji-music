@@ -7,6 +7,10 @@ import 'qq_music_client.dart';
 
 /// QQ 音乐歌曲接口：详情、播放链接、歌词（对应原生 `network/SongApi.kt`）。
 class SongApi {
+  /// 最近一次 GetVkey 批量响应的 ekey 表（songmid -> ekey）。
+  /// 仅服务 getPlayUrlEx 的单条查询；并发调用下以最后一次为准。
+  final Map<String, String> _lastEkeys = {};
+
   SongApi(this.client);
 
   final QQMusicClient client;
@@ -36,6 +40,24 @@ class SongApi {
     if (mid.isEmpty) return '';
     final urls = await getPlayUrls([mid], quality);
     return urls[mid] ?? '';
+  }
+
+  /// 取播放链接并带回 ekey（v2.4.2）。
+  ///
+  /// QQ 对 FLAC/母带/杜比等高档位返回的是 **QMCv2 加密流**，密钥随
+  /// GetVkey 响应的 `midurlinfo[].ekey` 下发（TEA 包装，见
+  /// `decrypt/qmc_ekey.dart`）。直链本身无内嵌 footer，key 只能带外传，
+  /// 与酷我 API 同型——播放层据此走本地流式解密中继。
+  Future<({String url, String ekey})> getPlayUrlEx(
+      String mid, Quality quality) async {
+    final empty = (url: '', ekey: '');
+    if (mid.isEmpty) return empty;
+    final urls = await getPlayUrls([mid], quality);
+    final url = urls[mid] ?? '';
+    if (url.isEmpty) return empty;
+    // getPlayUrls 走的是批量路径，这里需要单条 ekey —— 直接再发一次
+    // 太浪费；改为读取批量调用里缓存的 ekey 表。
+    return (url: url, ekey: _lastEkeys[mid] ?? '');
   }
 
   /// 批量获取播放链接。
@@ -97,6 +119,7 @@ class SongApi {
                 ? sip[_randomIndex(sip.length)] + purl
                 : songUrlFallbackDomain + purl);
         result[m] = url;
+        _lastEkeys[m] = (item['ekey'] ?? '').toString();
         final actual = Quality.fromUrlPrefix(url);
         AppLog.d(
             'SongApi',

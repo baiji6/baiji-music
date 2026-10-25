@@ -36,6 +36,23 @@ import '../../core/app_logger.dart';
 import '../../player/playback_cache.dart';
 import 'qmc_cipher.dart';
 
+/// 适配「原地解密（void 返回）」实现到中继的 [QmcCipher] 接口。
+///
+/// decrypt/qmc.dart 的 QmcV2Cipher（um-react 移植）是 void 原地语义，
+/// 而中继接口返回 Uint8List——QQ 直链接入（v2.4.2）用这个适配器桥接，
+/// 两种实现共用同一条流式通道。
+class InPlaceQmcCipher implements QmcCipher {
+  InPlaceQmcCipher(this._decrypt);
+
+  final void Function(Uint8List data, int offset) _decrypt;
+
+  @override
+  Uint8List decrypt(Uint8List data, int offset) {
+    _decrypt(data, offset);
+    return data;
+  }
+}
+
 /// 浏览器 UA —— 酷我 CDN 对 UA 有一定要求，带上更稳。
 const String _cdnUa =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -49,8 +66,15 @@ class QmcTrack {
   final http.Client _client;
   int? _size;
 
-  QmcTrack({required this.url, required this.ekey, http.Client? client})
-      : cipher = QmcKeyDerivation.createCipherFromEkey(ekey),
+  /// [cipher] 允许调用方注入已构建好的解密器 —— 各家 ekey 封装不同
+  /// （酷我 DES 包装 / QQ TEA 包装），网络层拿到谁的就地解好传进来，
+  /// 中继只认「按文件偏移解密」这个统一接口（v2.4.2 QQ 直链接入）。
+  QmcTrack({
+    required this.url,
+    required this.ekey,
+    QmcCipher? cipher,
+    http.Client? client,
+  })  : cipher = cipher ?? QmcKeyDerivation.createCipherFromEkey(ekey),
         _client = client ?? http.Client();
 
   /// 探测远端文件大小（用 Range: bytes=0-0 读 Content-Range）。
@@ -138,16 +162,21 @@ class _BlockModeUnavailable implements Exception {
 class _RelaySession {
   final String url;
   final String ekey;
+
+  /// 外部注入的解密器（QQ 直链场景）；为空时按酷我 ekey 现场派生。
   QmcCipher? _cipher;
 
   /// 已探测到的远端总大小（0 = 还没探测）。
   int size = 0;
 
-  _RelaySession(this.url, this.ekey);
+  _RelaySession(this.url, this.ekey, [QmcCipher? injectedCipher])
+      : _injected = injectedCipher;
+
+  final QmcCipher? _injected;
 
   /// 解密器惰性创建（ekey 非法时才在请求期报错，而不是启动就崩）。
   QmcCipher get cipher =>
-      _cipher ??= QmcKeyDerivation.createCipherFromEkey(ekey);
+      _cipher ??= _injected ?? QmcKeyDerivation.createCipherFromEkey(ekey);
 
   /// 播放缓存的寻址键。优先用 ekey——它对应唯一一份密文，
   /// 换一次直链（CDN 地址里的时效参数会变）也能命中上次的缓存。
@@ -176,9 +205,10 @@ class QmcRelayServer {
   /// 供播放器使用的地址。
   ///
   /// [trackUrl] / [ekey] 只在服务端内存里保存，URL 上只带一个短 token。
-  String urlFor(String trackUrl, String ekey, {String ext = 'flac'}) {
+  String urlFor(String trackUrl, String ekey,
+      {String ext = 'flac', QmcCipher? cipher}) {
     final token = 's${_seq++}';
-    _sessions[token] = _RelaySession(trackUrl, ekey);
+    _sessions[token] = _RelaySession(trackUrl, ekey, cipher);
     final p = _server?.port ?? port;
     return 'http://127.0.0.1:$p/stream.$ext?t=$token';
   }

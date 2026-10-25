@@ -3,6 +3,8 @@
 //   2. 平台标识 getter（Song.sourceShort / sourceFull）不再把酷我显示成 QQ
 //   3. 播放缓存（PlaybackCache）块读写 / 清理
 //   4. 解密中继的「块路径」：Range 正确性、缓存命中不再回源、seek 任意偏移
+//   5. QQ 直链接入（v2.4.2）：注入式 cipher（TEA ekey 在网络层解好），
+//      中继对两种 ekey 封装（酷我 DES / QQ TEA）走同一条通道
 //
 // 中继测试用**真实 ekey + 真实 QMC v2 密钥派生链**（与 kuwo_qmc_test.dart 同源），
 // 再按 256 KiB 块放大到 2 个整块以上，覆盖跨块 Range 请求。
@@ -14,6 +16,7 @@ import 'package:baiji_music/core/cache_manager.dart';
 import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_link.dart';
+import 'package:baiji_music/decrypt/qmc.dart';
 import 'package:baiji_music/network/kuwo/qmc_cipher.dart';
 import 'package:baiji_music/network/kuwo/qmc_stream.dart';
 import 'package:baiji_music/player/playback_cache.dart';
@@ -401,6 +404,75 @@ void main() {
       await _fetch(relayUrl, start: 0, end: 4095);
       expect(cdn.requestCount, greaterThan(before),
           reason: '清完缓存应当回源');
+    });
+  });
+
+  group('QMC 中继 · QQ 直链（v2.4.2，注入式 cipher）', () {
+    // QQ 的 ekey 是 TEA 包装（decrypt/qmc_ekey.dart 解），网络层解好后
+    // 把「按文件偏移原地解密」的 cipher 注入中继——这里用 512 字节随机
+    // raw key 直接构造 QmcV2Cipher（自动落在 RC4 模式，与真实样本一致），
+    // 不依赖任何真实 ekey / 网络。
+    late _FakeCdn cdn;
+    late String relayUrl;
+    late Uint8List plain;
+    late QmcRelayServer relay;
+
+    setUpAll(() {
+      HttpOverrides.global = null;
+    });
+
+    setUp(() async {
+      await ensureRoot('baiji_relay_qq_test');
+      await resetPlaybackCache();
+
+      final rnd = Random(20260325);
+      final plainLen = PlaybackCache.blockSize + 54321;
+      plain = Uint8List.fromList(
+          List<int>.generate(plainLen, (_) => rnd.nextInt(256)));
+      plain[0] = 0x66; // f
+      plain[1] = 0x4C; // L
+      plain[2] = 0x61; // a
+      plain[3] = 0x43; // C
+
+      // 「加密」：QMC 流密码自反，对明文跑一遍 decrypt 即得密文
+      final rawKey =
+          Uint8List.fromList(List<int>.generate(512, (_) => rnd.nextInt(256)));
+      final cipher = QmcV2Cipher(rawKey);
+      final enc = Uint8List.fromList(plain);
+      cipher.decrypt(enc, 0);
+
+      cdn = _FakeCdn(enc);
+      final cdnPort = await cdn.start();
+
+      relay = QmcRelayServer();
+      await relay.start();
+      relayUrl = relay.urlFor(
+        'http://127.0.0.1:$cdnPort/track.mflac',
+        'qq-tea-wrapped-ekey-not-used-here',
+        ext: 'flac',
+        // 生产路径同款适配：QmcV2Cipher 是 void 原地语义
+        cipher: InPlaceQmcCipher(QmcV2Cipher(rawKey).decrypt),
+      );
+    });
+
+    tearDown(() async {
+      await cdn.stop();
+    });
+
+    test('注入 cipher 后 Range 输出与明文一致', () async {
+      final got = await _fetch(relayUrl, start: 0, end: 1023);
+      expect(got, Uint8List.sublistView(plain, 0, 1024));
+    });
+
+    test('跨 RC4 段的 seek 与明文一致', () async {
+      final s0 = 0x1400 - 100;
+      final got = await _fetch(relayUrl, start: s0, end: s0 + 511);
+      expect(got, Uint8List.sublistView(plain, s0, s0 + 512));
+    });
+
+    test('无 Range 整段输出与明文一致', () async {
+      final got = await _fetch(relayUrl);
+      expect(got, plain);
     });
   });
 }

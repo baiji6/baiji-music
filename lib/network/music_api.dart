@@ -1,6 +1,9 @@
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_api.dart';
+import '../decrypt/qmc.dart';
+import '../decrypt/qmc_ekey.dart';
+import 'kuwo/qmc_stream.dart';
 import 'package:baiji_music/network/kuwo/kuwo_auth.dart';
 import 'package:baiji_music/network/netease/netease_client.dart';
 import 'package:baiji_music/network/qq_music_client.dart';
@@ -41,7 +44,11 @@ class PlayUrlResult {
   /// 覆盖扩展名（网易云响应里的真实 `type`）；为空时按音质枚举推断。
   final String? _extOverride;
 
-  const PlayUrlResult._(this.url, this.qq, this.ne, [this._extOverride, this.kuwo]);
+  /// QMCv2 ekey（QQ 加密档位才有；url 已是本地解密中继地址）。
+  final String ekey;
+
+  const PlayUrlResult._(this.url, this.qq, this.ne,
+      [this._extOverride, this.kuwo, this.ekey = '']);
 
   static const empty = PlayUrlResult._('', null, null);
 
@@ -63,6 +70,16 @@ class PlayUrlResult {
 /// 对应原生 `network/MusicApi.kt`。
 class MusicApi {
   MusicApi._();
+
+  /// QQ 加密直链的流式解密中继（与酷我各一个实例，端口互不干扰）。
+  static QmcRelayServer? _qqRelay;
+  static Future<QmcRelayServer> _ensureQqRelay() async {
+    final r = _qqRelay;
+    if (r != null) return r;
+    final server = QmcRelayServer();
+    await server.start();
+    return _qqRelay = server;
+  }
 
   static bool isLoggedIn(String source) => AppServices.instance.isLoggedIn(source);
 
@@ -164,20 +181,34 @@ class MusicApi {
     // 可用档；服务端还会"请求高档位返回低档位"，回来的若是 AC-4 就
     // 按实际档位再换一次（下载等直连入口没有降级链兜底）。
     var useQq = qqDecodableSubstitute(qqQuality);
-    var url = await AppServices.instance.qq.song.getPlayUrl(song.mid, useQq);
+    var r = await AppServices.instance.qq.song.getPlayUrlEx(song.mid, useQq);
+    var url = r.url;
     if (url.isEmpty) return PlayUrlResult.empty;
+    var ekey = r.ekey;
     var actual = Quality.fromUrlPrefix(url) ?? useQq;
     if (Quality.undecodableCodes.contains(actual.code)) {
       final retry = qqDecodableSubstitute(actual);
       AppLog.w('MusicApi',
           'QQ 请求 ${useQq.code} 实际返回 ${actual.code}（AC-4 本机不可解码），改请求 ${retry.code}');
-      final url2 = await AppServices.instance.qq.song.getPlayUrl(song.mid, retry);
-      if (url2.isNotEmpty) {
-        url = url2;
-        actual = Quality.fromUrlPrefix(url2) ?? retry;
+      final r2 = await AppServices.instance.qq.song.getPlayUrlEx(song.mid, retry);
+      if (r2.url.isNotEmpty) {
+        url = r2.url;
+        ekey = r2.ekey;
+        actual = Quality.fromUrlPrefix(url) ?? retry;
       }
     }
-    return PlayUrlResult._(url, actual, null);
+    // 加密档位（FLAC/母带/杜比等）：直链是 QMCv2 加密流，走本地
+    // 流式解密中继（与酷我同一条通道，ekey 是 TEA 包装需先解）。
+    var playUrl = url;
+    if (ekey.isNotEmpty) {
+      final cipher = InPlaceQmcCipher(QmcV2Cipher(qmcEkeyDecrypt(ekey)).decrypt);
+      final relay = await _ensureQqRelay();
+      playUrl = relay.urlFor(url, ekey,
+          ext: actual.ext.replaceFirst('.', ''), cipher: cipher);
+      AppLog.d('MusicApi',
+          'QQ 加密档位 ${actual.code} 走本地解密中继（ekey ${ekey.length} 字符）');
+    }
+    return PlayUrlResult._(playUrl, actual, null, null, null, ekey);
   }
 
   /// QQ 音质降级链：[from] 起向下最多 6 档，并保证末档兜底到 MP3 128。
