@@ -57,7 +57,8 @@ class KuwoLink {
   /// 命中这里的档位时取流层直接跳过并沿降级链下探（见
   /// [KuwoApi.playUrlWithFallback]），用户无感切换到最近的可用杜比档。
   /// 后续若换成带 AC-4 补丁的自编译 libmpv，把 id 从集合里删掉即可恢复。
-  static const Set<String> undecodableIds = {'dolby_ac4'};
+  /// v2.4.2-pre4：改为可变集合（运行时探测见 PlayerController._ensurePlayer）。
+  static Set<String> undecodableIds = {'dolby_ac4'};
 
   /// 取 br 参数字符串: "{bitrate}k{format}"
   static String brOf(List<dynamic> rule) => '${rule[0]}k${rule[1]}';

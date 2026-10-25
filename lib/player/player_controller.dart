@@ -207,6 +207,30 @@ class PlayerController {
     if (_player != null) return;
     _player = Player();
 
+    // v2.4.2-pre4：运行时探测 AC-4 解码能力。
+    //
+    // v2.4.1 用的官方库里 ffmpeg 没编 ac4 解码器，当时把酷我 dolby_ac4 /
+    // QQ D004 硬编码为「不可解码」做自动降级；v2.4.2 换了自编译库后
+    // AC-4 是可解的，但硬编码集合还在——表现就是「杜比全景声永远放不出
+    // 来（被自动切到别的音质）」。这里启动后查 mpv 的 decoder-list，
+    // 探测到 ac4 就把硬编码集合清掉；探测失败保持保守（继续降级）。
+    unawaited(Future(() async {
+      try {
+        final platform = _player!.platform;
+        final raw = platform is NativePlayer
+            ? await platform.getProperty('decoder-list')
+            : '';
+        final supportsAc4 = raw.contains('"ac4"') || raw.contains("'ac4'");
+        AppLog.i('PlayerController', '运行时探测 AC-4 解码器: $supportsAc4');
+        if (supportsAc4) {
+          Quality.undecodableCodes.clear();
+          KuwoLink.undecodableIds.clear();
+        }
+      } catch (e) {
+        AppLog.w('PlayerController', 'AC-4 解码器探测失败（保持保守降级）: $e');
+      }
+    }));
+
     // v2.2.9-fix2：显式配置变速音频滤镜。
     //
     // libmpv 0.38+ 变速走 scaletempo2 滤镜，其默认 **max-speed=4**——

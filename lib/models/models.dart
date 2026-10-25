@@ -222,7 +222,10 @@ class Quality {
   /// 用户无感切换到最近的可用档。
   ///
   /// 后续若换成带 AC-4 补丁的自编译 libmpv，把 code 从集合里删掉即可恢复。
-  static const Set<String> undecodableCodes = {'D004'};
+  /// v2.4.2-pre4：改为可变集合——PlayerController 启动时会探测 mpv 的
+  /// decoder-list，库里真有 ac4 解码器就 clear（此前硬编码导致换了
+  /// 自编译库后杜比全景声仍被自动降级，永远放不出来）。
+  static Set<String> undecodableCodes = {'D004'};
 
   /// QQ 音乐杜比全景声档位别名（v2.4.2）：官方客户端实际请求的是
   /// D005~D008，与 D001~D004 是**同一批文件**（D001=D005、D002=D006、
