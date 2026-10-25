@@ -18,6 +18,7 @@ import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/hot_search_api.dart'
     show HotPlaylist, getJsonWithRetry;
 import 'package:baiji_music/network/kuwo/kuwo_auth.dart';
+import 'package:baiji_music/network/netease/netease_client.dart';
 import 'package:baiji_music/network/music_api.dart';
 
 /// 一个歌单的详情。
@@ -290,23 +291,53 @@ abstract final class PlaylistApi {
   }
 
   static Future<List<HotPlaylist>> _myNetease() async {
-    final uid = AppServices.instance.netease.userId;
+    // 必须走 NeteaseClient（自动带登录 Cookie）——之前裸请求不带
+    // MUSIC_U，登录用户的歌单要么被当未登录、要么拉到匿名视角的
+    // 公开数据，「我的歌单」页表现为永远空白（v2.4.2-pre2 修复）。
+    final client = AppServices.instance.netease;
+    if (!client.isLoggedIn()) return const [];
+    var uid = client.userId;
+    if (uid == 0) {
+      // 早期 Cookie 登录（粘贴 / 旧版扫码）没落 userId——从账号信息
+      // 接口解析一次并缓存，之后「我的歌单」才能按 uid 查询。
+      uid = await _resolveNeteaseUid(client);
+      if (uid != 0) client.userId = uid;
+    }
     if (uid == 0) return const [];
-    final url = Uri.parse('https://music.163.com/api/user/playlist')
-        .replace(queryParameters: {
-      'uid': '$uid',
-      'limit': '100',
-      'offset': '0',
-    }).toString();
-    final data = await getJsonWithRetry(url, headers: const {
-      'Referer': 'https://music.163.com/',
-      'User-Agent': 'Mozilla/5.0',
-    });
+    final data = await client.postApi(
+      'https://music.163.com/api/user/playlist',
+      {'uid': '$uid', 'limit': '100', 'offset': '0'},
+    );
+    if (data['code'] != 200) {
+      AppLog.w('PlaylistApi', '网易云我的歌单 code=${data['code']}');
+      return const [];
+    }
     final list = (data['playlist'] ?? const []) as List<dynamic>;
     return list
         .map((e) => HotPlaylist.fromNetease(Map<String, dynamic>.from(e as Map)))
         .where((p) => p.id.isNotEmpty)
         .toList();
+  }
+
+  /// 从账号信息接口解析当前登录 uid（无 profile 说明 Cookie 已失效）。
+  static Future<int> _resolveNeteaseUid(NeteaseClient client) async {
+    try {
+      final acct = await client.postApi(
+        'https://music.163.com/api/nuser/account/get',
+        <String, String>{},
+      );
+      final profile = acct['profile'];
+      if (profile is Map<String, dynamic>) {
+        final uid = (profile['userId'] as num?)?.toInt() ?? 0;
+        if (uid != 0) {
+          AppLog.i('PlaylistApi', '网易云 uid 已补齐: $uid');
+        }
+        return uid;
+      }
+    } catch (e) {
+      AppLog.w('PlaylistApi', '网易云 uid 解析失败: $e');
+    }
+    return 0;
   }
 
   static Future<List<HotPlaylist>> _myKuwo() async {

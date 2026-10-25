@@ -58,10 +58,10 @@ task downloadDependencies(type: Exec)  {
 
         // Download all *.jar dependencies & verify their MD5 checksums.
         def filesToDownload = [
-            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v1/default-arm64-v8a.jar", "md5": "6aca7bce3c5deb176ded155866abf420", "destination": file("$buildDir/libs-ac4-v1/default-arm64-v8a.jar")],
-            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v1/default-armeabi-v7a.jar", "md5": "3cb9e4432eacc2f496e6f6b40e165232", "destination": file("$buildDir/libs-ac4-v1/default-armeabi-v7a.jar")],
-            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v1/default-x86_64.jar", "md5": "5d6ed355f69558a909ecefe954a5e60b", "destination": file("$buildDir/libs-ac4-v1/default-x86_64.jar")],
-            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v1/default-x86.jar", "md5": "64f169918e1c2aea4c6b7493de516834", "destination": file("$buildDir/libs-ac4-v1/default-x86.jar")]
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v2/default-arm64-v8a.jar", "md5": "b7eb3fdaf32d33950ec99a1d17437889", "destination": file("$buildDir/libs-ac4-v2/default-arm64-v8a.jar")],
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v2/default-armeabi-v7a.jar", "md5": "64cb3f32ff102420be9ac9a72e667488", "destination": file("$buildDir/libs-ac4-v2/default-armeabi-v7a.jar")],
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v2/default-x86_64.jar", "md5": "87864d1dfebcf4a98da6b7ce7c2015f0", "destination": file("$buildDir/libs-ac4-v2/default-x86_64.jar")],
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v2/default-x86.jar", "md5": "73c36298b9d4755a9f6fd333eb285205", "destination": file("$buildDir/libs-ac4-v2/default-x86.jar")]
         ]
 
         filesToDownload.each { fileInfo ->

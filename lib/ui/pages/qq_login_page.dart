@@ -8,6 +8,7 @@ import '../../core/app_logger.dart';
 import '../../network/login_api.dart';
 import '../../network/music_api.dart';
 import '../../network/qq_mobile_login.dart';
+import 'captcha_verify_page.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
@@ -25,6 +26,14 @@ class _QQLoginPageState extends State<QQLoginPage> {
   final _cookieController = TextEditingController();
   Uint8List? _qrImage;
   bool _busy = false;
+
+  // ================= 手机验证码登录（v2.4.2，仿倾听） =================
+  final _phoneController = TextEditingController();
+  final _codeController = TextEditingController();
+  bool _phoneBusy = false;
+  bool _sending = false;
+  int _countdown = 0;
+  Timer? _countdownTimer;
 
   /// 扫码进度提示（等待扫码 / 已扫描待确认…）。
   String? _qrStatus;
@@ -59,8 +68,80 @@ class _QQLoginPageState extends State<QQLoginPage> {
   void dispose() {
     _canceled = true;
     _cookieController.dispose();
+    _phoneController.dispose();
+    _codeController.dispose();
+    _countdownTimer?.cancel();
     _mobileQrSub?.cancel();
     super.dispose();
+  }
+
+  /// 发送短信验证码（60s 倒计时；需滑块时跳浏览器验证后重试）。
+  Future<void> _sendPhoneCode() async {
+    final phone = _phoneController.text.trim();
+    if (phone.length < 5) {
+      _showSnack('请输入手机号');
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      final r = await AppServices.instance.qq.login.sendPhoneAuthCode(phone);
+      if (!mounted) return;
+      switch (r.event) {
+        case QqPhoneSendEvent.sent:
+          _showSnack('验证码已发送，请查收短信', isError: false);
+          setState(() => _countdown = 60);
+          _countdownTimer?.cancel();
+          _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+            if (!mounted) return t.cancel();
+            setState(() => _countdown = _countdown - 1);
+            if (_countdown <= 0) t.cancel();
+          });
+        case QqPhoneSendEvent.frequency:
+          _showSnack('发送过于频繁，请稍后再试');
+        case QqPhoneSendEvent.captcha:
+          // v2.4.2-pre2：App 内嵌滑块验证（仿倾听），完成后自动重发
+          AppLog.w('QQLoginPage', '发送验证码需滑块验证，打开内嵌验证页');
+          if (!mounted) return;
+          final verified = await openCaptchaVerify(context, r.securityUrl,
+              title: 'QQ 音乐安全验证');
+          if (!mounted) return;
+          if (verified) {
+            // 验证完成后自动重试一次发送
+            await _sendPhoneCode();
+            return;
+          }
+        case QqPhoneSendEvent.error:
+          _showSnack('发送失败${r.message.isEmpty ? '' : '：${r.message}'}');
+      }
+    } catch (e) {
+      if (mounted) _showSnack('发送失败: $e');
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// 验证码登录。
+  Future<void> _loginByPhone() async {
+    final phone = _phoneController.text.trim();
+    final code = _codeController.text.trim();
+    if (phone.length < 5 || code.length < 4) {
+      _showSnack('请输入手机号与短信验证码');
+      return;
+    }
+    setState(() => _phoneBusy = true);
+    try {
+      final cred =
+          await AppServices.instance.qq.login.loginByPhoneCode(phone, code);
+      AppServices.instance.qq.credential = cred;
+      AppLog.i('QQLoginPage', '短信登录成功 uid=${cred.strMusicid}');
+      if (!mounted) return;
+      _showSnack('QQ 短信登录成功', isError: false);
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) _showSnack('$e');
+    } finally {
+      if (mounted) setState(() => _phoneBusy = false);
+    }
   }
 
   Future<void> _loginByCookie() async {
@@ -365,6 +446,64 @@ class _QQLoginPageState extends State<QQLoginPage> {
                   label: 'Cookie 登录',
                   icon: Icons.login_rounded,
                   onPressed: _busy ? null : _loginByCookie,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          // 手机验证码登录（v2.4.2，仿倾听）
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            glowColor: AppColors.violet,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '手机验证码登录',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '输入 QQ 音乐绑定的手机号，接收短信验证码直接登录',
+                  style: TextStyle(fontSize: 12, color: AppColors.textTertiary),
+                ),
+                const SizedBox(height: 12),
+                MiuixTextField(
+                  controller: _phoneController,
+                  label: '手机号',
+                  useLabelAsPlaceholder: true,
+                  singleLine: true,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: MiuixTextField(
+                        controller: _codeController,
+                        label: '短信验证码',
+                        useLabelAsPlaceholder: true,
+                        singleLine: true,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    NeonButton(
+                      label: _countdown > 0 ? '$_countdown s' : '发送验证码',
+                      filled: false,
+                      onPressed: (_sending || _countdown > 0)
+                          ? null
+                          : _sendPhoneCode,
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 12, horizontal: 14),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                NeonButton(
+                  label: '验证码登录',
+                  icon: Icons.sms_outlined,
+                  gradient: const [AppColors.violet, AppColors.cyan],
+                  onPressed: _phoneBusy ? null : _loginByPhone,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
               ],

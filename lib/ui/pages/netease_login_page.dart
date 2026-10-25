@@ -6,6 +6,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/app_logger.dart';
 import '../../network/music_api.dart';
+import '../../network/netease/netease_client.dart';
 import '../../network/netease_qr_login.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
@@ -24,6 +25,14 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
   final _cookieController = TextEditingController();
   bool _busy = false;
 
+  // ================= 手机验证码登录（v2.4.2，仿倾听） =================
+  final _phoneController = TextEditingController();
+  final _codeController = TextEditingController();
+  bool _phoneBusy = false;
+  bool _sending = false;
+  int _countdown = 0;
+  Timer? _countdownTimer;
+
   // ================= 扫码登录（轮询，见 netease_qr_login.dart） =================
 
   /// 二维码内容（`https://music.163.com/login?codekey=…`）。
@@ -36,8 +45,69 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
   @override
   void dispose() {
     _cookieController.dispose();
+    _phoneController.dispose();
+    _codeController.dispose();
+    _countdownTimer?.cancel();
     _qrSub?.cancel();
     super.dispose();
+  }
+
+  /// 发送短信验证码（60s 倒计时）。
+  Future<void> _sendCaptcha() async {
+    final phone = _phoneController.text.trim();
+    if (phone.length < 5) {
+      showAppSnack('请输入手机号');
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      await AppServices.instance.netease.sendCaptcha(phone);
+      if (!mounted) return;
+      showAppSnack('验证码已发送，请查收短信');
+      setState(() => _countdown = 60);
+      _countdownTimer?.cancel();
+      _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (!mounted) return t.cancel();
+        setState(() => _countdown = _countdown - 1);
+        if (_countdown <= 0) t.cancel();
+      });
+    } catch (e) {
+      if (mounted) showAppSnack('$e');
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// 手机号 + 验证码登录。
+  Future<void> _loginByPhone() async {
+    final phone = _phoneController.text.trim();
+    final code = _codeController.text.trim();
+    if (phone.length < 5 || code.length < 4) {
+      showAppSnack('请输入手机号与短信验证码');
+      return;
+    }
+    setState(() => _phoneBusy = true);
+    try {
+      final r = await AppServices.instance.netease
+          .loginByCellphone(phone, code);
+      AppServices.instance.netease.cookie = r.cookie;
+      if (r.userId != 0) AppServices.instance.netease.userId = r.userId;
+      AppLog.i('NeteaseLoginPage',
+          '网易云验证码登录成功 uid=${r.userId} nick=${r.nickname}');
+      // 补齐浏览器会话 Cookie，与扫码/粘贴路径对齐
+      unawaited(AppServices.instance.netease
+          .enrichCookie()
+          .timeout(const Duration(seconds: 3), onTimeout: () async {}));
+      if (!mounted) return;
+      showAppSnack('网易云登录成功');
+      Navigator.pop(context, true);
+    } on NeteaseLoginException catch (e) {
+      if (mounted) showAppSnack(e.message);
+    } catch (e) {
+      if (mounted) showAppSnack('网易云登录失败: $e');
+    } finally {
+      if (mounted) setState(() => _phoneBusy = false);
+    }
   }
 
   Future<void> _login() async {
@@ -216,6 +286,67 @@ class _NeteaseLoginPageState extends State<NeteaseLoginPage> {
                         height: 1.6,
                       ),
                     ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            // 手机验证码登录（v2.4.2，仿倾听）
+            GlassCard(
+              padding: const EdgeInsets.all(16),
+              glowColor: AppColors.violet,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '手机验证码登录',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '输入网易云绑定的手机号，接收短信验证码直接登录',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textTertiary,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  MiuixTextField(
+                    controller: _phoneController,
+                    label: '手机号',
+                    useLabelAsPlaceholder: true,
+                    singleLine: true,
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: MiuixTextField(
+                          controller: _codeController,
+                          label: '短信验证码',
+                          useLabelAsPlaceholder: true,
+                          singleLine: true,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      NeonButton(
+                        label: _countdown > 0 ? '$_countdown s' : '发送验证码',
+                        filled: false,
+                        onPressed: (_sending || _countdown > 0)
+                            ? null
+                            : _sendCaptcha,
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 12, horizontal: 14),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  NeonButton(
+                    label: '验证码登录',
+                    icon: Icons.sms_outlined,
+                    gradient: const [AppColors.violet, AppColors.cyan],
+                    onPressed: _phoneBusy ? null : _loginByPhone,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                 ],
               ),

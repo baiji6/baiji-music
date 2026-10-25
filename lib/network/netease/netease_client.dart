@@ -184,6 +184,129 @@ class NeteaseClient {
     return _postForm(body, url, headers: _weapiHeaders());
   }
 
+  /// [postWeapi] 的全量形态：附返 Set-Cookie。
+  ///
+  /// 手机验证码登录（[loginByCellphone]）的登录态不在 body 里，而在
+  /// 响应的 Set-Cookie（MUSIC_U/__csrf）——[postWeapi] 只解 body 会丢。
+  Future<({Map<String, dynamic> body, List<String> setCookies})>
+      postWeapiFull(
+    String weapiUrl,
+    Map<String, dynamic> payload, {
+    required String csrf,
+  }) async {
+    final encrypted = NeteaseWeapi.encrypt(payload);
+    final body =
+        'params=${Uri.encodeQueryComponent(encrypted.params)}'
+        '&encSecKey=${Uri.encodeQueryComponent(encrypted.encSecKey)}';
+    final url = '$weapiUrl?csrf_token=${Uri.encodeQueryComponent(csrf)}';
+    final resp = await _retry(() => _dio.post(url,
+        data: body,
+        options: Options(
+            headers: _weapiHeaders(), validateStatus: (_) => true)));
+    return (
+      body: _decode(resp, url),
+      setCookies: resp.headers.map['set-cookie'] ?? const <String>[],
+    );
+  }
+
+  /// 从 Set-Cookie 列表拼 Cookie 串（登录接口响应用）。
+  ///
+  /// 与 `NeteaseQrLogin.buildCookieFromSetCookie` 同逻辑——那边在
+  /// netease_qr_login.dart（反向依赖本文件），为避免循环 import 在此
+  /// 保留一份纯函数实现。
+  static String buildCookieFromSetCookie(List<String> setCookies) {
+    final map = <String, String>{};
+    for (final entry in setCookies) {
+      final first = entry.split(';').first.trim();
+      final idx = first.indexOf('=');
+      if (idx <= 0) continue;
+      final name = first.substring(0, idx).trim();
+      final value = first.substring(idx + 1).trim();
+      if (name.isEmpty || value.isEmpty) continue;
+      map[name] = value;
+    }
+    return map.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  }
+
+  /// 当前 Cookie 里的 `__csrf`（weapi 请求必带，登录后由网易云下发）。
+  String get csrfToken {
+    final map = <String, String>{};
+    parseCookie(cookie, map);
+    return map['__csrf'] ?? '';
+  }
+
+  // ================= 手机验证码登录（v2.4.2，仿倾听） =================
+  //
+  // 网页版通道（weapi）：发码 POST /weapi/captcha/sent，登录 POST
+  // /weapi/login/cellphone。登录态在响应 Set-Cookie（MUSIC_U），账号
+  // 信息在 body 的 account/profile——与扫码登录同型。
+
+  /// 发送登录短信验证码。
+  ///
+  /// 成功 code=200；失败（限频/手机号问题等）code!=200 且带 message，
+  /// 直接抛给 UI 展示。
+  Future<void> sendCaptcha(String phone, {String countrycode = '86'}) async {
+    final resp = await postWeapi(
+      'https://music.163.com/weapi/captcha/sent',
+      {'phone': phone, 'ctcode': int.tryParse(countrycode) ?? 86},
+      csrf: csrfToken,
+    );
+    final code = resp['code'];
+    if (code != 200) {
+      final msg = (resp['message'] ?? resp['msg'] ?? '').toString();
+      throw Exception('验证码发送失败（$code）${msg.isEmpty ? '' : '：$msg'}');
+    }
+  }
+
+  /// 手机号 + 短信验证码登录。
+  ///
+  /// 成功返回拼好的 Cookie（调用方整体替换 [cookie]）与账号信息；
+  /// 业务失败（验证码错误等）抛 [NeteaseLoginException]。
+  Future<NeteasePhoneLogin> loginByCellphone(
+    String phone,
+    String captcha, {
+    String countrycode = '86',
+  }) async {
+    final r = await postWeapiFull(
+      'https://music.163.com/weapi/login/cellphone',
+      {
+        'phone': phone,
+        'countrycode': int.tryParse(countrycode) ?? 86,
+        'captcha': captcha,
+        'rememberLogin': 'true',
+      },
+      csrf: csrfToken,
+    );
+    final code = r.body['code'];
+    if (code != 200) {
+      final msg = (r.body['message'] ?? r.body['msg'] ?? '').toString();
+      throw NeteaseLoginException(
+        code is int ? code : -1,
+        msg.isEmpty ? '登录失败（$code）' : msg,
+      );
+    }
+    final setCookie =
+        NeteaseClient.buildCookieFromSetCookie(r.setCookies);
+    if (!setCookie.contains('MUSIC_U=')) {
+      throw const NeteaseLoginException(-1, '登录成功但未取到登录态 Cookie');
+    }
+    final account = r.body['account'];
+    final profile = r.body['profile'];
+    final uid = profile is Map<String, dynamic>
+        ? ((profile['userId'] ?? account is Map<String, dynamic>
+                ? (account as Map<String, dynamic>)['id']
+                : null) as num?)
+            ?.toInt()
+        : null;
+    return NeteasePhoneLogin(
+      cookie: setCookie,
+      userId: uid ?? 0,
+      nickname: profile is Map<String, dynamic>
+          ? (profile['nickname'] ?? '').toString()
+          : '',
+    );
+  }
+
   /// weapi（网页端通道）专用请求头：**对齐真浏览器指纹**。
   ///
   /// weapi 是网页端通道，之前通用头里的三样东西都是「非浏览器」标记，
@@ -282,4 +405,32 @@ class NeteaseClient {
       throw Exception('网易云响应解析失败: ${text.clip(200)}');
     }
   }
+}
+
+/// 手机验证码登录结果（v2.4.2）。
+class NeteasePhoneLogin {
+  const NeteasePhoneLogin({
+    required this.cookie,
+    required this.userId,
+    required this.nickname,
+  });
+
+  /// 从登录响应 Set-Cookie 拼出的登录态 Cookie（整体替换用，含 MUSIC_U）。
+  final String cookie;
+
+  /// 账号 uid（写 KvStore 的 `netease_user_id`，「我的歌单」依赖它）。
+  final int userId;
+
+  final String nickname;
+}
+
+/// 验证码登录业务失败（验证码错误 / 限频等）。
+class NeteaseLoginException implements Exception {
+  const NeteaseLoginException(this.code, this.message);
+
+  final int code;
+  final String message;
+
+  @override
+  String toString() => message;
 }

@@ -270,6 +270,109 @@ class LoginApi {
   ///
   /// 解析本身在 [parseCookieCredentials] 这个纯函数里完成，
   /// 这里只负责把解析出来的凭证拿去做一次服务端校验。
+  // ================= 手机验证码登录（v2.4.2，仿倾听） =================
+  //
+  // QQ 音乐自家的短信登录通道：music.login.LoginServer（Android 端）。
+  // 沙箱实测（2026-10）：comm 需带 `tmeLoginMethod: 3`，Login 时再带
+  // `tmeLoginType: 0`；假号返回 104400（phoneNo is invalid，不发短信），
+  // 证明通道可用。错误码语义参考 L-1124/QQMusicApi 同模块。
+
+  /// 发送短信验证码。
+  ///
+  /// | code  | 含义                                   |
+  /// |-------|----------------------------------------|
+  /// | 0     | 已下发                                  |
+  /// | 20276 | 需要滑块验证，[QqPhoneSend.securityUrl] 是验证页 |
+  /// | 100001| 操作过于频繁                             |
+  Future<QqPhoneSend> sendPhoneAuthCode(String phone,
+      {String areaCode = '86'}) async {
+    final req0 = await client.executeRaw(
+      BizRequest(
+        module: 'music.login.LoginServer',
+        method: 'SendPhoneAuthCode',
+        param: {
+          'tmeAppid': 'qqmusic',
+          'areaCode': areaCode,
+          'phoneNo': phone,
+        },
+        allowErrorCodes: true,
+      ),
+      extraComm: const {'tmeLoginMethod': 3},
+    );
+    return QqPhoneSend.parse(req0);
+  }
+
+  /// 短信验证码登录（music.login.LoginServer.Login）。
+  ///
+  /// 成功返回凭证（与扫码登录同构，直接可写 `client.credential`）；
+  /// 业务失败抛 [Exception]，文案取服务端 errTip（如 20271 验证码错误）。
+  Future<Credential> loginByPhoneCode(String phone, String code) async {
+    final req0 = await client.executeRaw(
+      BizRequest(
+        module: 'music.login.LoginServer',
+        method: 'Login',
+        param: {'phoneNo': phone, 'code': code, 'loginMode': 1},
+        allowErrorCodes: true,
+      ),
+      extraComm: const {'tmeLoginMethod': 3, 'tmeLoginType': 0},
+    );
+    final rc = req0['code'] as int? ?? -1;
+    final data = req0['data'] is Map<String, dynamic>
+        ? req0['data'] as Map<String, dynamic>
+        : <String, dynamic>{};
+    if (rc != 0) {
+      throw Exception('短信登录失败（$rc）${phoneLoginErrorTip(rc, data)}');
+    }
+    final cred = Credential(
+      musicid: (data['musicid'] as num?)?.toInt() ?? 0,
+      musickey: (data['musickey'] ?? '').toString(),
+      strMusicid: (data['strMusicid'] ?? '').toString(),
+      encryptUin: (data['encryptUin'] ?? '').toString(),
+      musickeyCreateTime:
+          (data['musickeyCreateTime'] as num?)?.toInt() ?? 0,
+      keyExpiresIn: (data['keyExpiresIn'] as num?)?.toInt() ?? 0,
+      refreshKey: (data['refreshKey'] ?? '').toString(),
+      loginType: (data['loginType'] as num?)?.toInt() ?? 2,
+      firstLogin: (data['firstLogin'] as num?)?.toInt() ?? 0,
+    );
+    if (!cred.isLoggedIn()) {
+      throw Exception('短信登录失败：响应缺少登录态（musicid/musickey）');
+    }
+    AppLog.i('BaiJiLogin', '短信验证码登录成功 uid=${cred.strMusicid}');
+    return cred;
+  }
+
+  /// 登录失败的业务文案（[loginByPhoneCode] 用，纯函数可单测）。
+  static String phoneLoginErrorTip(int code, Map<String, dynamic> data) {
+    // errTip 可能为空串（非 null），?? 不会回退——取第一个非空值
+    String firstNonEmpty(List<dynamic> xs) {
+      for (final x in xs) {
+        final v = x?.toString() ?? '';
+        if (v.isNotEmpty) return v;
+      }
+      return '';
+    }
+
+    final tip = firstNonEmpty([data['errTip'], data['errMsg']]);
+    const known = {
+      1000: '登录已过期，请重新获取验证码',
+      104400: '登录参数无效或已过期，请重新获取验证码',
+      104401: '登录已过期，请重新获取验证码',
+      20261: '登录参数错误',
+      20271: '验证码错误',
+      20272: '账号绑定异常',
+      20274: '账号绑定缺失',
+      20277: '账号受限，暂无法登录',
+      20278: '账号受限，暂无法登录',
+      20279: '登录设备数量已达上限',
+      20450: '账号已被封禁',
+      104604: '操作过于频繁，请稍后再试',
+    };
+    final knownTip = known[code];
+    if (knownTip != null) return '：$knownTip';
+    return tip.isEmpty ? '' : '：$tip';
+  }
+
   Future<Credential> loginByCookie(String cookie) async {
     final cred = parseCookieCredentials(cookie);
 
@@ -444,3 +547,65 @@ class LoginApi {
     return cur;
   }
 }
+
+/// 发送短信验证码的结果（v2.4.2）。
+class QqPhoneSend {
+  const QqPhoneSend._(this.event,
+      {this.securityUrl = '', this.code = 0, this.message = ''});
+
+  /// 已下发。
+  factory QqPhoneSend.sent() => const QqPhoneSend._(QqPhoneSendEvent.sent);
+
+  /// 需要滑块验证（[securityUrl] 为验证页，跳浏览器/WebView 完成后重试）。
+  factory QqPhoneSend.captcha(String securityUrl) =>
+      QqPhoneSend._(QqPhoneSendEvent.captcha, securityUrl: securityUrl);
+
+  /// 操作过于频繁。
+  factory QqPhoneSend.frequency() =>
+      const QqPhoneSend._(QqPhoneSendEvent.frequency, code: 100001);
+
+  /// 其它失败。
+  factory QqPhoneSend.error(int code, String message) =>
+      QqPhoneSend._(QqPhoneSendEvent.error, code: code, message: message);
+
+  /// 从 SendPhoneAuthCode 的 req_0 响应解析（纯函数，可单测）。
+  ///
+  /// 实测形状：`{code: 104400, data: {errMsg: "...", securityURL: "", errTip: ""}}`；
+  /// 20276（需滑块）时 `data.securityURL` 为验证页地址。
+  factory QqPhoneSend.parse(Map<String, dynamic> req0) {
+    final code = req0['code'] as int? ?? -1;
+    final data = req0['data'] is Map<String, dynamic>
+        ? req0['data'] as Map<String, dynamic>
+        : <String, dynamic>{};
+    switch (code) {
+      case 0:
+        return QqPhoneSend.sent();
+      case 20276:
+        return QqPhoneSend.captcha((data['securityURL'] ?? '').toString());
+      case 100001:
+        return QqPhoneSend.frequency();
+      default:
+        // errTip 可能为空串（非 null），?? 不会回退——取第一个非空值
+        String firstNonEmpty(List<dynamic> xs) {
+          for (final x in xs) {
+            final v = x?.toString() ?? '';
+            if (v.isNotEmpty) return v;
+          }
+          return '';
+        }
+
+        return QqPhoneSend.error(
+            code, firstNonEmpty([data['errTip'], data['errMsg'], req0['msg']]));
+    }
+  }
+
+  final QqPhoneSendEvent event;
+
+  /// event == captcha 时非空：滑块验证页地址。
+  final String securityUrl;
+  final int code;
+  final String message;
+}
+
+/// 发送短信验证码的事件。
+enum QqPhoneSendEvent { sent, captcha, frequency, error }

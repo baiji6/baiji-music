@@ -6,7 +6,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'captcha_verify_page.dart';
 
 import '../../core/app_logger.dart';
 import '../../models/models.dart';
@@ -354,15 +354,19 @@ class _SongCommentPageState extends State<SongCommentPage> {
       }
     } on QqCommentVerifyRequired catch (e) {
       // QQ 音乐风控（code=10009）：评论已被记录但需完成一次安全验证。
-      // 自动跳外部浏览器验证，回来后重发即可（v2.4.2）。
-      AppLog.w('SongCommentPage', 'QQ 评论触发安全验证，跳转浏览器');
-      showAppSnack('需要安全验证，已打开浏览器；完成后请重新点发送');
-      unawaited(launchUrl(
-        Uri.parse(e.verifyUrl),
-        mode: LaunchMode.externalApplication,
-      ));
+      // v2.4.2-pre2 起 App 内嵌验证页完成（仿倾听），完成后自动重发。
+      AppLog.w('SongCommentPage', 'QQ 评论触发安全验证，打开内嵌验证页');
       if (!mounted) return;
-      setState(() => _sending = false);
+      final done = await openCaptchaVerify(context, e.verifyUrl,
+          title: 'QQ 音乐安全验证');
+      if (!mounted) return;
+      if (!done) {
+        setState(() => _sending = false);
+        return;
+      }
+      AppLog.i('SongCommentPage', '验证完成，自动重发评论');
+      await _send(); // 重发（_send 自己管 _sending 的收尾）
+      return;
     } catch (e) {
       showAppSnack('$e');
     } finally {
