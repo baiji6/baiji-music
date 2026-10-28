@@ -34,7 +34,7 @@ const MAX_EVENTS = 20000;     // 事件最多保留条数
  */
 interface Store
 {
-    public function addEvents(string $guid, string $os, string $app, array $events): int;
+    public function addEvents(string $guid, string $os, string $app, string $ip, array $events): int;
 
     public function stats(): array;
 
@@ -71,7 +71,7 @@ class SqliteStore implements Store
         $this->pdo->exec(
             'CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                guid TEXT NOT NULL, os TEXT, app TEXT, type TEXT,
+                guid TEXT NOT NULL, os TEXT, app TEXT, type TEXT, ip TEXT,
                 event_at INTEGER, payload TEXT)'
         );
         $this->pdo->exec(
@@ -79,33 +79,41 @@ class SqliteStore implements Store
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 guid TEXT NOT NULL, os TEXT, platform TEXT, song_id TEXT,
                 song_name TEXT, singer TEXT, album TEXT, quality TEXT,
-                play_url TEXT, played_at INTEGER)'
+                play_url TEXT, ip TEXT, played_at INTEGER)'
         );
         $this->pdo->exec(
             'CREATE TABLE IF NOT EXISTS searches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 guid TEXT NOT NULL, os TEXT, platform TEXT, keyword TEXT,
-                result_count INTEGER, searched_at INTEGER)'
+                result_count INTEGER, ip TEXT, searched_at INTEGER)'
         );
+        // 旧库迁移：为已存在的表补充 ip 列（列已存在时会报错，忽略即可）
+        foreach (['events', 'plays', 'searches'] as $t) {
+            try {
+                $this->pdo->exec("ALTER TABLE $t ADD COLUMN ip TEXT NOT NULL DEFAULT ''");
+            } catch (Throwable $ex) {
+                // ignore: duplicate column
+            }
+        }
         $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_plays_at ON plays(played_at)');
         $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_search_at ON searches(searched_at)');
         $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_events_at ON events(event_at)');
     }
 
-    public function addEvents(string $guid, string $os, string $app, array $events): int
+    public function addEvents(string $guid, string $os, string $app, string $ip, array $events): int
     {
         $n = 0;
         $this->pdo->beginTransaction();
         try {
             $insEvent = $this->pdo->prepare(
-                'INSERT INTO events (guid, os, app, type, event_at, payload) VALUES (?,?,?,?,?,?)'
+                'INSERT INTO events (guid, os, app, type, ip, event_at, payload) VALUES (?,?,?,?,?,?,?)'
             );
             $insPlay = $this->pdo->prepare(
-                'INSERT INTO plays (guid, os, platform, song_id, song_name, singer, album, quality, play_url, played_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?)'
+                'INSERT INTO plays (guid, os, platform, song_id, song_name, singer, album, quality, play_url, ip, played_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?)'
             );
             $insSearch = $this->pdo->prepare(
-                'INSERT INTO searches (guid, os, platform, keyword, result_count, searched_at) VALUES (?,?,?,?,?,?)'
+                'INSERT INTO searches (guid, os, platform, keyword, result_count, ip, searched_at) VALUES (?,?,?,?,?,?,?)'
             );
             foreach ($events as $ev) {
                 if (!is_array($ev)) {
@@ -114,7 +122,7 @@ class SqliteStore implements Store
                 $type = trim_str($ev['type'] ?? 'unknown', 32);
                 $time = (int)($ev['time'] ?? now_ms());
                 $insEvent->execute([
-                    $guid, $os, $app, $type, $time,
+                    $guid, $os, $app, $type, $ip, $time,
                     json_encode($ev, JSON_UNESCAPED_UNICODE),
                 ]);
                 $n++;
@@ -128,6 +136,7 @@ class SqliteStore implements Store
                         trim_str($ev['album'] ?? '', 200),
                         trim_str($ev['quality'] ?? '', 64),
                         trim_str($ev['play_url'] ?? '', 1024),
+                        $ip,
                         $time,
                     ]);
                 } elseif ($type === 'search') {
@@ -136,6 +145,7 @@ class SqliteStore implements Store
                         trim_str($ev['platform'] ?? '', 32),
                         trim_str($ev['keyword'] ?? '', 200),
                         (int)($ev['result_count'] ?? 0),
+                        $ip,
                         $time,
                     ]);
                 }
@@ -198,15 +208,17 @@ class SqliteStore implements Store
 
     public function users(int $limit): array
     {
+        // SQLite 特性：仅有 MAX 聚合时，裸列（os/ip）取自 MAX 那一行
         $st = $this->pdo->query(
-            'SELECT guid, os, COUNT(*) AS c, MAX(event_at) AS last_at
+            'SELECT guid, os, ip, COUNT(*) AS c, MAX(event_at) AS last_at
              FROM events GROUP BY guid ORDER BY last_at DESC LIMIT ' . (int)$limit
         );
         $out = [];
         foreach ($st ? $st->fetchAll(PDO::FETCH_ASSOC) : [] as $r) {
             $out[] = [
                 'guid' => (string)$r['guid'], 'os' => (string)($r['os'] ?: '-'),
-                'events' => (int)$r['c'], 'last_at' => (int)$r['last_at'],
+                'ip' => (string)($r['ip'] ?: ''), 'events' => (int)$r['c'],
+                'last_at' => (int)$r['last_at'],
             ];
         }
         return $out;
@@ -258,7 +270,7 @@ class JsonStore implements Store
         );
     }
 
-    public function addEvents(string $guid, string $os, string $app, array $events): int
+    public function addEvents(string $guid, string $os, string $app, string $ip, array $events): int
     {
         $n = 0;
         foreach ($events as $ev) {
@@ -269,7 +281,7 @@ class JsonStore implements Store
             $time = (int)($ev['time'] ?? now_ms());
             $this->data['events'][] = [
                 'guid' => $guid, 'os' => $os, 'app' => $app,
-                'type' => $type, 'event_at' => $time,
+                'type' => $type, 'ip' => $ip, 'event_at' => $time,
                 'payload' => json_encode($ev, JSON_UNESCAPED_UNICODE),
             ];
             $n++;
@@ -283,6 +295,7 @@ class JsonStore implements Store
                     'album' => trim_str($ev['album'] ?? '', 200),
                     'quality' => trim_str($ev['quality'] ?? '', 64),
                     'play_url' => trim_str($ev['play_url'] ?? '', 1024),
+                    'ip' => $ip,
                     'played_at' => $time,
                 ];
             } elseif ($type === 'search') {
@@ -291,6 +304,7 @@ class JsonStore implements Store
                     'platform' => trim_str($ev['platform'] ?? '', 32),
                     'keyword' => trim_str($ev['keyword'] ?? '', 200),
                     'result_count' => (int)($ev['result_count'] ?? 0),
+                    'ip' => $ip,
                     'searched_at' => $time,
                 ];
             }
@@ -380,10 +394,17 @@ class JsonStore implements Store
         foreach ($this->data['events'] as $e) {
             $g = $e['guid'];
             if (!isset($agg[$g])) {
-                $agg[$g] = ['guid' => $g, 'os' => $e['os'] ?: '-', 'events' => 0, 'last_at' => 0];
+                $agg[$g] = ['guid' => $g, 'os' => $e['os'] ?: '-', 'ip' => (string)($e['ip'] ?? ''),
+                            'events' => 0, 'last_at' => 0];
             }
             $agg[$g]['events']++;
-            $agg[$g]['last_at'] = max($agg[$g]['last_at'], (int)$e['event_at']);
+            // 记录最近一次事件对应的 IP（旧数据可能没有 ip 键，保留原值）
+            if ((int)$e['event_at'] >= $agg[$g]['last_at']) {
+                $agg[$g]['last_at'] = (int)$e['event_at'];
+                if (!empty($e['ip'])) {
+                    $agg[$g]['ip'] = (string)$e['ip'];
+                }
+            }
         }
         uasort($agg, function ($a, $b) {
             return $b['last_at'] <=> $a['last_at'];
@@ -464,6 +485,32 @@ function now_ms(): int
     return (int)round(microtime(true) * 1000);
 }
 
+/**
+ * 服务端侧的客户端 IP（兜底用）。
+ * 优先级：客户端上报 ip 字段 > X-Forwarded-For > X-Real-IP > REMOTE_ADDR。
+ * 经 Nginx/CDN 反代时 REMOTE_ADDR 是代理 IP，需先看转发头。
+ */
+function client_ip(): string
+{
+    $headers = [
+        'HTTP_X_FORWARDED_FOR',
+        'HTTP_X_REAL_IP',
+        'HTTP_CF_CONNECTING_IP',
+        'REMOTE_ADDR',
+    ];
+    foreach ($headers as $k) {
+        if (empty($_SERVER[$k])) {
+            continue;
+        }
+        // X-Forwarded-For 可能是 "client, proxy1, proxy2"，取第一个
+        $v = trim(explode(',', (string)$_SERVER[$k])[0]);
+        if ($v !== '' && filter_var($v, FILTER_VALIDATE_IP)) {
+            return $v;
+        }
+    }
+    return '';
+}
+
 function read_json_body(): array
 {
     $raw = file_get_contents('php://input');
@@ -484,8 +531,13 @@ if ($method === 'POST') {
     $guid = trim_str($data['guid'] ?? '', 64);
     $os   = trim_str($data['os'] ?? '', 32);
     $app  = trim_str($data['app'] ?? 'baiji_music', 64);
+    // 客户端上报的 IP；缺失或非法时用服务端看到的地址兜底
+    $ip = trim_str($data['ip'] ?? '', 64);
+    if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+        $ip = client_ip();
+    }
     $events = is_array($data['events'] ?? null) ? $data['events'] : [];
-    $n = ($guid === '' || !$events) ? 0 : store()->addEvents($guid, $os, $app, $events);
+    $n = ($guid === '' || !$events) ? 0 : store()->addEvents($guid, $os, $app, $ip, $events);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode([
         'ok' => $n > 0,
@@ -550,7 +602,7 @@ if ($action === 'api') {
   .panel h2{margin:0;padding:12px 16px;font-size:14px;border-bottom:1px solid var(--line);
             background:var(--panel2);color:var(--dim);font-weight:600;letter-spacing:.5px}
   .panel .body{padding:12px 16px}
-  /* ---- 表格：外层 .tw 负责横向滚动，手机上可左右滑动 ---- */
+  /* ---- 表格：外层 .tw 负责横向滚动，所有列（含最左侧一列）一起滑动 ---- */
   .tw{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
       width:100%;max-width:100%}
   .tw::-webkit-scrollbar{height:8px}
@@ -559,11 +611,7 @@ if ($action === 'api') {
   table{border-collapse:collapse;font-size:13px;width:max-content;min-width:100%}
   th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap;
         overflow:hidden;text-overflow:ellipsis;max-width:280px}
-  th{position:sticky;left:0;background:var(--panel2);z-index:2}
-  /* 首列（GUID / 时间）固定在左侧，横向滑动时仍可见 */
-  td:first-child{position:sticky;left:0;background:var(--panel);z-index:1}
-  tbody tr:hover td:first-child{background:#1b2430}
-  th{color:var(--dim);font-weight:600;font-size:12px}
+  th{background:var(--panel2);color:var(--dim);font-weight:600;font-size:12px}
   tbody tr:hover{background:#1b2430}
   .tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;
        border:1px solid var(--line);background:var(--panel2)}
@@ -612,7 +660,7 @@ if ($action === 'api') {
       <div class="swipe-tip">← 左右滑动查看更多列 →</div>
       <div class="tw">
       <table>
-        <thead><tr><th>GUID</th><th>系统</th><th>事件数</th><th>最后活跃</th></tr></thead>
+        <thead><tr><th>GUID</th><th>系统</th><th>IP</th><th>事件数</th><th>最后活跃</th></tr></thead>
         <tbody id="userBody"></tbody>
       </table>
       </div>
@@ -626,7 +674,7 @@ if ($action === 'api') {
       <div class="tw">
       <table>
         <thead><tr><th>时间</th><th>平台</th><th>歌曲</th><th>歌手</th><th>专辑</th>
-          <th>音质</th><th>GUID</th><th>播放链接</th></tr></thead>
+          <th>音质</th><th>GUID</th><th>IP</th><th>播放链接</th></tr></thead>
         <tbody id="playBody"></tbody>
       </table>
       </div>
@@ -639,14 +687,14 @@ if ($action === 'api') {
       <div class="swipe-tip">← 左右滑动查看更多列 →</div>
       <div class="tw">
       <table>
-        <thead><tr><th>时间</th><th>平台</th><th>关键词</th><th>结果数</th><th>GUID</th></tr></thead>
+        <thead><tr><th>时间</th><th>平台</th><th>关键词</th><th>结果数</th><th>GUID</th><th>IP</th></tr></thead>
         <tbody id="searchBody"></tbody>
       </table>
       </div>
     </div>
   </div>
 
-  <div class="footer">白姬音乐 v2.4.0-fix1 · upload.php 数据面板</div>
+  <div class="footer">白姬音乐 v2.4.2 · upload.php 数据面板</div>
 </div>
 
 <script>
@@ -694,9 +742,9 @@ function render(d){
   document.getElementById('userBody').innerHTML = (d.users&&d.users.length)
     ? d.users.map(function(u){
         return '<tr><td title="'+esc(u.guid)+'">'+esc(u.guid)+'</td><td>'+esc(u.os)+
-               '</td><td>'+u.events+'</td><td>'+fmtTime(u.last_at)+'</td></tr>';
+               '</td><td>'+esc(u.ip||'—')+'</td><td>'+u.events+'</td><td>'+fmtTime(u.last_at)+'</td></tr>';
       }).join('')
-    : '<tr><td colspan="4" class="muted">暂无数据</td></tr>';
+    : '<tr><td colspan="5" class="muted">暂无数据</td></tr>';
 
   document.getElementById('playBody').innerHTML = (d.plays&&d.plays.length)
     ? d.plays.map(function(p){
@@ -707,17 +755,19 @@ function render(d){
           +'<td title="'+esc(p.album)+'">'+esc(p.album)+'</td>'
           +'<td>'+esc(p.quality)+'</td>'
           +'<td title="'+esc(p.guid)+'">'+esc(p.guid).slice(0,8)+'…</td>'
+          +'<td>'+esc(p.ip||'—')+'</td>'
           +'<td>'+url+'</td></tr>';
       }).join('')
-    : '<tr><td colspan="8" class="muted">暂无数据</td></tr>';
+    : '<tr><td colspan="9" class="muted">暂无数据</td></tr>';
 
   document.getElementById('searchBody').innerHTML = (d.searches&&d.searches.length)
     ? d.searches.map(function(s){
         return '<tr><td>'+fmtTime(s.searched_at)+'</td><td>'+tag(s.platform)+'</td>'
           +'<td>'+esc(s.keyword)+'</td><td>'+(s.result_count||0)+'</td>'
-          +'<td title="'+esc(s.guid)+'">'+esc(s.guid).slice(0,8)+'…</td></tr>';
+          +'<td title="'+esc(s.guid)+'">'+esc(s.guid).slice(0,8)+'…</td>'
+          +'<td>'+esc(s.ip||'—')+'</td></tr>';
       }).join('')
-    : '<tr><td colspan="5" class="muted">暂无数据</td></tr>';
+    : '<tr><td colspan="6" class="muted">暂无数据</td></tr>';
 
   document.getElementById('lastUpdate').textContent='最后更新 '+fmtTime(d.server_time);
 }
