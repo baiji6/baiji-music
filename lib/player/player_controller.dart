@@ -181,6 +181,16 @@ class PlayerController {
   /// true 时 tracks 监听的 AC-4 兜底防护短路（正常播放不当异常）。
   bool _supportsAc4 = false;
 
+  /// 本机是否编入了 baka Rust 版 AC-4 解码器（ac4_baka，v2.4.2-pre5）。
+  /// true 时 jellyfin 版报错会先试切 `ad=ac4_baka` 重放，再走音质降级。
+  bool _supportsAc4Baka = false;
+
+  /// 链路日志去重指纹（track id/codec/decoder 变了才打一条）。
+  String _lastChainFingerprint = '';
+
+  /// 本曲是否已试过 baka 解码器（每曲重置，与 _ac4Budget 同步）。
+  bool _ac4BakaTried = false;
+
   int _ac4Budget = _maxAc4Retries;
 
   /// 上次 AC-4 降级的时间（tracks 与 error 两条信号可能同时触发，做去重）。
@@ -225,12 +235,16 @@ class PlayerController {
             ? await platform.getProperty('decoder-list')
             : '';
         final supportsAc4 = raw.contains('"ac4"') || raw.contains("'ac4'");
-        AppLog.i('PlayerController', '运行时探测 AC-4 解码器: $supportsAc4');
+        final supportsBaka =
+            raw.contains('ac4_baka') || raw.contains('Baka');
+        AppLog.i('PlayerController',
+            '运行时探测 AC-4 解码器: jellyfin=$supportsAc4 baka=$supportsBaka');
         if (supportsAc4) {
           Quality.undecodableCodes.clear();
           KuwoLink.undecodableIds.clear();
           _supportsAc4 = true;
         }
+        _supportsAc4Baka = supportsBaka;
       } catch (e) {
         AppLog.w('PlayerController', 'AC-4 解码器探测失败（保持保守降级）: $e');
       }
@@ -319,6 +333,30 @@ class PlayerController {
     // track-list 里依然带着 codec=ac4，比等 error 更早也更可靠。
     _player!.stream.tracks.listen((tracks) {
       try {
+        // v2.4.2-pre5：完整播放链路日志——用的什么解码器一目了然。
+        // （track.decoder 是 mpv 的 decoder-desc：如 jellyfin 移植版是
+        // 「AC-4 (ATSC 3.0)」、baka Rust 版是「AC-4 (Baka Rust decoder)」。）
+        final t = tracks.audio.isNotEmpty ? tracks.audio.first : null;
+        if (t != null) {
+          final fp = '${t.id}|${t.codec}|${t.decoder}|${t.channelscount}';
+          if (fp != _lastChainFingerprint) {
+            _lastChainFingerprint = fp;
+            final ap = _player?.state.audioParams;
+            AppLog.i('PlayerController',
+                '播放链路: codec=${t.codec ?? '?'} 解码器=${t.decoder ?? '?'} '
+                '${t.samplerate ?? ap?.sampleRate ?? '?'}Hz '
+                '${t.channelscount ?? '?'}ch(${t.channels ?? '?'})');
+            unawaited(Future(() async {
+              try {
+                final platform = _player?.platform;
+                if (platform is NativePlayer) {
+                  final ao = await platform.getProperty('current-ao');
+                  AppLog.i('PlayerController', '播放链路: 音频输出 AO=$ao');
+                }
+              } catch (_) {}
+            }));
+          }
+        }
         if (_supportsAc4) {
           // v2.4.2-pre4：运行时探测已确认本机有 ac4 解码器——track 里
           // 出现 codec=ac4 是**正常播放**，不是异常信号，直接放行。
@@ -386,6 +424,7 @@ class PlayerController {
     // 不会把预算半路刷满。注意不能拿 _currentSong 做 identical 判断——
     // 调用方都是先赋 _currentSong 再进 play()，那样恒真、永不重置。
     _ac4Budget = _maxAc4Retries;
+    _ac4BakaTried = false;
     _lastAc4Retry = null;
     // 换了别的曲目 → 播放页临时音质作废（只影响同一首，见 _tempSong 注释）。
     // 注意：不能拿 _currentSong 比较——调用方都是先赋 _currentSong 再进
@@ -415,6 +454,36 @@ class PlayerController {
     }
     final song = _currentSong;
     if (song == null) return;
+
+    // v2.4.2-pre5：双解码器共存——jellyfin 版（ac4）解不了的流，先试
+    // baka Rust 版（ac4_baka）换解码器重放，都失败才降音质。
+    if (source.startsWith('error:') &&
+        _supportsAc4Baka &&
+        !_ac4BakaTried) {
+      _ac4BakaTried = true;
+      AppLog.w('PlayerController',
+          'AC-4 解码报错（$source），切换到 baka Rust 解码器重试');
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('AC-4 解码失败，已切换备用解码器重试');
+      }
+      unawaited(Future(() async {
+        try {
+          final platform = _player?.platform;
+          if (platform is NativePlayer) {
+            await platform.setProperty('ad', 'ac4_baka,ac4');
+          }
+          final song2 = _currentSong;
+          if (song2 != null) {
+            final url = await _resolveUrl(song2);
+            if (url.isNotEmpty) await _playUrlInternal(url);
+          }
+        } catch (e) {
+          AppLog.w('PlayerController', 'baka 解码器重试失败: $e');
+        }
+      }));
+      return;
+    }
+
     if (_ac4Budget <= 0) {
       AppLog.e('PlayerController', 'AC-4 降级预算已用完（$source），放弃重试');
       _errorStream.add('该曲目的杜比全景声(AC-4)本机暂不支持播放');

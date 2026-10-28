@@ -6,6 +6,28 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.2-pre6
+
+> 预发布版：**AC-4 双解码器共存** + 播放链路日志 + 上报带 IP。
+
+### 🔊 AC-4 双解码器（原生库 v5）
+
+- 编入 **baka-ac4**（纯 Rust 的 AC-4 解码器）作为第二解码器，与 Jellyfin
+  移植版共存（`ac4` 默认 / `ac4_baka` 备用，同 codec id 类似 aac/aac_fixed）
+- 宿主实测 Baka 版完整解码真实酷我 AC-4 文件（3701 帧 0 错误）
+- 播放侧：jellyfin 版解码报错时**自动切 baka 重放**，都失败才降音质
+
+### 📝 播放链路日志
+
+- 每次开播在日志里记录**实际解码器**（mpv decoder-desc）、codec、
+  采样率 / 声道数与音频输出后端（audiotrack / opensles）——排查音质
+  与解码问题不再靠猜
+
+### 📊 上报带 IP
+
+- 行为上报（upload.php）的批量 payload 新增 `ip` 字段（客户端公网 IP，
+  ipify 查询失败时留空，PHP 端仍可用 REMOTE_ADDR 兜底）
+
 ## 2.4.2-pre5
 
 > 预发布版：**AC-4 最后一环修复**（播放内核防误伤）。

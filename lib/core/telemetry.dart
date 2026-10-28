@@ -73,6 +73,40 @@ class Telemetry {
   Timer? _timer;
   bool _flushing = false;
 
+  /// 客户端公网 IP（v2.4.2：随批量 payload 一起上报，便于后台按
+  /// 来源区分用户；查询失败留空——PHP 端仍可用 REMOTE_ADDR 兜底）。
+  String? _cachedIp;
+  bool _ipFetching = false;
+
+  /// 查询公网 IP：主用 ipify（Cloudflare，国内一般可达），备用
+  /// icanhazip（纯文本）。只查一次，成功后缓存。
+  Future<void> _fetchIp() async {
+    if (_cachedIp != null || _ipFetching) return;
+    _ipFetching = true;
+    final probe = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 6),
+      receiveTimeout: const Duration(seconds: 8),
+      validateStatus: (_) => true,
+    ));
+    try {
+      final r = await probe.get('https://api.ipify.org?format=json');
+      if (r.data is Map && (r.data as Map)['ip'] != null) {
+        _cachedIp = (r.data as Map)['ip'].toString();
+        AppLog.i('Telemetry', '公网 IP 已获取: $_cachedIp');
+        return;
+      }
+    } catch (_) {}
+    try {
+      final r2 = await probe.get('https://ipv4.icanhazip.com');
+      final text = r2.data?.toString().trim() ?? '';
+      if (text.isNotEmpty && text.length < 64) _cachedIp = text;
+    } catch (_) {
+      AppLog.d('Telemetry', '公网 IP 查询失败（上报时 ip 字段留空）');
+    } finally {
+      _ipFetching = false;
+    }
+  }
+
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 8),
     receiveTimeout: const Duration(seconds: 12),
@@ -93,6 +127,7 @@ class Telemetry {
 
   /// 启动定时刷队列（App 启动时调用一次）。
   void start() {
+    unawaited(_fetchIp());
     _timer?.cancel();
     _timer = Timer.periodic(
       const Duration(seconds: _flushIntervalSec),
@@ -191,6 +226,7 @@ class Telemetry {
         'guid': guid,
         'os': DeviceGuid.platformName,
         'app': 'baiji_music',
+        'ip': _cachedIp ?? '',
         'events': batch.map((e) => e.toJson()).toList(),
       };
       final resp = await _dio.post(
