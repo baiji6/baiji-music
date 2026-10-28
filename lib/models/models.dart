@@ -273,6 +273,12 @@ class NeteaseQuality {
 
   const NeteaseQuality(this.level, this.label, this.ext);
 
+  /// 臻音全景声（AVS3-P3 / Audio Vivid，level=vivid，MP4 封装的 av3a 流）。
+  ///
+  /// 网易云接口在请求杜比全景声（dolby）时，若歌曲没有杜比内容会自动
+  /// 返回臻音全景声（level=vivid / type=av3a）；实测直接请求 level=vivid
+  /// 同样有效。解码由 ffmpeg 的 av3a 解码器（AVS3 参考软件集成）承担。
+  static const vivid = NeteaseQuality('vivid', '臻音全景声', '.mp4');
   static const dolby = NeteaseQuality('dolby', '杜比全景声', '.mp4');
   static const jymaster = NeteaseQuality('jymaster', '超清母带', '.flac');
   static const sky = NeteaseQuality('sky', '沉浸环绕声', '.flac');
@@ -285,6 +291,7 @@ class NeteaseQuality {
   static const playbackDefault = exhigh;
 
   static const downloadOptions = [
+    vivid,
     dolby,
     jymaster,
     sky,

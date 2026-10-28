@@ -127,7 +127,12 @@ class NeteaseApi {
     final payload = <String, dynamic>{
       'ids': [id],
       'level': quality.level,
-      'encodeType': quality == NeteaseQuality.dolby ? 'mp4' : 'flac',
+      // dolby / vivid（臻音全景声）都是 MP4 容器（vivid 的 type 返回 av3a），
+      // 其余档位仍按 flac 报 encodeType（与官方行为一致）
+      'encodeType':
+          (quality == NeteaseQuality.dolby || quality == NeteaseQuality.vivid)
+              ? 'mp4'
+              : 'flac',
       'header': jsonEncode(header),
     };
     if (quality == NeteaseQuality.sky) {

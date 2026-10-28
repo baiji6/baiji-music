@@ -185,6 +185,15 @@ class PlayerController {
   /// true 时 jellyfin 版报错会先试切 `ad=ac4_baka` 重放，再走音质降级。
   bool _supportsAc4Baka = false;
 
+  /// 本机是否编入了 AV3A（AVS3-P3 / 臻音全景声）解码器（v2.4.2-pre7）。
+  /// 网易云 vivid 档（MP4 封装的 av3a 流）靠它解码；仅作链路诊断展示，
+  /// 不参与降级逻辑（网易云没有针对 av3a 的不可解码硬编码）。
+  bool _supportsAv3a = false;
+
+  /// 供诊断面板 / 调试页展示解码器能力。
+  bool get supportsAc4Baka => _supportsAc4Baka;
+  bool get supportsAv3a => _supportsAv3a;
+
   /// 链路日志去重指纹（track id/codec/decoder 变了才打一条）。
   String _lastChainFingerprint = '';
 
@@ -237,14 +246,17 @@ class PlayerController {
         final supportsAc4 = raw.contains('"ac4"') || raw.contains("'ac4'");
         final supportsBaka =
             raw.contains('ac4_baka') || raw.contains('Baka');
+        final supportsAv3a =
+            raw.contains('"av3a"') || raw.contains("'av3a'");
         AppLog.i('PlayerController',
-            '运行时探测 AC-4 解码器: jellyfin=$supportsAc4 baka=$supportsBaka');
+            '运行时探测 AC-4 解码器: jellyfin=$supportsAc4 baka=$supportsBaka av3a=$supportsAv3a');
         if (supportsAc4) {
           Quality.undecodableCodes.clear();
           KuwoLink.undecodableIds.clear();
           _supportsAc4 = true;
         }
         _supportsAc4Baka = supportsBaka;
+        _supportsAv3a = supportsAv3a;
       } catch (e) {
         AppLog.w('PlayerController', 'AC-4 解码器探测失败（保持保守降级）: $e');
       }
