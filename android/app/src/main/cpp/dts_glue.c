@@ -266,19 +266,31 @@ void dtsglue_close(void);
 
 void dtsglue_log(const char *msg) { LOGI("%s", msg ? msg : ""); }
 
+/* 最近一次探测失败的细节（dlerror 文本），供 Dart 日志透传 */
+static char g_probe_err[256];
+
+const char *dtsglue_probe_detail(void)
+{
+    return g_probe_err[0] ? g_probe_err : "ok";
+}
+
 /* 探测本机是否可用（so 存在且能 dlopen + 符号齐全） */
 int dtsglue_abi_available(void)
 {
     if (g_sdk) return 1; /* already loaded */
     void *h = dlopen("libDTSPlaybackSDK.so", RTLD_NOW | RTLD_LOCAL);
     if (!h) {
-        LOGW("probe dlopen failed: %s", dlerror());
+        const char *e = dlerror();
+        LOGW("probe dlopen failed: %s", e ? e : "(no dlerror)");
+        snprintf(g_probe_err, sizeof(g_probe_err), "dlopen: %s",
+                 e ? e : "unknown");
         return 0;
     }
     int ok = dlsym(h, "DTSPlayback_InitialiseDTS") != NULL &&
              dlsym(h, "DTSPlayback_InstallLicense") != NULL &&
              dlsym(h, "DTSPlayback_LoadConfiguration") != NULL &&
              dlsym(h, "DTSPlayback_DecodeDTS") != NULL;
+    if (!ok) snprintf(g_probe_err, sizeof(g_probe_err), "missing SDK symbols");
     dlclose(h);
     return ok ? 1 : 0;
 }

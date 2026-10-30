@@ -50,7 +50,14 @@ class DtsMusic {
       final abiAvailable = _lib!
           .lookupFunction<Int32 Function(), int Function()>('dtsglue_abi_available');
       _supported = abiAvailable() == 1;
-      AppLog.i('DtsMusic', 'DTS:X 原生链路探测: ${_supported ? "可用" : "不可用（无官方库）"}');
+      if (_supported) {
+        AppLog.i('DtsMusic', 'DTS:X 原生链路探测: 可用');
+      } else {
+        final detail = _lib!
+            .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
+                'dtsglue_probe_detail')();
+        AppLog.w('DtsMusic', 'DTS:X 原生链路探测失败: ${detail.toDartString()}');
+      }
     } catch (e) {
       AppLog.w('DtsMusic', 'libdts_glue.so 加载失败（旧版本升级残留？）: $e');
       _supported = false;
@@ -121,6 +128,19 @@ class DtsMusic {
     void Function(int pct, String stage)? onProgress,
   }) async {
     if (!isSupported) return null;
+    try {
+      return await _decodeToWavGuarded(mp4Url, key, onProgress: onProgress);
+    } catch (e) {
+      AppLog.e('DtsMusic', 'DTS:X 链路异常: $e');
+      return null;
+    }
+  }
+
+  static Future<DtsDecodeResult?> _decodeToWavGuarded(
+    String mp4Url,
+    String key, {
+    void Function(int pct, String stage)? onProgress,
+  }) async {
     final (licPath, cfgPath) = await _ensureLicenseFiles();
     final wavPath = await wavPathFor(key);
 

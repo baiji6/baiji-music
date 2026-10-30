@@ -6,6 +6,24 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.2-pre9
+
+> 预发布版：修复 pre8 的 DTS:X 真机探测失败（自动降级）问题。
+
+### 🐛 DTS:X 真机降级修复
+
+真机（arm64-v8a）上 DT03 档位被运行时探测直接跳过，降级到下一档。
+根因是**打包问题**（解码链路本身在 QEMU 已全曲验证通过），共三处：
+
+- **jniLibs 文件名缺 `lib` 前缀**：官方 so 以 CDN 原名 `DTSPlaybackSDK.so`
+  放入 jniLibs，AGP 原样打包，运行时 `dlopen("libDTSPlaybackSDK.so")`
+  找不到文件 → 改名 `libDTSPlaybackSDK.so`
+- **许可文件放错 assets 体系**：`dts_hpx.lic` / `dts_config.yaml` 放在
+  Android 原生 assets 且 pubspec 未声明，`rootBundle` 无法读取 →
+  移至项目根 `assets/dts/` 并在 pubspec 声明
+- **探测失败无细节**：新增 `dtsglue_probe_detail()` 把 native 侧
+  `dlerror` 文本透传到 Dart 日志，后续排障不再盲猜
+
 ## 2.4.2-pre8
 
 > 预发布版：**QQ 音乐「臻品 DTS:X」（DT03）解码支持**。
