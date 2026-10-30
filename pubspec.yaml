@@ -2,7 +2,7 @@ name: baiji_music
 description: "白姬音乐 - 跨平台音乐播放客户端（iOS / macOS / Windows / Linux / Android / HarmonyOS）"
 publish_to: 'none'
 
-version: 2.4.2-pre7+8
+version: 2.4.2-pre8+9
 
 environment:
   sdk: ^3.13.5
@@ -28,6 +28,7 @@ dependencies:
   cached_network_image: ^3.4.1
   # 各平台下载/存储目录
   path_provider: ^2.1.5
+  ffi: ^2.1.0
   # 分享/导出（日志导出、分享链接）
   share_plus: ^10.0.0
   # 文件选择（自定义下载目录）

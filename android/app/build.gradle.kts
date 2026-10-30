@@ -66,6 +66,18 @@ android {
 
     ndkVersion = flutter.ndkVersion
 
+    // v2.4.2-pre8：臻品 DTS:X 原生解码（dts_glue）。
+    // CMake 只编译我们自己的薄封装（单 C 文件，秒级）；官方
+    // DTSPlaybackSDK.so 以预编译形式放 jniLibs（arm64-v8a / armeabi-v7a，
+    // MD5 与官方 so_info.json 锚定）。不设 abiFilters——x86 上 dts_glue
+    // 照常编译，运行时探测不到官方库则自动走音质降级。
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     // 关闭 Google 依赖信息块（DEPENDENCY_INFO_BLOCK），减小 APK 体积并减少元数据泄露
     dependenciesInfo {
         includeInApk = false

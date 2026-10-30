@@ -244,6 +244,14 @@ class MusicApi {
     return Quality.mp3_128;
   }
 
+  /// 下载侧的 QQ 音质替换（v2.4.2-pre8）。
+  ///
+  /// 臻品 DTS:X（DT03）由 `dts_glue` 原生管线**播放时**解码，下载侧不下发
+  /// 原始 `dtsx` mp4（本地播放内核不支持，下下来听不了），换成最近的
+  /// 全景声档。播放侧不受影响（`PlayerController` 有独立的 DT03 分支）。
+  static Quality qqDownloadSubstitute(Quality q) =>
+      q.code == Quality.dtsX.code ? Quality.atmosEac3Plus : q;
+
   /// 网易云音质降级链：[from] 起向下，`downloadOptions` 已按高→低排列。
   static List<NeteaseQuality> neteaseDowngradeChain(NeteaseQuality from) {
     final all = NeteaseQuality.downloadOptions;

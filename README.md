@@ -12,6 +12,7 @@ UI 采用暗色玻璃拟态 + 霓虹渐变的现代化未来感设计，构建�
 
 | 能力 / 修复 | 说明 |
 | --- | --- |
+| 🎼 **QQ 音乐臻品 DTS:X（DT03）解码** | 集成 DTS 官方 Playback SDK（QQ 音乐同款内核，arm64/v7a 双 ABI，MD5 锚定官方清单）+ 自研 `dts_glue` 原生模块：MP4 `dtsx` 轨 demux + 许可注入 + `DecodeDTS` 循环，Dart FFI 直调后台解码成 WAV 缓存播放，二次播放零等待；双 ABI QEMU 全曲验证 12847 帧 0 失败、输出一致 |
 | 🎧 **网易云臻音全景声（Audio Vivid / AVS3-P3）解码** | 自研解码器直接编入 libmpv：UWA 参考软件（C 语言）封装为 FFmpeg `av3a` 解码器，MP4 `'av3a'` 封装识别，NN 模型内嵌零外部依赖；宿主实测解码真实网易云文件 12289 帧 0 错误，输出与参考解码器逐样本等价（RMS 差异 0.000%）；新增网易云「臻音全景声」音质档（`level=vivid` 可直连取流，请求杜比无内容时服务端也自动返回该格式） |
 | 🔊 **AC-4 双解码器共存** | ffmpeg 同时编入两个 AC-4 解码器：Jellyfin 移植版（`ac4`）+ [baka-ac4](https://github.com/Zencok/baka-ac4) Rust 版（`ac4_baka`），播放侧 `ad=ac4_baka,ac4` 自动切换；运行时探测解码器能力，探测通过即短路音质降级防护，酷我杜比 AC-4 正常直放 |
 | 💬 **QQ 评论风控 10009 修复** | 发评论被风控时（错误 10009）App 内弹出**内嵌 WebView 滑块/验证页**，验证完成自动重试，不跳浏览器 |
@@ -195,6 +196,22 @@ libmpv 原生库在通用 ffmpeg 基础上额外编入三个音频解码器。`t
 - **完整链路日志**：tracks 事件输出 codec、解码器名、采样率、声道数与实际音频输出设备（`current-ao`）；
 - **宿主验证**：av3a 对真实网易云文件 12289 帧解码 0 错误，输出与参考解码器逐样本等价
   （RMS 差异 0.000%，Pearson 相关 0.99996）。
+
+### QQ 音乐臻品 DTS:X 解码（v2.4.2-pre8：dts_glue 独立管线）
+
+DTS UHD（Profile 2 / `dtsx`）无开源解码器、ffmpeg 也不支持，因此**不走 libmpv**，
+由独立原生管线承载：选 DT03 档时 App 下载 QQ 的 DT03 mp4（未加密标准封装），
+`dts_glue` 原生模块完成「demux → 解码 → WAV」，再交给 media_kit 当普通文件播放：
+
+| 环节 | 实现 |
+| --- | --- |
+| 解码内核 | DTS 官方 Playback SDK（与 QQ 音乐同款；`jniLibs` 打包 arm64-v8a / armeabi-v7a，MD5 锚定官方 `so_info.json`） |
+| 许可 | APK 内置 DSEC 许可（`dts_hpx.lic`，有效期至 2033）+ Playback 配置（`dts_config.yaml`） |
+| demux | 自研 MP4 解析（遍历 trak 匹配 `dtsx` fourcc，支持 co64 / 变长 stsz），无第三方依赖 |
+| 接入层 | 纯 C API（`dtsglue_init/open/decode_to_wav`）+ Dart FFI 直调，无 JNI 桥；解码跑在后台 Isolate |
+| 缓存 | 解码产物 WAV 存应用缓存，二次播放零等待；失败自动沿音质降级链回落 |
+| 验证 | 双 ABI 在 QEMU 全曲解码 12847 帧 0 失败（274.07s @48kHz，与元数据吻合），arm64 与 v7a 输出逐帧一致 |
+| 兼容性 | x86 系列无官方解码库，运行时探测自动跳过 DT03 档 |
 
 ### 搜索页：内嵌平台切换 + 真实热搜榜
 

@@ -1,0 +1,196 @@
+# DTS Playback SDK Configuration File
+# Configures the SDK with the Virtualiser Modes used in SDK v2.0.0
+config_schema_version: 1
+min_sdk_version: 2.0.0
+
+# Configuration for the Headphone:X Virtualiser
+hpx_virtualiser:
+  virtualiser_modes:
+
+    # Headphone Default (2.0 variant)
+    mode:
+      name: Headphone Default
+      channel_layouts: { 2.0 }
+      description: This mode supports multi-channel and stereo input. Inputs are virtualised into a binaural stereo output for stereo input. Any widening or narrowing of the sound stage is removed.
+      hpx: false
+      ildetect_upmix: false
+      ildetect_2_to_5: false
+      room_model: SD2
+      aeq_bands:
+        - { freq:   29Hz,  gain:   -6dB,  qFactor:  1.40,  type: Low_Shelf   }
+        - { freq:  100Hz,  gain:    3dB,  qFactor:  1.00,  type: Traditional }
+        - { freq:  140Hz,  gain:   -2dB,  qFactor:  2.00,  type: Traditional }
+        - { freq:  720Hz,  gain:    4dB,  qFactor:  0.70,  type: High_Shelf  }
+        - { freq: 3300Hz,  gain: -2.5dB,  qFactor:  4.30,  type: Traditional }
+        - { freq: 5600Hz,  gain:   -3dB,  qFactor:  6.00,  type: Traditional }
+        - { freq: 9800Hz,  gain:   -9dB,  qFactor: 16.00,  type: Traditional }
+      mbhl_mode: { cross_low: 120Hz,  cross_med: 8kHz,  boost_low: 3dB,  boost_mid: -0.5dB,  boost_high: 1dB }
+      mbhl_boost: 0.0dB
+
+    # Headphone Default (5.1 and above variant)
+    mode:
+      name: Headphone Default
+      channel_layouts: { 5.1, 5.1.2, 5.1.4, 7.1 }
+      description: This mode supports multi-channel and stereo input. Inputs are virtualised into a binaural stereo output for stereo input. Any widening or narrowing of the sound stage is removed.
+      hpx: true
+      ildetect_upmix: false
+      ildetect_2_to_5: false
+      room_model: SD2
+      aeq_bands:
+        - { freq:  145Hz,  gain:   5dB,  qFactor: 2.30,  type: Traditional }
+        - { freq: 9400Hz,  gain: 3.5dB,  qFactor: 2.80,  type: Traditional }
+      mbhl_boost: 4.0dB
+      dialog_clarity: { mix_gain: 1.0,  level: 0.15 }
+
+    # Headphone Front (2.0 only)
+    mode:
+      name: Headphone Front
+      channel_layouts: { 2.0 }
+      description: This stereo input mode moves the audio closer to the center, narrowing the sound field to mimic playing the content back over two high quality stereo speakers placed in front of the listener.
+      hpx: true
+      ildetect_upmix: false
+      ildetect_2_to_5: false
+      room_model: SuperStereo_T2_Front
+      aeq_bands:
+        - { freq:   110Hz,  gain:  4.5dB,  qFactor: 1.33,  type: Traditional }
+        - { freq:   720Hz,  gain:  4.5dB,  qFactor: 0.70,  type: High_Shelf  }
+        - { freq:  4400Hz,  gain: -3.5dB,  qFactor: 2.52,  type: Traditional }
+        - { freq:  9200Hz,  gain:  3.5dB,  qFactor: 1.70,  type: Traditional }
+        - { freq: 12500Hz,  gain:   -8dB,  qFactor: 3.20,  type: Traditional }
+      mbhl_boost: 0.0dB
+
+    # Headphone Upmix (2.0 only)
+    mode:
+      name: Headphone Upmix
+      channel_layouts: { 2.0 }
+      description: This stereo input mode will upmix the audio from 2.0 to 5.1 and virtualise it to stereo output.
+      hpx: true
+      ildetect_upmix: true
+      ildetect_2_to_5: true
+      room_model: SD2
+      aeq_bands:
+        - { freq:   120Hz,  gain: -6.5dB,  qFactor: 7.00,  type: Traditional }
+        - { freq:   135Hz,  gain:  5.5dB,  qFactor: 1.00,  type: Traditional }
+        - { freq:   620Hz,  gain:   -3dB,  qFactor: 7.00,  type: Traditional }
+        - { freq:   720Hz,  gain:  1.5dB,  qFactor: 0.70,  type: High_Shelf  }
+        - { freq:  1400Hz,  gain:    3dB,  qFactor: 2.80,  type: Traditional }
+        - { freq:  9000Hz,  gain:  4.5dB,  qFactor: 3.00,  type: Traditional }
+        - { freq: 14500Hz,  gain:   -6dB,  qFactor: 3.00,  type: Traditional }
+      mbhl_boost: 0.0dB
+      dialog_clarity: { mix_gain: 0.5,  level: 0.6 }
+
+    # Headphone Wide (2.0 only)
+    mode:
+      name: Headphone Wide
+      channel_layouts: { 2.0 }
+      description: This stereo input mode widens the sound stage for the audio. It essentially pulls the audio outside of the head which can lead to lower listener fatigue.
+      hpx: true
+      ildetect_upmix: false
+      ildetect_2_to_5: false
+      room_model: SuperStereo_T2_Wide
+      aeq_bands:
+        - { freq:   150Hz,  gain: 4.5dB,  qFactor: 2.50,  type: Traditional }
+        - { freq:   620Hz,  gain:  -6dB,  qFactor: 7.10,  type: Traditional }
+        - { freq:   720Hz,  gain:   4dB,  qFactor: 0.70,  type: High_Shelf  }
+        - { freq:  7200Hz,  gain: 4.5dB,  qFactor: 0.70,  type: High_Shelf  }
+        - { freq: 10000Hz,  gain:   3dB,  qFactor: 2.30,  type: Traditional }
+      mbhl_boost: 0.0dB
+
+    # Speaker Default (2.0 variant)
+    mode:
+      name: Speaker Default
+      channel_layouts: { 2.0 }
+      description: This mode supports multi-channel and stereo input. Multi-channel input is virtualised into a binaural stereo output. Any widening or narrowing of the sound stage is removed.
+      hpx: false
+      ildetect_upmix: false
+      ildetect_2_to_5: false
+      room_model: SD2
+      aeq_bands:
+        - { freq:    49Hz,  gain:  -12dB,  qFactor:  1.40,  type: Low_Shelf   }
+        - { freq:   100Hz,  gain:    3dB,  qFactor:  1.00,  type: Traditional }
+        - { freq:   140Hz,  gain:   -2dB,  qFactor:  2.00,  type: Traditional }
+        - { freq:   720Hz,  gain:    3dB,  qFactor:  0.70,  type: High_Shelf  }
+        - { freq:  3300Hz,  gain: -2.5dB,  qFactor:  4.30,  type: Traditional }
+        - { freq:  5600Hz,  gain:   -3dB,  qFactor:  6.00,  type: Traditional }
+        - { freq:  9800Hz,  gain:   -9dB,  qFactor: 16.00,  type: Traditional }
+        - { freq: 12100Hz,  gain:   -3dB,  qFactor:  0.70,  type: High_Shelf  }
+      mbhl_mode: { cross_low: 120Hz,  cross_med: 8kHz,  boost_low: 3dB,  boost_mid: -0.5dB,  boost_high: 1dB }
+      mbhl_boost: 3.0026dB
+      dialog_clarity: { mix_gain: 1.0,  level: 1.0 }
+
+    # Speaker Default (5.1 and above variant)
+    mode:
+      name: Speaker Default
+      channel_layouts: { 5.1, 5.1.2, 5.1.4, 7.1 }
+      description: This mode supports multi-channel and stereo input. Multi-channel input is virtualised into a binaural stereo output. Any widening or narrowing of the sound stage is removed.
+      hpx: true
+      ildetect_upmix: false
+      ildetect_2_to_5: false
+      room_model: SD2
+      aeq_bands:
+        - { freq:   220Hz,  gain:   6dB,  qFactor: 0.55,  type: Traditional }
+        - { freq:  1500Hz,  gain:   6dB,  qFactor: 0.70,  type: High_Shelf  }
+        - { freq:  2500Hz,  gain:  -8dB,  qFactor: 2.60,  type: Traditional }
+        - { freq:  3800Hz,  gain: -12dB,  qFactor: 2.70,  type: Traditional }
+        - { freq:  9400Hz,  gain: 3.5dB,  qFactor: 3.00,  type: Traditional }
+        - { freq: 11800Hz,  gain:  -6dB,  qFactor: 0.70,  type: High_Shelf  }
+      mbhl_boost: 3.0026dB
+      dialog_clarity: { mix_gain: 1.0,  level: 1.0 }
+
+    # Speaker Front (2.0 only)
+    mode:
+      name: Speaker Front
+      channel_layouts: { 2.0 }
+      description: This stereo input mode moves the audio closer to the centre of the device, narrowing the sound field to mimic playing the content back over two high quality stereo speakers placed in front of the listener.
+      hpx: true
+      ildetect_upmix: false
+      ildetect_2_to_5: false
+      room_model: SuperStereo_T2_Front
+      aeq_bands:
+        - { freq:   110Hz,  gain:  4.5dB,  qFactor: 1.33,  type: Traditional }
+        - { freq:  2500Hz,  gain:   -6dB,  qFactor: 1.60,  type: Traditional }
+        - { freq:  4400Hz,  gain: -3.5dB,  qFactor: 2.52,  type: Traditional }
+        - { freq:  9200Hz,  gain:  3.5dB,  qFactor: 1.70,  type: Traditional }
+        - { freq: 12500Hz,  gain:   -8dB,  qFactor: 3.20,  type: Traditional }
+      mbhl_boost: 6.0206dB
+      dialog_clarity: { mix_gain: 1.0,  level: 1.0 }
+
+    # Speaker Upmix (2.0 only)
+    mode:
+      name: Speaker Upmix
+      channel_layouts: { 2.0 }
+      description: This stereo input mode will upmix the audio from 2.0 to 5.1 and virtualise it as binaural stereo output.
+      hpx: true
+      ildetect_upmix: true
+      ildetect_2_to_5: true
+      room_model: SD2
+      aeq_bands:
+        - { freq:   220Hz,  gain:   7dB,  qFactor: 0.55,  type: Traditional }
+        - { freq:  1400Hz,  gain:   3dB,  qFactor: 2.70,  type: Traditional }
+        - { freq:  1500Hz,  gain:   6dB,  qFactor: 0.70,  type: High_Shelf  }
+        - { freq:  2500Hz,  gain:  -8dB,  qFactor: 2.60,  type: Traditional }
+        - { freq:  3800Hz,  gain: -12dB,  qFactor: 2.70,  type: Traditional }
+        - { freq:  9400Hz,  gain: 4.5dB,  qFactor: 4.00,  type: Traditional }
+        - { freq: 11000Hz,  gain:  -6dB,  qFactor: 0.70,  type: High_Shelf  }
+        - { freq: 15800Hz,  gain:  -6dB,  qFactor: 2.60,  type: Traditional }
+      mbhl_boost: 6.0206dB
+      dialog_clarity: { mix_gain: 1.0,  level: 1.0 }
+
+    # Speaker Wide (2.0 only)
+    mode:
+      name: Speaker Wide
+      channel_layouts: { 2.0 }
+      description: This stereo input mode widens the sound stage for the audio coming out of the speakers, while maintaining a neutral timbre. It provides the listener with a more immersive experience as the audio is perceived to be coming from external speakers further out to the left and right of the listener.
+      hpx: true
+      ildetect_upmix: false
+      ildetect_2_to_5: false
+      room_model: SuperStereo_T2_Wide
+      aeq_bands:
+        - { freq:   150Hz,  gain: 4.5dB,  qFactor: 2.50,  type: Traditional }
+        - { freq:   620Hz,  gain:  -6dB,  qFactor: 7.10,  type: Traditional }
+        - { freq:   720Hz,  gain:   4dB,  qFactor: 0.70,  type: High_Shelf  }
+        - { freq:  7200Hz,  gain: 4.5dB,  qFactor: 0.70,  type: High_Shelf  }
+        - { freq: 10000Hz,  gain:   3dB,  qFactor: 2.30,  type: Traditional }
+        - { freq: 13000Hz,  gain:  -7dB,  qFactor: 0.70,  type: High_Shelf  }
+      mbhl_boost: 6.0206dB
+      dialog_clarity: { mix_gain: 1.0,  level: 1.0 }

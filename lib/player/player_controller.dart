@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/core/telemetry.dart';
+import 'package:baiji_music/dts/dts_decoder.dart';
 import 'package:baiji_music/local/local_scanner.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_link.dart';
@@ -702,6 +703,22 @@ class PlayerController {
       final plan = chain[i];
       final r = await _fetch(song, plan.qq, plan.ne);
       if (r.isNotEmpty) {
+        // 臻品 DTS:X（DT03）专用管线（v2.4.2-pre8）：mpv 的 ffmpeg 没有
+        // DTS UHD(P2) 解码器，走 dts_glue 原生解码 → WAV 缓存 → 本地播放。
+        if (r.qq?.code == Quality.dtsX.code) {
+          if (!DtsMusic.isSupported) {
+            AppLog.i('PlayerController', '本机无 DTS:X 解码库（x86 或旧包），跳过 DT03 档');
+            continue;
+          }
+          final res = await DtsMusic.decodeToWav(r.url, song.mid);
+          if (res != null) {
+            _applyActual(r);
+            _reportPlay(song, r);
+            return Uri.file(res.wavPath).toString();
+          }
+          AppLog.w('PlayerController', 'DTS:X 解码失败，沿降级链继续');
+          continue;
+        }
         if (i > 0) {
           AppLog.i('PlayerController', '降级成功 -> ${r.label}');
         }

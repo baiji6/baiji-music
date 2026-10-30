@@ -121,7 +121,10 @@ class DownloadManager {
       }
       return PlayUrlResult.empty;
     }
-    for (final q in MusicApi.qqDowngradeChain(qqQuality)) {
+    // v2.4.2-pre8：DT03 不提供原始文件下载（dtsx 需播放时原生解码），
+    // 下载侧换成最近的全景声档；播放侧不受影响。
+    final effectiveQq = MusicApi.qqDownloadSubstitute(qqQuality);
+    for (final q in MusicApi.qqDowngradeChain(effectiveQq)) {
       final r = await _try(song, q, neQuality);
       if (r.isNotEmpty) return r;
       AppLog.i('DownloadManager', 'QQ 音质 ${q.label} 无直链，继续降级');

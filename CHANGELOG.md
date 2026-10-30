@@ -6,6 +6,27 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.2-pre8
+
+> 预发布版：**QQ 音乐「臻品 DTS:X」（DT03）解码支持**。
+
+### 🎧 臻品 DTS:X 解码（原生 dts_glue 模块）
+
+- 集成 **DTS 官方 Playback SDK**（QQ 音乐同款解码内核，CDN 下发库，
+  arm64-v8a / armeabi-v7a 双 ABI，MD5 与官方 so_info.json 锚定）
+- 新增原生模块 `dts_glue`（单 C 文件）：dlopen SDK → 注入 DSEC 许可
+  （有效期至 2033）→ 自实现 MP4 demux 提取 `dtsx` 轨（支持 co64 /
+  变长 stsz / 多轨 fourcc 匹配）→ `DTSPlayback_DecodeDTS` 循环 → WAV
+- **双 ABI QEMU 逆向验证**：arm64 与 v7a 均完成全曲解码（12847 帧
+  0 失败，输出 274.07s @48kHz，与容器元数据吻合；两 ABI 输出逐帧一致）
+- C API 签名从 SDK 官方 JNI 封装反汇编还原（InitialiseDTS 的
+  ctx 槽语义 / InstallLicense 三参 / LoadConfiguration 带 len）
+- Dart FFI 直调（无 JNI 桥），解码在后台 Isolate 秒级完成，
+  WAV 缓存到应用缓存目录，**二次播放零等待**
+- 播放链路：选 DT03 档自动走「下载 mp4 → 原生解码 → 播放 WAV」，
+  失败或不可用沿音质降级链自动回落（SQ 无损 → …）
+- x86 系列无官方解码库，运行时探测自动跳过 DT03 档
+
 ## 2.4.2-pre7
 
 > 预发布版：**网易云「臻音全景声」（Audio Vivid / AVS3-P3）解码支持**。
