@@ -207,6 +207,21 @@ class PlayerController {
   DateTime? _lastAc4Retry;
   static const _ac4RetryCooldown = Duration(seconds: 3);
 
+  /// 取流世代号（v2.4.2-pre9）：每次 [Song] 的取流请求递增。
+  ///
+  /// DT03 首播要经历「下载 mp4 + 全曲解码」（真机约 10 秒），期间用户
+  /// 看不到进度常会再点一次 —— 两条并发的 [_resolveUrl] 各自完成后
+  /// 都会去 open，后完成的 loadfile 把先完成的覆盖掉，最终听到的可能
+  /// 不是想要的音质（实测表现为 DTS 转码成功但播出来是降级档）。
+  /// 长等待返回后校验世代号，过期请求静默作废，让最新的请求唯一生效。
+  int _resolveGen = 0;
+
+  /// [_resolveUrl] 被更新请求作废时返回的哨兵 URL。
+  ///
+  /// 与空串区分开：空串意味着「确实取不到流」，多数调用方会触发自动
+  /// 跳下一首等副作用；作废则应完全静默（新请求正在接管）。
+  static const _resolveSuperseded = 'superseded://baiji/resolved-by-newer';
+
   /// QQ 音质实际生效值变化（供播放页显示"实际音质/已降级"）。
   final StreamController<Quality?> _qualityStream = StreamController.broadcast();
   Stream<Quality?> get onQualityChanged => _qualityStream.stream;
@@ -488,7 +503,9 @@ class PlayerController {
           final song2 = _currentSong;
           if (song2 != null) {
             final url = await _resolveUrl(song2);
-            if (url.isNotEmpty) await _playUrlInternal(url);
+            if (url.isNotEmpty && url != _resolveSuperseded) {
+              await _playUrlInternal(url);
+            }
           }
         } catch (e) {
           AppLog.w('PlayerController', 'baka 解码器重试失败: $e');
@@ -520,6 +537,7 @@ class PlayerController {
   Future<void> _downgradeAndReplay(Song song) async {
     final pos = position;
     final url = await _resolveUrl(song, skipCurrent: true);
+    if (url == _resolveSuperseded) return; // 被更新的取流请求接管
     if (url.isEmpty) {
       _errorStream.add('该歌曲没有可用的备用音质');
       _playState.add(false);
@@ -540,6 +558,7 @@ class PlayerController {
     _songStream.add(first);
 
     final url = await _resolveUrl(first);
+    if (url == _resolveSuperseded) return; // 被更新的取流请求接管
     if (url.isEmpty) {
       _errorStream.add('无法获取播放链接');
       _onTrackCompleted();
@@ -570,6 +589,7 @@ class PlayerController {
     _currentSong = song;
     _songStream.add(song);
     final url = await _resolveUrl(song);
+    if (url == _resolveSuperseded) return; // 被更新的取流请求接管，不跳歌
     if (url.isEmpty) {
       _onTrackCompleted();
       return;
@@ -699,9 +719,28 @@ class PlayerController {
     // 跳过当前档（AC-4 兜底）：链首即刚放不出的那一档
     if (skipCurrent && chain.length > 1) chain.removeAt(0);
 
+    final gen = ++_resolveGen;
     for (var i = 0; i < chain.length; i++) {
       final plan = chain[i];
+      final isDtsxPlan = !song.isNetease && plan.qq.code == Quality.dtsX.code;
+
+      // 臻品 DTS:X 缓存直通（v2.4.2-pre9）：DT03 的取流对短时间重复
+      // 请求有频控（连续点播返回空 URL），而重试/复播时本地多半已有
+      // 解码产物 —— 取流之前直接查缓存，命中即播，绕开频控也省掉
+      // 重复下载解码。
+      if (isDtsxPlan &&
+          DtsMusic.isSupported &&
+          gen == _resolveGen &&
+          await DtsMusic.hasCachedWav(song.mid)) {
+        final wavPath = await DtsMusic.wavPathFor(song.mid);
+        AppLog.i('PlayerController', 'DTS:X 缓存命中（跳过取流，key=${song.mid}）');
+        _applyDtsxActual();
+        return Uri.file(wavPath).toString();
+      }
+      if (gen != _resolveGen) return _resolveSuperseded; // 已有更新的取流请求，本请求作废
+
       final r = await _fetch(song, plan.qq, plan.ne);
+      if (gen != _resolveGen) return _resolveSuperseded; // 等待期间来了新请求，作废本次结果
       if (r.isNotEmpty) {
         // 臻品 DTS:X（DT03）专用管线（v2.4.2-pre8）：mpv 的 ffmpeg 没有
         // DTS UHD(P2) 解码器，走 dts_glue 原生解码 → WAV 缓存 → 本地播放。
@@ -710,7 +749,11 @@ class PlayerController {
             AppLog.i('PlayerController', '本机无 DTS:X 解码库（x86 或旧包），跳过 DT03 档');
             continue;
           }
+          if (!_noticeStream.isClosed) {
+            _noticeStream.add('臻品 DTS:X 转码中，首次播放约需 10 秒…');
+          }
           final res = await DtsMusic.decodeToWav(r.url, song.mid);
+          if (gen != _resolveGen) return _resolveSuperseded; // 解码期间来了新请求，放弃播放
           if (res != null) {
             _applyActual(r);
             _reportPlay(song, r);
@@ -728,10 +771,34 @@ class PlayerController {
       }
       AppLog.w('PlayerController',
           '${song.name} 的 ${song.isNetease ? plan.ne.label : plan.qq.label} 不可用，尝试降级');
+
+      // DT03 取流被频控打空、而同曲解码已在进行（首次点播还没完成）：
+      // 等待进行中的解码结果而不是急着降级 —— 实测重复点播第二次的
+      // GetVkey 会返回空 URL，若直接降级，解码完成时第一次请求已被
+      // 世代号作废，用户最终听到的就是降级档而非 DTS。
+      if (isDtsxPlan && DtsMusic.isSupported) {
+        final ongoing = await DtsMusic.waitOngoing(song.mid);
+        if (gen != _resolveGen) return _resolveSuperseded;
+        if (ongoing != null) {
+          AppLog.i('PlayerController', 'DTS:X 取流被频控，等待进行中的解码完成');
+          _applyDtsxActual();
+          return Uri.file(ongoing.wavPath).toString();
+        }
+      }
     }
 
     _clearActual();
     return '';
+  }
+
+  /// 广播「实际生效音质 = 臻品 DTS:X」（缓存直通路径没有取流结果可依）。
+  void _applyDtsxActual() {
+    _actualQqQuality = Quality.dtsX;
+    _actualNeQuality = null;
+    _actualKuwoQuality = null;
+    if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
+    if (!_neQualityStream.isClosed) _neQualityStream.add(null);
+    if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
   }
 
   /// 单次取流，异常统一吞掉（降级链需要继续往下走）。
@@ -804,6 +871,7 @@ class PlayerController {
     if (song == null) return;
     final pos = position;
     final url = await _resolveUrl(song);
+    if (url == _resolveSuperseded) return; // 被更新的取流请求接管
     if (url.isEmpty) {
       _errorStream.add('该歌曲没有可用的$failLabel音质');
       return;

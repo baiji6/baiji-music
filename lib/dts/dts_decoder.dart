@@ -37,6 +37,15 @@ class DtsMusic {
   static bool _probed = false;
   static bool _supported = false;
 
+  /// 进行中的解码任务（按歌曲 key 去重）。
+  ///
+  /// 首次点播 DT03 要下载 mp4 + 全曲解码（真机约 10 秒），期间用户
+  /// 看不到进度极易再点一次 —— 若两条请求各自解码，不仅重复下载，
+  /// 还会各自回调播放，后完成的 open 把先完成的覆盖掉，最终听到的
+  /// 是降级档。这里让并发请求复用同一个 Future：后来者安静等待首次
+  /// 解码的结果，只播放一次。
+  static final Map<String, Future<DtsDecodeResult?>> _inflight = {};
+
   /// 运行时探测：仅 Android 尝试加载。结果缓存，进程内只探测一次。
   static bool get isSupported {
     if (_probed) return _supported;
@@ -118,21 +127,44 @@ class DtsMusic {
     }
   }
 
+  /// 若同 key 的解码正在进行，返回该任务 Future（完成后给出结果）；
+  /// 没有进行中的任务则返回 null（调用方自行决定降级）。
+  ///
+  /// 供取流被频控打空时的等待兜底：首次点播的解码还在跑，此时重复
+  /// 点播不应另起降级链播低档，安静等首次解码完即可。
+  static Future<DtsDecodeResult?>? waitOngoing(String key) => _inflight[key];
+
   /// 下载 DT03 mp4 到缓存并解码成 WAV。
   ///
   /// [onProgress] 进度 0~100（下载+解码合并口径：下载占前 20%，解码占后 80%）。
   /// 返回 null 表示失败（调用方走音质降级链）。
+  ///
+  /// 同 [key] 的并发调用复用同一个进行中的任务（见 [_inflight]）。
   static Future<DtsDecodeResult?> decodeToWav(
     String mp4Url,
     String key, {
     void Function(int pct, String stage)? onProgress,
   }) async {
     if (!isSupported) return null;
+    final existing = _inflight[key];
+    if (existing != null) {
+      AppLog.i('DtsMusic', 'DTS:X 解码进行中（key=$key），复用既有任务');
+      try {
+        return await existing;
+      } catch (e) {
+        AppLog.w('DtsMusic', '复用的 DTS:X 解码任务失败: $e');
+        return null;
+      }
+    }
+    final task = _decodeToWavGuarded(mp4Url, key, onProgress: onProgress);
+    _inflight[key] = task;
     try {
-      return await _decodeToWavGuarded(mp4Url, key, onProgress: onProgress);
+      return await task;
     } catch (e) {
       AppLog.e('DtsMusic', 'DTS:X 链路异常: $e');
       return null;
+    } finally {
+      _inflight.remove(key);
     }
   }
 
