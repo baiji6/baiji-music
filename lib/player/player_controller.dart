@@ -9,6 +9,7 @@ import 'package:baiji_music/local/local_scanner.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_link.dart';
 import 'package:baiji_music/network/music_api.dart';
+import 'package:baiji_music/ra360/ra360_decoder.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
@@ -723,8 +724,11 @@ class PlayerController {
     for (var i = 0; i < chain.length; i++) {
       final plan = chain[i];
       final isDtsxPlan = !song.isNetease && plan.qq.code == Quality.dtsX.code;
+      // 索尼 360RA（v2.4.2-pre11）：RA01-04 与 DT03 同型——原生管线解码。
+      final isRa360Plan =
+          !song.isNetease && plan.qq.code.startsWith('RA0');
 
-      // 臻品 DTS:X 缓存直通（v2.4.2-pre9）：DT03 的取流对短时间重复
+      // 臻品 DTS:X / 索尼 360RA 缓存直通：这类档位的取流对短时间重复
       // 请求有频控（连续点播返回空 URL），而重试/复播时本地多半已有
       // 解码产物 —— 取流之前直接查缓存，命中即播，绕开频控也省掉
       // 重复下载解码。
@@ -735,6 +739,15 @@ class PlayerController {
         final wavPath = await DtsMusic.wavPathFor(song.mid);
         AppLog.i('PlayerController', 'DTS:X 缓存命中（跳过取流，key=${song.mid}）');
         _applyDtsxActual();
+        return Uri.file(wavPath).toString();
+      }
+      if (isRa360Plan &&
+          Ra360Music.isSupported &&
+          gen == _resolveGen &&
+          await Ra360Music.hasCachedWav(song.mid)) {
+        final wavPath = await Ra360Music.wavPathFor(song.mid);
+        AppLog.i('PlayerController', '360RA 缓存命中（跳过取流，key=${song.mid}）');
+        _applyRa360Actual(plan.qq);
         return Uri.file(wavPath).toString();
       }
       if (gen != _resolveGen) return _resolveSuperseded; // 已有更新的取流请求，本请求作废
@@ -762,6 +775,27 @@ class PlayerController {
           AppLog.w('PlayerController', 'DTS:X 解码失败，沿降级链继续');
           continue;
         }
+        // 索尼 360RA（RA01-04）专用管线（v2.4.2-pre11）：MPEG-H 3D Audio
+        // 无通用解码器，走 ra360_glue + 官方 decoder + BRIR 系数 binaural
+        // 解码 → 48k/32bit WAV 缓存 → 本地播放。
+        if (r.qq?.code.startsWith('RA0') == true) {
+          if (!Ra360Music.isSupported) {
+            AppLog.i('PlayerController', '本机无 360RA 解码库（非 arm64 或旧包），跳过 RA0x 档');
+            continue;
+          }
+          if (!_noticeStream.isClosed) {
+            _noticeStream.add('索尼 360RA 转码中，首次播放约需 10 秒…');
+          }
+          final res = await Ra360Music.decodeToWav(r.url, song.mid);
+          if (gen != _resolveGen) return _resolveSuperseded;
+          if (res != null) {
+            _applyActual(r);
+            _reportPlay(song, r);
+            return Uri.file(res.wavPath).toString();
+          }
+          AppLog.w('PlayerController', '360RA 解码失败，沿降级链继续');
+          continue;
+        }
         if (i > 0) {
           AppLog.i('PlayerController', '降级成功 -> ${r.label}');
         }
@@ -772,16 +806,25 @@ class PlayerController {
       AppLog.w('PlayerController',
           '${song.name} 的 ${song.isNetease ? plan.ne.label : plan.qq.label} 不可用，尝试降级');
 
-      // DT03 取流被频控打空、而同曲解码已在进行（首次点播还没完成）：
-      // 等待进行中的解码结果而不是急着降级 —— 实测重复点播第二次的
-      // GetVkey 会返回空 URL，若直接降级，解码完成时第一次请求已被
-      // 世代号作废，用户最终听到的就是降级档而非 DTS。
+      // DT03 / RA0x 取流被频控打空、而同曲解码已在进行（首次点播还没
+      // 完成）：等待进行中的解码结果而不是急着降级 —— 实测重复点播第二
+      // 次的 GetVkey 会返回空 URL，若直接降级，解码完成时第一次请求已被
+      // 世代号作废，用户最终听到的就是降级档而非首选档。
       if (isDtsxPlan && DtsMusic.isSupported) {
         final ongoing = await DtsMusic.waitOngoing(song.mid);
         if (gen != _resolveGen) return _resolveSuperseded;
         if (ongoing != null) {
           AppLog.i('PlayerController', 'DTS:X 取流被频控，等待进行中的解码完成');
           _applyDtsxActual();
+          return Uri.file(ongoing.wavPath).toString();
+        }
+      }
+      if (isRa360Plan && Ra360Music.isSupported) {
+        final ongoing = await Ra360Music.waitOngoing(song.mid);
+        if (gen != _resolveGen) return _resolveSuperseded;
+        if (ongoing != null) {
+          AppLog.i('PlayerController', '360RA 取流被频控，等待进行中的解码完成');
+          _applyRa360Actual(plan.qq);
           return Uri.file(ongoing.wavPath).toString();
         }
       }
@@ -794,6 +837,16 @@ class PlayerController {
   /// 广播「实际生效音质 = 臻品 DTS:X」（缓存直通路径没有取流结果可依）。
   void _applyDtsxActual() {
     _actualQqQuality = Quality.dtsX;
+    _actualNeQuality = null;
+    _actualKuwoQuality = null;
+    if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
+    if (!_neQualityStream.isClosed) _neQualityStream.add(null);
+    if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
+  }
+
+  /// 广播「实际生效音质 = 360RA [q]」（缓存直通路径没有取流结果可依）。
+  void _applyRa360Actual(Quality q) {
+    _actualQqQuality = q;
     _actualNeQuality = null;
     _actualKuwoQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);

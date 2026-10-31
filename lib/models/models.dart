@@ -144,6 +144,13 @@ class Quality {
   const Quality(this.code, this.ext, this.label, this.bitrate);
 
   static const dtsX = Quality('DT03', '.mp4', 'DTS:X', 0);
+  // 索尼 360RA（RA01-04，v2.4.2-pre11）：MHA1/MHM1 容器的 MPEG-H 3D Audio
+  // 流，mpv 的 ffmpeg 无解码器，走 ra360_glue 原生 binaural 解码（官方
+  // decoder + BRIR 系数，48kHz/32bit/2ch 输出）。四档同管线不同码率。
+  static const ra360d = Quality('RA04', '.mp4', '索尼 360RA RA04', 0);
+  static const ra360c = Quality('RA03', '.mp4', '索尼 360RA RA03', 0);
+  static const ra360b = Quality('RA02', '.mp4', '索尼 360RA RA02', 0);
+  static const ra360a = Quality('RA01', '.mp4', '索尼 360RA RA01', 0);
   static const atmosEac3Plus = Quality('D003', '.mp4', '杜比全景声 815k', 0);
   static const atmosEac3 = Quality('D002', '.mp4', '杜比全景声 680k', 0);
   static const atmosEac3Lite = Quality('D001', '.mp4', '杜比全景声 475k', 0);
@@ -152,6 +159,9 @@ class Quality {
   static const atmos51 = Quality('Q001', '.flac', '臻品全景声 5.1', 0);
   static const atmos2 = Quality('Q000', '.flac', '臻品音质', 0);
   static const master = Quality('AI00', '.flac', '臻品母带', 0);
+  // 黑胶 VIP（V0M0，v2.4.2-pre11）：24bit 高解析 mflac（QMCv2 加密），
+  // 与母带/无损同走 ekey+本地流式解密中继，无独立解码管线。
+  static const vinylVip = Quality('V0M0', '.mflac', '黑胶 VIP', 0);
   static const flac = Quality('F000', '.flac', 'SQ 无损', 0);
   static const hires = Quality('RS01', '.flac', 'Hi-Res', 0);
   static const nac = Quality('TL01', '.nac', 'NAC 音质', 128);
@@ -176,6 +186,10 @@ class Quality {
   /// 选它们才能在本机真正听到杜比全景声。
   static const downloadOptions = [
     dtsX,
+    ra360d,
+    ra360c,
+    ra360b,
+    ra360a,
     atmosEac3Plus,
     atmosEac3,
     atmosEac3Lite,
@@ -184,6 +198,7 @@ class Quality {
     atmos51,
     atmos2,
     master,
+    vinylVip,
     flac,
     hires,
     nac,
