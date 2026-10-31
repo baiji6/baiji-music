@@ -7,6 +7,7 @@ import 'package:baiji_music/core/telemetry.dart';
 import 'package:baiji_music/dts/dts_decoder.dart';
 import 'package:baiji_music/local/local_scanner.dart';
 import 'package:baiji_music/models/models.dart';
+import 'package:baiji_music/nac/nac_decoder.dart';
 import 'package:baiji_music/network/kuwo/kuwo_link.dart';
 import 'package:baiji_music/network/music_api.dart';
 import 'package:baiji_music/ra360/ra360_decoder.dart';
@@ -727,6 +728,9 @@ class PlayerController {
       // 索尼 360RA（v2.4.2-pre11）：RA01-04 与 DT03 同型——原生管线解码。
       final isRa360Plan =
           !song.isNetease && plan.qq.code.startsWith('RA0');
+      // NAC（v2.4.2-pre12）：TL01 神经音频编解码，码流是矢量量化码字，
+      // 必须经 MNN 模型推理重建频谱再 ISTFT，走 nac_glue 自研管线。
+      final isNacPlan = !song.isNetease && plan.qq.code == Quality.nac.code;
 
       // 臻品 DTS:X / 索尼 360RA 缓存直通：这类档位的取流对短时间重复
       // 请求有频控（连续点播返回空 URL），而重试/复播时本地多半已有
@@ -748,6 +752,15 @@ class PlayerController {
         final wavPath = await Ra360Music.wavPathFor(song.mid);
         AppLog.i('PlayerController', '360RA 缓存命中（跳过取流，key=${song.mid}）');
         _applyRa360Actual(plan.qq);
+        return Uri.file(wavPath).toString();
+      }
+      if (isNacPlan &&
+          NacMusic.isSupported &&
+          gen == _resolveGen &&
+          await NacMusic.hasCachedWav(song.mid)) {
+        final wavPath = await NacMusic.wavPathFor(song.mid);
+        AppLog.i('PlayerController', 'NAC 缓存命中（跳过取流，key=${song.mid}）');
+        _applyNacActual();
         return Uri.file(wavPath).toString();
       }
       if (gen != _resolveGen) return _resolveSuperseded; // 已有更新的取流请求，本请求作废
@@ -796,6 +809,27 @@ class PlayerController {
           AppLog.w('PlayerController', '360RA 解码失败，沿降级链继续');
           continue;
         }
+        // NAC（TL01）专用管线（v2.4.2-pre12）：码流是矢量量化码字，
+        // 走 nac_glue（容器解析 + codes 解包 + MNN 推理 + ISTFT）
+        // → 44.1k/16bit/2ch WAV 缓存 → 本地播放。
+        if (r.qq?.code == Quality.nac.code) {
+          if (!NacMusic.isSupported) {
+            AppLog.i('PlayerController', '本机无 NAC 解码库（非 arm64 或旧包），跳过 TL01 档');
+            continue;
+          }
+          if (!_noticeStream.isClosed) {
+            _noticeStream.add('NAC 神经解码中，首次播放约需 1 分钟…');
+          }
+          final res = await NacMusic.decodeToWav(r.url, song.mid);
+          if (gen != _resolveGen) return _resolveSuperseded;
+          if (res != null) {
+            _applyActual(r);
+            _reportPlay(song, r);
+            return Uri.file(res.wavPath).toString();
+          }
+          AppLog.w('PlayerController', 'NAC 解码失败，沿降级链继续');
+          continue;
+        }
         if (i > 0) {
           AppLog.i('PlayerController', '降级成功 -> ${r.label}');
         }
@@ -828,6 +862,15 @@ class PlayerController {
           return Uri.file(ongoing.wavPath).toString();
         }
       }
+      if (isNacPlan && NacMusic.isSupported) {
+        final ongoing = await NacMusic.waitOngoing(song.mid);
+        if (gen != _resolveGen) return _resolveSuperseded;
+        if (ongoing != null) {
+          AppLog.i('PlayerController', 'NAC 取流被频控，等待进行中的解码完成');
+          _applyNacActual();
+          return Uri.file(ongoing.wavPath).toString();
+        }
+      }
     }
 
     _clearActual();
@@ -847,6 +890,16 @@ class PlayerController {
   /// 广播「实际生效音质 = 360RA [q]」（缓存直通路径没有取流结果可依）。
   void _applyRa360Actual(Quality q) {
     _actualQqQuality = q;
+    _actualNeQuality = null;
+    _actualKuwoQuality = null;
+    if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
+    if (!_neQualityStream.isClosed) _neQualityStream.add(null);
+    if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
+  }
+
+  /// 广播「实际生效音质 = NAC（TL01）」（缓存直通路径没有取流结果可依）。
+  void _applyNacActual() {
+    _actualQqQuality = Quality.nac;
     _actualNeQuality = null;
     _actualKuwoQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);

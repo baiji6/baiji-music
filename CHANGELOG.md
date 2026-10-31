@@ -6,6 +6,28 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.2-pre12
+
+> 预发布版：新增 NAC（TL01）神经音频编解码音质档。
+
+### 🧠 NAC 神经音频解码（TL01，全新档位）
+
+QQ 音乐自研 Neural Audio Codec：码流里存的不是 PCM 也不是频域数据，而是
+**矢量量化码字（codes）**，必须经神经网络模型前向推理重建复数频谱，
+再由 ISTFT 还原波形。新增自研原生管线（`nac_glue`）：
+
+- **容器解析**：108B 头（含 JSON 元数据）+ N 段 × stride
+- **codes 解包**：LSB-first 连续位流，每码 10 bit，
+  读取序 `[ch][frame][cb]` → 存储序 `[ch][cb][frame]`（需转置）
+- **MNN 推理**：运行时 dlopen 官方 `libMNN_dl.so`（arm64，Apache-2.0），
+  输入 `codes(2,22,32)` int32 + 6 个流式 buffer（逐段回灌状态）
+- **ISTFT**：Hann(512) / hop 256 / 重叠相加归一化，输出
+  44.1kHz / 16-bit / 立体声 WAV
+- **模型内置**：`quantizer_decoder_cb22_hardswish_1113_N3_fp16_2_2_34_257.mnn`
+  （1.2MB，随包分发，无需服务端下发）
+
+实测全曲 260.63s 解码零错误，输出与官方解码器逐比特一致。
+
 ## 2.4.2-pre11
 
 > 预发布版：新增索尼 360RA 与黑胶 VIP 两个高端音质档。
