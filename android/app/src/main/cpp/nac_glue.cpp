@@ -159,6 +159,8 @@ static FnRunSession g_runSession = NULL;
 static FnDestroy g_destroy = NULL;
 static FnTensorCopyFrom g_copyFromBuf = NULL;
 static FnTensorCopyTo g_copyToBuf = NULL;
+/* 符号是否已绑定成功（进程内只需一次） */
+static int g_bindOk = 0;
 
 /* 流式状态缓冲 */
 struct BufSpec {
@@ -416,24 +418,19 @@ const char *nacglue_probe_detail(void) {
 }
 
 /*
- * 加载模型并建立推理 session。
- * 返回 0 成功；-1 路径为空；-2 dlopen 失败；-3 创建失败。
+ * 绑定 MNN 符号：dlopen 官方库 + dlsym 取所需符号。
+ * 不加载模型、不涉及任何外部配置，失败详情写入 g_probe_err。
+ * 返回 0 成功；-1 dlopen 失败；-2 符号缺失。
  */
-int nacglue_init(const char *model_path) {
-    if (g_sess) return 0;
-    if (!model_path || !model_path[0]) return -1;
-    if (mnnLoad() != 0) return -2;
-
-    /* ScheduleConfig：全零 + CPU 后端 + 4 线程（等价默认构造） */
-    MNNScheduleConfig cfg;
-    memset(&cfg, 0, sizeof cfg);
-    *(int *)(cfg.raw + 28) = 4;
+static int mnnBind() {
+    if (g_bindOk) return 0;
+    if (mnnLoad() != 0) return -1;
 
     typedef void *(*FnGetTbl)();
     FnGetTbl getT = (FnGetTbl)dlsym(g_lib, "MNNGetTensorFunc");
     if (!getT) {
         setErr("missing MNNGetTensorFunc");
-        return -3;
+        return -2;
     }
 
     /* Interpreter / Session：直接取导出的 C++ 符号 */
@@ -459,8 +456,25 @@ int nacglue_init(const char *model_path) {
     if (!g_createFromFile || !g_createSession || !g_runSession ||
         !g_getInput || !g_getOutput || !g_copyFromBuf || !g_copyToBuf) {
         setErr("missing MNN symbols (create/session/tensor)");
-        return -3;
+        return -2;
     }
+    g_bindOk = 1;
+    return 0;
+}
+
+/*
+ * 加载模型并建立推理 session。
+ * 返回 0 成功；-1 路径为空；-2 库/符号不可用；-3 创建失败。
+ */
+int nacglue_init(const char *model_path) {
+    if (g_sess) return 0;
+    if (!model_path || !model_path[0]) return -1;
+    if (mnnBind() != 0) return -2;
+
+    /* ScheduleConfig：全零 + CPU 后端 + 4 线程（等价默认构造） */
+    MNNScheduleConfig cfg;
+    memset(&cfg, 0, sizeof cfg);
+    *(int *)(cfg.raw + 28) = 4;
 
     void *interp = g_createFromFile(model_path);
     LOGI("createFromFile(%s) -> %p", model_path, interp);
@@ -491,17 +505,32 @@ int nacglue_init(const char *model_path) {
 }
 
 /*
- * 引擎自检：加载模型 + 建 session + 跑一次零输入推理。
- * 真机上模型/推理不可用时可立即降级，不等用户点播放才崩。
+ * 引擎自检（App 用）：只确认 libMNN_dl.so 可加载、所需符号齐全。
+ *
+ * 刻意**不加载模型、不读环境变量**——模型的真实路径来自 App 把 assets
+ * 解包到私有目录的结果（<cache>/nac/7187332.mnn），而本函数在启动阶段
+ * 就会被调用，那时路径还没算出来。早期版本用 getenv("NAC_MODEL_PATH")
+ * 兜底，结果 App 里没人设置它，探测恒为 0，NAC 档被静默降级。
+ * 模型缺失/损坏由 nacglue_init 在真正解码时报错，走同样的降级链。
  */
 int nacglue_abi_available(void) {
     if (g_sess) return 1;
-    const char *model = getenv("NAC_MODEL_PATH");
-    if (!model || !model[0]) {
-        setErr("NAC_MODEL_PATH not set");
+    if (mnnBind() != 0) return 0;
+    LOGI("engine self-check passed (symbols ok)");
+    return 1;
+}
+
+/*
+ * 完整自检（工具 / 测试用）：在引擎可用的基础上再加载模型、建 session、
+ * 跑一次零输入推理，需要显式给出模型路径。App 不需要调用它。
+ */
+int nacglue_probe(const char *model_path) {
+    if (nacglue_abi_available() != 1) return 0;
+    if (!model_path || !model_path[0]) {
+        setErr("nacglue_probe: empty model path");
         return 0;
     }
-    if (nacglue_init(model) != 0) return 0;
+    if (nacglue_init(model_path) != 0) return 0;
 
     /* 烟测：喂零 codes，确认整图可跑通且能取到 freq（name 为 C 串） */
     void *tCodes = g_getInput(g_interp, g_sess, "codes");
@@ -514,7 +543,7 @@ int nacglue_abi_available(void) {
         setErr("smoke: runSession failed");
         return 0;
     }
-    LOGI("engine self-check passed");
+    LOGI("full self-check passed (model + inference ok)");
     return 1;
 }
 
