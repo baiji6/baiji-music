@@ -17,6 +17,7 @@ import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/core/album_saver.dart';
 import 'package:baiji_music/ui/pages/netease_login_page.dart';
+import 'package:baiji_music/ui/pages/mv_page.dart';
 import 'package:baiji_music/ui/pages/song_comment_page.dart';
 import 'package:baiji_music/ui/widgets/app_snackbar.dart';
 import 'package:baiji_music/ui/widgets/amll_lyrics_view.dart';
@@ -228,6 +229,25 @@ class _PlayerPageState extends State<PlayerPage> {
     setState(() => _playing = !_playing);
     _player.toggle();
     await Future<void>.delayed(const Duration(milliseconds: 220));
+    if (!mounted) return;
+    setState(() => _playing = _player.isPlaying);
+  }
+
+  /// 打开当前歌曲的 MV（v2.4.3）。
+  ///
+  /// 先暂停音乐再进页面（视频音频抢焦点会互相打断）；mvId 为空时由
+  /// MvPage → MvApi.fetch 内部兜底查详情（QQ song detail / 网易 v3
+  /// song detail / 酷我直接按 rid 播放）。
+  Future<void> _openMv() async {
+    final s = _song;
+    if (s == null || s.isLocal || !mvSupportedPlatform) return;
+    if (_player.isPlaying) _player.toggle();
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => MvPage(
+        song: s,
+        onPauseMusic: () {},
+      ),
+    ));
     if (!mounted) return;
     setState(() => _playing = _player.isPlaying);
   }
@@ -574,6 +594,14 @@ class _PlayerPageState extends State<PlayerPage> {
             const Spacer(),
             if (song != null) _SourceChip(song: song),
             const SizedBox(width: 4),
+            // MV（v2.4.3）：三平台网络歌曲；WebView 覆盖 Android/iOS/macOS，
+            // 桌面端隐藏。打开时自动暂停音乐，mvId 为空由 MvPage 兜底查询。
+            if (song != null && !song.isLocal && mvSupportedPlatform)
+              MiuixIconButton(
+                onPressed: _openMv,
+                child: Icon(Icons.movie_outlined,
+                    size: 20, color: AppPalette.dark.textSecondary),
+              ),
             // 评论（QQ / 网易云 / 酷我）：未登录可看；登录后可发/回复/点赞
             // （酷我走 App 私有 ar 协议，v2.4.2 真机验证）；本地歌曲无评论
             MiuixIconButton(

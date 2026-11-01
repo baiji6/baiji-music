@@ -357,6 +357,12 @@ class Song {
   final int duration;
   final String cover;
 
+  /// 关联 MV 的 id（v2.4.3；空 = 未知或无 MV）。
+  ///
+  /// QQ：字符串型 vid（如 `w0026q7f01a`，GetMvUrls 只认这种）；网易：数字
+  /// mvid 字符串；酷我：搜索接口不带 MVID，恒为空（播放时按 rid 现查）。
+  final String mvId;
+
   /// 音源：qq / netease / local。
   final String source;
 
@@ -384,6 +390,7 @@ class Song {
     required this.duration,
     required this.cover,
     this.source = Source.qq,
+    this.mvId = '',
     this.localPath = '',
     this.localSize = 0,
     this.localMtime = 0,
@@ -477,6 +484,21 @@ class Song {
     }
     final duration = ((t['interval'] as num?)?.toInt() ?? 0) * 1000;
 
+    // MV：track.mv = {id: 293791, vid: "w0026q7f01a", ...}。
+    // GetMvUrls 只认 vid（纯数字 id 接口不认），且 vt!=0 是翻唱/低质关联，
+    // 同样不作为 MV 按钮依据。
+    final mvObj = t['mv'];
+    var mvId = '';
+    if (mvObj is Map<String, dynamic>) {
+      final vid = mvObj['vid']?.toString() ?? '';
+      final vt = mvObj['vt'] as num? ?? 0;
+      if (vt == 0 && vid.isNotEmpty && !RegExp(r'^\d+$').hasMatch(vid)) {
+        mvId = vid;
+      }
+    } else if (mvObj is String && mvObj.isNotEmpty) {
+      mvId = mvObj;
+    }
+
     return Song(
       mid: mid,
       songId: (t['id'] as num?)?.toInt() ?? 0,
@@ -486,6 +508,7 @@ class Song {
       albumMid: albumMid,
       duration: duration,
       cover: cover,
+      mvId: mvId,
     );
   }
 
@@ -500,6 +523,7 @@ class Song {
         duration: (map['duration'] as num?)?.toInt() ?? 0,
         cover: map['cover'] as String? ?? '',
         source: map['source'] as String? ?? Source.qq,
+        mvId: map['mvId'] as String? ?? '',
         localPath: map['localPath'] as String? ?? '',
         localSize: (map['localSize'] as num?)?.toInt() ?? 0,
         localMtime: (map['localMtime'] as num?)?.toInt() ?? 0,
@@ -516,6 +540,7 @@ class Song {
         'duration': duration,
         'cover': cover,
         'source': source,
+        if (mvId.isNotEmpty) 'mvId': mvId,
         if (localPath.isNotEmpty) 'localPath': localPath,
         if (localPath.isNotEmpty) 'localSize': localSize,
         if (localPath.isNotEmpty) 'localMtime': localMtime,
@@ -533,6 +558,7 @@ class Song {
     int? duration,
     String? cover,
     String? source,
+    String? mvId,
     String? localPath,
     int? localSize,
     int? localMtime,
@@ -548,6 +574,7 @@ class Song {
         duration: duration ?? this.duration,
         cover: cover ?? this.cover,
         source: source ?? this.source,
+        mvId: mvId ?? this.mvId,
         localPath: localPath ?? this.localPath,
         localSize: localSize ?? this.localSize,
         localMtime: localMtime ?? this.localMtime,

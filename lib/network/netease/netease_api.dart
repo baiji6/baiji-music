@@ -269,6 +269,13 @@ class NeteaseApi {
     var duration = (o['dt'] as num?)?.toInt() ?? 0;
     if (duration <= 0) duration = (o['duration'] as num?)?.toInt() ?? 0;
 
+    // MV id：搜索（cloudsearch）与详情（v3 song detail）的歌曲对象都带
+    // `mv` 数字字段，0 = 无 MV（v2.4.3）。
+    final mvRaw = o['mv'] ?? o['mvid'];
+    final mvNum = mvRaw is num
+        ? mvRaw.toInt()
+        : int.tryParse('${mvRaw ?? ''}') ?? 0;
+
     return Song(
       mid: 'ne$id',
       songId: id,
@@ -279,6 +286,7 @@ class NeteaseApi {
       duration: duration,
       cover: cover,
       source: Source.netease,
+      mvId: mvNum > 0 ? '$mvNum' : '',
     );
   }
 

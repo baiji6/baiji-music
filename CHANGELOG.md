@@ -6,6 +6,34 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.3
+
+### 🎬 新增 MV 播放（三平台：QQ 音乐 / 网易云 / 酷我）
+
+播放页顶栏新增 MV 按钮（本地歌曲不显示，桌面端暂不支持），打开时自动暂停音乐：
+- **QQ 音乐**：`GetMvUrls` 接口按 vid 取流，支持 360p–4k 多档画质（实测同一 MV 各档
+  可用性不同，自动落在 ≤ 请求档的最高可用档），多 CDN 备用地址
+- **网易云**：`/weapi/song/enhance/play/mv/url`（weapi 加密，登录后可看部分 VIP MV），
+  r 参数指定分辨率；MV id 由歌曲详情现查
+- **酷我**：`playUrl?type=mv` 关联 MV 直链（实测可播）；有 vid 时走 anymatch 接口
+  指定画质档（MP4L→MP4BD）
+
+技术要点：
+- **本地防盗链中继**：三平台 MV CDN 都校验 Referer/UA，WebView 拿不到自定义请求头，
+  故 `<video>` 指向 `127.0.0.1` 中继注入头；Range 透传（206）保证进度条拖动可用
+- **播放实现选 WebView**（HTML5 `<video>`）而非 media_kit：换 `media_kit_libs_video`
+  会顶掉自编译的 AC-4 补丁库（杜比全景声音质依赖），MV 不能牺牲音乐功能；
+  webview_flutter 本就是现有依赖，覆盖 Android / iOS / macOS，桌面端隐藏入口
+- mvId 持久化进 Song 模型；旧数据（历史/歌单）无 mvId 时点按钮现查详情兜底
+  （QQ song detail / 网易 v3 song detail / 酷我按 rid 播放本就不需要）
+
+端到端实测（发布前）：QQ 晴天 MV（720p 源 59.6MB）、网易云光年之外 MV（1080p
+82.8MB）、酷我晴天关联 MV（25.4MB）三平台全部取源成功，Range 拉流均 206。
+
+### 其他
+
+- `webview_flutter_android` 升为直接依赖（MV 页自动播放手势开关需要其平台 API）
+
 ## 2.4.2-pre13
 
 ### 🐛 修复 NAC 音质档在真机上从不生效（pre12 回归）
