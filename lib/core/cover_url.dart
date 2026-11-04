@@ -38,7 +38,12 @@ class CoverUrl {
   ///
   /// 保留同步 getter 以兼容历史持久化数据与所有只需要一个 URL 的场景；
   /// 真正需要降级的 UI 请走 [candidates] + [CoverImage]。
-  static String primary(Song song) => candidates(song).first;
+  /// 默认展示用 URL（= 最大档位）；无可用封面时返回空串而非抛
+  /// `StateError`。[candidates] 的契约允许返回空列表，这里不能直接 `.first`。
+  static String primary(Song song) {
+    final list = candidates(song);
+    return list.isEmpty ? '' : list.first;
+  }
 
   /// 封面候选 URL，按「最大 → 最小」排列；无可用封面时返回空列表。
   static List<String> candidates(Song song) {

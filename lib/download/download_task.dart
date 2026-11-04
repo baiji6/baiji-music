@@ -256,6 +256,17 @@ class DownloadTaskRegistry {
 
   Stream<List<DownloadTask>> get changes => _changes.stream;
 
+  /// 终态清理：关闭任务变更广播流。幂等，可重复调用。
+  ///
+  /// [_emit] 已带 `isClosed` 防护，关闭后残留的异步回调不会抛
+  /// `Bad state: Cannot add event after closing`。作为进程级单例，正常
+  /// 退出由系统回收即可；此方法主要供应用退出路径与测试 teardown 显式
+  /// 释放订阅者引用。调用后本单例不再广播变更，请勿在可重建的
+  /// `State.dispose` 中调用。
+  void dispose() {
+    if (!_changes.isClosed) _changes.close();
+  }
+
   // ===== 对外操作 =====
 
   /// 登记一个新任务（状态 [DownloadTaskState.queued]）。

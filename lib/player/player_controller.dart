@@ -51,6 +51,15 @@ class PlayerController {
 
   Player? _player;
   Song? _currentSong;
+
+  /// media_kit 原生流的订阅句柄。[_ensurePlayer] 每次会注册 6 个监听，
+  /// [release] 必须逐个 cancel，否则播放器重建后旧订阅仍挂在旧 player 上，
+  /// 反复重建会持续累积（这才是真正的泄漏源；12 个广播流随单例常驻，
+  /// 本身不是 OS 资源，close 反而会让 final 控制器永久报废）。
+  final List<StreamSubscription<dynamic>> _playerSubs = [];
+
+  /// 终态标记：[dispose] 关闭广播流后本单例不可再用。
+  bool _disposed = false;
   final List<Song> _queue = [];
   int _queueIndex = -1;
 
@@ -244,6 +253,11 @@ class PlayerController {
 
   // ===== 初始化 =====
 
+  /// 统一登记 media_kit 原生流订阅，便于 [release] 集中取消。
+  void _sub<T>(Stream<T> stream, void Function(T) onData) {
+    _playerSubs.add(stream.listen(onData));
+  }
+
   void _ensurePlayer() {
     if (_player != null) return;
     _player = Player();
@@ -305,15 +319,15 @@ class PlayerController {
 
     // native 边界回调统一包 try-catch：media_kit 在 release 下回调里抛出的
     // 异常（典型为 null check）会冒泡成 FATAL 闪退，这里降级为 ERROR 日志。
-    _player!.stream.playing.listen((playing) {
+    _sub(_player!.stream.playing, (playing) {
       try {
-        _playState.add(playing);
+        if (!_playState.isClosed) _playState.add(playing);
       } catch (e, s) {
         AppLog.e('PlayerController', 'playing 回调异常: $e\n$s');
       }
     });
 
-    _player!.stream.completed.listen((completed) {
+    _sub(_player!.stream.completed, (completed) {
       try {
         if (completed) {
           _onTrackCompleted();
@@ -323,23 +337,23 @@ class PlayerController {
       }
     });
 
-    _player!.stream.position.listen((position) {
+    _sub(_player!.stream.position, (position) {
       try {
-        _positionStream.add(position);
+        if (!_positionStream.isClosed) _positionStream.add(position);
       } catch (e, s) {
         AppLog.e('PlayerController', 'position 回调异常: $e\n$s');
       }
     });
 
-    _player!.stream.duration.listen((duration) {
+    _sub(_player!.stream.duration, (duration) {
       try {
-        _durationStream.add(duration);
+        if (!_durationStream.isClosed) _durationStream.add(duration);
       } catch (e, s) {
         AppLog.e('PlayerController', 'duration 回调异常: $e\n$s');
       }
     });
 
-    _player!.stream.error.listen((error) {
+    _sub(_player!.stream.error, (error) {
       try {
         AppLog.e('PlayerController', 'media_kit 错误: $error');
         // AC-4 第二信号：部分容器/旧 mpv 下轨道信息不全，直接报解码器
@@ -351,8 +365,8 @@ class PlayerController {
           _onAc4Detected('error: $error');
           return;
         }
-        _errorStream.add('播放错误: $error');
-        _playState.add(false);
+        if (!_errorStream.isClosed) _errorStream.add('播放错误: $error');
+        if (!_playState.isClosed) _playState.add(false);
       } catch (e, s) {
         AppLog.e('PlayerController', 'error 回调异常: $e\n$s');
       }
@@ -361,7 +375,7 @@ class PlayerController {
     // v2.4.2：libmpv 轨道列表回调——AC-4 兜底检测的第一信号。
     // avformat 在解容器阶段就能报出 codec，即使没有解码器，
     // track-list 里依然带着 codec=ac4，比等 error 更早也更可靠。
-    _player!.stream.tracks.listen((tracks) {
+    _sub(_player!.stream.tracks, (tracks) {
       try {
         // v2.4.2-pre5：完整播放链路日志——用的什么解码器一目了然。
         // （track.decoder 是 mpv 的 decoder-desc：如 jellyfin 移植版是
@@ -423,8 +437,8 @@ class PlayerController {
     _ensurePlayer();
     if (url.trim().isEmpty) {
       AppLog.w('PlayerController', '播放链接为空，已跳过 open');
-      _errorStream.add('播放链接为空');
-      _playState.add(false);
+      if (!_errorStream.isClosed) _errorStream.add('播放链接为空');
+      if (!_playState.isClosed) _playState.add(false);
       return;
     }
     try {
@@ -442,8 +456,8 @@ class PlayerController {
       AppLog.i('PlayerController', '播放: $url');
     } catch (e) {
       AppLog.e('PlayerController', '播放失败: $e');
-      _errorStream.add('播放失败: $e');
-      _playState.add(false);
+      if (!_errorStream.isClosed) _errorStream.add('播放失败: $e');
+      if (!_playState.isClosed) _playState.add(false);
     }
   }
 
@@ -467,7 +481,7 @@ class PlayerController {
       _clearTempQuality();
     }
     _currentSong = song;
-    _songStream.add(song);
+    if (!_songStream.isClosed) _songStream.add(song);
     await _playUrlInternal(url);
   }
 
@@ -494,7 +508,7 @@ class PlayerController {
       AppLog.w('PlayerController',
           'AC-4 解码报错（$source），切换到 baka Rust 解码器重试');
       if (!_noticeStream.isClosed) {
-        _noticeStream.add('AC-4 解码失败，已切换备用解码器重试');
+        if (!_noticeStream.isClosed) _noticeStream.add('AC-4 解码失败，已切换备用解码器重试');
       }
       unawaited(Future(() async {
         try {
@@ -518,8 +532,8 @@ class PlayerController {
 
     if (_ac4Budget <= 0) {
       AppLog.e('PlayerController', 'AC-4 降级预算已用完（$source），放弃重试');
-      _errorStream.add('该曲目的杜比全景声(AC-4)本机暂不支持播放');
-      _playState.add(false);
+      if (!_errorStream.isClosed) _errorStream.add('该曲目的杜比全景声(AC-4)本机暂不支持播放');
+      if (!_playState.isClosed) _playState.add(false);
       return;
     }
     _ac4Budget--;
@@ -527,7 +541,7 @@ class PlayerController {
     AppLog.w('PlayerController',
         '检测到 AC-4 音轨（$source），自动降级重试（剩余 $_ac4Budget 次）');
     if (!_noticeStream.isClosed) {
-      _noticeStream.add('「杜比全景声(AC-4)」本机暂不支持，已自动切换到可播放音质');
+      if (!_noticeStream.isClosed) _noticeStream.add('「杜比全景声(AC-4)」本机暂不支持，已自动切换到可播放音质');
     }
     _downgradeAndReplay(song);
   }
@@ -541,8 +555,8 @@ class PlayerController {
     final url = await _resolveUrl(song, skipCurrent: true);
     if (url == _resolveSuperseded) return; // 被更新的取流请求接管
     if (url.isEmpty) {
-      _errorStream.add('该歌曲没有可用的备用音质');
-      _playState.add(false);
+      if (!_errorStream.isClosed) _errorStream.add('该歌曲没有可用的备用音质');
+      if (!_playState.isClosed) _playState.add(false);
       return;
     }
     await _playUrlInternal(url);
@@ -557,12 +571,12 @@ class PlayerController {
     _queueIndex = startIndex.clamp(0, songs.length - 1);
     final first = _queue[_queueIndex];
     _currentSong = first;
-    _songStream.add(first);
+    if (!_songStream.isClosed) _songStream.add(first);
 
     final url = await _resolveUrl(first);
     if (url == _resolveSuperseded) return; // 被更新的取流请求接管
     if (url.isEmpty) {
-      _errorStream.add('无法获取播放链接');
+      if (!_errorStream.isClosed) _errorStream.add('无法获取播放链接');
       _onTrackCompleted();
       return;
     }
@@ -589,7 +603,7 @@ class PlayerController {
     if (index < 0 || index >= _queue.length) return;
     final song = _queue[index];
     _currentSong = song;
-    _songStream.add(song);
+    if (!_songStream.isClosed) _songStream.add(song);
     final url = await _resolveUrl(song);
     if (url == _resolveSuperseded) return; // 被更新的取流请求接管，不跳歌
     if (url.isEmpty) {
@@ -614,12 +628,12 @@ class PlayerController {
     // 暂停时 libmpv 不会持续推送 position，靠 seek 事件补一次主动广播，
     // 否则「暂停时点击歌词跳转」后进度条 / 歌词视图停在旧位置不动。
     // 播放时底层自己也会推，重复推送对订阅方是幂等的（只更新基准）。
-    _positionStream.add(_player!.state.position);
+    if (!_positionStream.isClosed) _positionStream.add(_player!.state.position);
   }
 
   void notifyState() {
     if (_player != null) {
-      _playState.add(_player!.state.playing);
+      if (!_playState.isClosed) _playState.add(_player!.state.playing);
     }
   }
 
@@ -644,9 +658,50 @@ class PlayerController {
     }
   }
 
+  /// 释放底层播放器（**可复用**）：取消原生流订阅并 dispose player，
+  /// 之后再次播放时 [_ensurePlayer] 会重建播放器与订阅。
+  ///
+  /// 这里刻意**不**关闭 12 个广播流：本类是进程级单例，流为 final 且
+  /// UI 订阅者常驻，一旦 close 就永久报废，后续播放事件会全部丢失或抛
+  /// `Bad state: Cannot add event after closing`。广播流的终态清理只由
+  /// [dispose] 负责（应用退出 / 测试 teardown）。
   void release() {
+    if (!_disposed) {
+      // 只清订阅，不关广播流，保证 release 后仍可重建复用。
+      for (final sub in _playerSubs) {
+        unawaited(sub.cancel());
+      }
+      _playerSubs.clear();
+      _player?.dispose();
+      _player = null;
+    }
+  }
+
+  /// 应用退出 / 测试 teardown 的终态清理：关闭全部广播流。幂等。
+  ///
+  /// 调用后本单例不可再用（广播流为 final、不可重建），因此**不要**在
+  /// `State.dispose` 这类可能被重建的生命周期里调用。
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    for (final sub in _playerSubs) {
+      unawaited(sub.cancel());
+    }
+    _playerSubs.clear();
     _player?.dispose();
     _player = null;
+    _rateStream.close();
+    _playState.close();
+    _songStream.close();
+    _positionStream.close();
+    _durationStream.close();
+    _completedStream.close();
+    _errorStream.close();
+    _noticeStream.close();
+    _qualityStream.close();
+    _neQualityStream.close();
+    _kuwoQualityStream.close();
+    _modeStream.close();
   }
 
   // ===== 取流：音质自动降级 =====
@@ -776,7 +831,7 @@ class PlayerController {
             continue;
           }
           if (!_noticeStream.isClosed) {
-            _noticeStream.add('臻品 DTS:X 转码中，首次播放约需 10 秒…');
+            if (!_noticeStream.isClosed) _noticeStream.add('臻品 DTS:X 转码中，首次播放约需 10 秒…');
           }
           final res = await DtsMusic.decodeToWav(r.url, song.mid);
           if (gen != _resolveGen) return _resolveSuperseded; // 解码期间来了新请求，放弃播放
@@ -797,7 +852,7 @@ class PlayerController {
             continue;
           }
           if (!_noticeStream.isClosed) {
-            _noticeStream.add('索尼 360RA 转码中，首次播放约需 10 秒…');
+            if (!_noticeStream.isClosed) _noticeStream.add('索尼 360RA 转码中，首次播放约需 10 秒…');
           }
           final res = await Ra360Music.decodeToWav(r.url, song.mid);
           if (gen != _resolveGen) return _resolveSuperseded;
@@ -818,7 +873,7 @@ class PlayerController {
             continue;
           }
           if (!_noticeStream.isClosed) {
-            _noticeStream.add('NAC 神经解码中，首次播放约需 1 分钟…');
+            if (!_noticeStream.isClosed) _noticeStream.add('NAC 神经解码中，首次播放约需 1 分钟…');
           }
           final res = await NacMusic.decodeToWav(r.url, song.mid);
           if (gen != _resolveGen) return _resolveSuperseded;
@@ -979,7 +1034,7 @@ class PlayerController {
     final url = await _resolveUrl(song);
     if (url == _resolveSuperseded) return; // 被更新的取流请求接管
     if (url.isEmpty) {
-      _errorStream.add('该歌曲没有可用的$failLabel音质');
+      if (!_errorStream.isClosed) _errorStream.add('该歌曲没有可用的$failLabel音质');
       return;
     }
     await _playUrlInternal(url);
@@ -1017,7 +1072,7 @@ class PlayerController {
 
   void _onTrackCompleted() {
     if (_queue.isEmpty) {
-      _completedStream.add(null);
+      if (!_completedStream.isClosed) _completedStream.add(null);
       return;
     }
 
@@ -1034,7 +1089,7 @@ class PlayerController {
       _queueIndex = _randomIndex();
       final song = _queue[_queueIndex];
       _currentSong = song;
-      _songStream.add(song);
+      if (!_songStream.isClosed) _songStream.add(song);
       _resolveUrl(song).then((url) async {
         if (url.isNotEmpty) await play(song, url);
       });
@@ -1046,12 +1101,12 @@ class PlayerController {
       _queueIndex++;
       final song = _queue[_queueIndex];
       _currentSong = song;
-      _songStream.add(song);
+      if (!_songStream.isClosed) _songStream.add(song);
       _resolveUrl(song).then((url) async {
         if (url.isNotEmpty) await play(song, url);
       });
     } else {
-      _completedStream.add(null);
+      if (!_completedStream.isClosed) _completedStream.add(null);
     }
   }
 

@@ -89,10 +89,4 @@ class DeviceManager {
 
   String q16() => getDevice()['qimei'] as String? ?? '';
   String q36() => getDevice()['qimei36'] as String? ?? '';
-
-  void logDebug() {
-    final d = getDevice().toString();
-    // ignore: avoid_print
-    print('device=${d.length > 200 ? d.substring(0, 200) : d}');
-  }
 }

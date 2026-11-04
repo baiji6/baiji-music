@@ -87,14 +87,16 @@ class QqPlaylist {
     }).toString();
     final data = await getJsonWithRetry(url, headers: headers);
     final cdlist = (data['data']?['cdlist'] ?? const []) as List<dynamic>;
-    final cd = cdlist.isEmpty
+    final cd = cdlist.isEmpty || cdlist.first is! Map
         ? null
         : Map<String, dynamic>.from(cdlist.first as Map);
     if (cd == null) throw Exception('歌单不存在: $disstid');
 
     final rawList = (cd['songlist'] as List<dynamic>? ?? const []);
-    final songs = (limit > 0 ? rawList.take(limit) : rawList).map((e) {
-      final song = Map<String, dynamic>.from(e as Map);
+    final songs = (limit > 0 ? rawList.take(limit) : rawList)
+        .whereType<Map>()
+        .map((e) {
+      final song = Map<String, dynamic>.from(e);
       return PlaylistTrack(
         name: (song['songname'] ?? '').toString(),
         artist: _joinArtists(song['singer'] as List<dynamic>?),
@@ -154,7 +156,8 @@ class NeteasePlaylist {
     final metaUrl = Uri.parse('https://music.163.com/api/v6/playlist/detail')
         .replace(queryParameters: {'id': id}).toString();
     final meta = await getJsonWithRetry(metaUrl, headers: headers);
-    final pl = (meta['playlist'] ?? meta['result']) as Map<String, dynamic>?;
+    final plRaw = meta['playlist'] ?? meta['result'];
+    final pl = plRaw is Map ? Map<String, dynamic>.from(plRaw) : null;
     if (pl == null) throw Exception('歌单不存在: $id');
 
     // 全量曲目 id
@@ -196,8 +199,8 @@ class NeteasePlaylist {
         .toString();
     final data = await getJsonWithRetry(url, headers: headers);
     final raw = (data['songs'] as List<dynamic>? ?? const []);
-    return raw.map((e) {
-      final song = Map<String, dynamic>.from(e as Map);
+    return raw.whereType<Map>().map((e) {
+      final song = Map<String, dynamic>.from(e);
       return PlaylistTrack(
         name: (song['name'] ?? '').toString(),
         artist: _joinArtists(song['ar'] as List<dynamic>?),
@@ -267,7 +270,8 @@ class KuwoPlaylist {
       final raw = (data['musiclist'] as List<dynamic>? ?? const []);
       if (raw.isEmpty) break;
       for (final e in raw) {
-        final song = Map<String, dynamic>.from(e as Map);
+        if (e is! Map) continue;
+        final song = Map<String, dynamic>.from(e);
         tracks.add(PlaylistTrack(
           name: (song['name'] ?? '').toString(),
           artist: (song['artist'] ?? '').toString(),

@@ -75,7 +75,7 @@ abstract final class PlaylistApi {
         'User-Agent': 'Mozilla/5.0',
       });
       final list = (data['data']?['cdlist'] ?? const []) as List<dynamic>;
-      if (list.isEmpty) return null;
+      if (list.isEmpty || list.first is! Map) return null;
       final cd = Map<String, dynamic>.from(list.first as Map);
       final songs = <Song>[];
       for (final s in (cd['songlist'] ?? const []) as List<dynamic>) {
@@ -272,8 +272,9 @@ abstract final class PlaylistApi {
     });
     final list = (data['data']?['disslist'] ?? const []) as List<dynamic>;
     return list
+        .whereType<Map>()
         .map((e) {
-          final j = Map<String, dynamic>.from(e as Map);
+          final j = Map<String, dynamic>.from(e);
           // 特殊目录（我喜欢 / QZone 背景音乐等）的 diss_cover 可能是
           // 「?n=1」这种占位，不是真图——置空让 UI 走占位封面。
           final cover = (j['diss_cover'] ?? '').toString();
@@ -314,7 +315,8 @@ abstract final class PlaylistApi {
     }
     final list = (data['playlist'] ?? const []) as List<dynamic>;
     return list
-        .map((e) => HotPlaylist.fromNetease(Map<String, dynamic>.from(e as Map)))
+        .whereType<Map>()
+        .map((e) => HotPlaylist.fromNetease(Map<String, dynamic>.from(e)))
         .where((p) => p.id.isNotEmpty)
         .toList();
   }
@@ -364,7 +366,8 @@ abstract final class PlaylistApi {
       final list = (data['plist'] ?? const []) as List<dynamic>;
       if (list.isEmpty) break;
       for (final e in list) {
-        final j = Map<String, dynamic>.from(e as Map);
+        if (e is! Map) continue;
+        final j = Map<String, dynamic>.from(e);
         out.add(HotPlaylist(
           id: (j['id'] ?? '').toString(),
           name: (j['title'] ?? '').toString(),

@@ -191,8 +191,9 @@ class QqHot {
     final data = await getJsonWithRetry(url, headers: headers);
     final list = (data['data']?['hotkey'] ?? const []) as List<dynamic>;
     return list
+        .whereType<Map>()
         .take(limit)
-        .map((e) => HotKeyword.fromQq(Map<String, dynamic>.from(e as Map)))
+        .map((e) => HotKeyword.fromQq(Map<String, dynamic>.from(e)))
         .where((e) => e.word.isNotEmpty)
         .toList();
   }
@@ -220,7 +221,8 @@ class QqHot {
     final data = await getJsonWithRetry(url, headers: headers);
     final list = (data['data']?['list'] ?? const []) as List<dynamic>;
     return list
-        .map((e) => HotPlaylist.fromQq(Map<String, dynamic>.from(e as Map)))
+        .whereType<Map>()
+        .map((e) => HotPlaylist.fromQq(Map<String, dynamic>.from(e)))
         .where((e) => e.id.isNotEmpty)
         .toList();
   }
@@ -241,9 +243,10 @@ class NeteaseHot {
     final data = await getJsonWithRetry(url, headers: headers);
     final list = (data['result']?['hots'] ?? const []) as List<dynamic>;
     return list
+        .whereType<Map>()
         .take(limit)
         .map((e) =>
-            HotKeyword.fromNetease(Map<String, dynamic>.from(e as Map)))
+            HotKeyword.fromNetease(Map<String, dynamic>.from(e)))
         .where((e) => e.word.isNotEmpty)
         .toList();
   }
@@ -259,8 +262,9 @@ class NeteaseHot {
     final data = await getJsonWithRetry(url, headers: headers);
     final list = (data['playlists'] ?? const []) as List<dynamic>;
     return list
+        .whereType<Map>()
         .map((e) =>
-            HotPlaylist.fromNetease(Map<String, dynamic>.from(e as Map)))
+            HotPlaylist.fromNetease(Map<String, dynamic>.from(e)))
         .where((e) => e.id.isNotEmpty)
         .toList();
   }
@@ -313,7 +317,8 @@ class KuwoHot {
     final data = await getJsonWithRetry(url, headers: headers);
     final list = (data['data']?['data'] ?? const []) as List<dynamic>;
     return list
-        .map((e) => HotPlaylist.fromKuwo(Map<String, dynamic>.from(e as Map)))
+        .whereType<Map>()
+        .map((e) => HotPlaylist.fromKuwo(Map<String, dynamic>.from(e)))
         .where((e) => e.id.isNotEmpty)
         .toList();
   }

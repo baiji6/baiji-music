@@ -442,10 +442,10 @@ class Song {
 
   /// 从 QQ 音乐搜索/详情接口的 track JSON 解析。
   factory Song.fromTrack(Map<String, dynamic> t) {
-    final mid = t['mid'] as String? ?? '';
-    final name = (t['name'] as String? ?? '').isNotEmpty
-        ? t['name'] as String
-        : (t['title'] as String? ?? '');
+    final mid = t['mid']?.toString() ?? '';
+    final name = (t['name']?.toString() ?? '').isNotEmpty
+        ? t['name'].toString()
+        : (t['title']?.toString() ?? '');
     final albumRaw = t['album'];
     final albumObj = albumRaw is Map<String, dynamic> ? albumRaw : null;
     final albumName = (albumRaw is String && albumRaw.isNotEmpty)
@@ -454,7 +454,10 @@ class Song {
     final albumMid = albumObj?['mid'] as String? ?? '';
 
     String singer = '';
-    final singerArr = t['singer'] as List<dynamic>?;
+    // 接口里 singer 既可能是数组（标准详情），也可能是字符串/数字（脏数据），
+    // 直接 `as List` 会在非数组时抛 TypeError，这里先做类型守卫。
+    final singerArr =
+        t['singer'] is List ? (t['singer'] as List<dynamic>?) : null;
     if (singerArr != null) {
       singer = singerArr.map((e) {
         if (e is Map<String, dynamic>) {
@@ -465,9 +468,9 @@ class Song {
         return '';
       }).where((s) => s.isNotEmpty).join(' / ');
     } else {
-      singer = (t['singer'] as String? ?? '').isNotEmpty
-          ? t['singer'] as String
-          : (t['singerName'] as String? ?? '');
+      singer = (t['singer']?.toString() ?? '').isNotEmpty
+          ? t['singer'].toString()
+          : (t['singerName']?.toString() ?? '');
     }
 
     // 封面：优先 album.picUrl.s；搜索接口返回的 album 不含 picUrl，

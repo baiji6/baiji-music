@@ -252,7 +252,7 @@ class KuwoApi {
   static Future<KuwoSong?> songInfo(String rid) async {
     final data = await _getJson('$songInfoUrl?op=query&action=play&ids=$rid');
     final list = (data['songs'] ?? const []) as List<dynamic>;
-    if (list.isEmpty) return null;
+    if (list.isEmpty || list.first is! Map) return null;
     final m = Map<String, dynamic>.from(list.first as Map);
     return KuwoSong(
       rid: (m['id'] ?? rid).toString(),

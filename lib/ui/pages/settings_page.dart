@@ -343,7 +343,8 @@ class _SettingsPageState extends State<SettingsPage> {
         withData: true,
       );
       if (res == null || res.files.isEmpty) return;
-      final f = res.files.single;
+      // 只取第一个：即便 FilePicker 将来允许多选，也不会因 .single 抛 StateError
+      final f = res.files.first;
       if (f.path == null && f.bytes == null) {
         _showSnack('无法读取所选文件', isError: true);
         return;

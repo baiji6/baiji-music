@@ -6,6 +6,17 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.4
+
+### 🐛 修复静态代码审查报告中的崩溃与资源泄漏
+
+- **封面地址空值崩溃**：`CoverUrl.primary()` 在歌曲无可用封面时改为返回空串，不再因 `.first` 抛 `StateError`
+- **脏数据解析崩溃**：`Song.fromTrack()` 对 `mid / name / singer` 等非字符串字段做容错；`singer` 为非数组类型时不再因 `as List` 抛 `TypeError`
+- **播放器订阅泄漏**：`PlayerController._ensurePlayer()` 的 6 个 media_kit 原生流订阅统一登记并在 `release()` 时取消；`release()` 改为只释放底层播放器、不关闭常驻广播流（保证播放器可重建复用），新增 `dispose()` 负责终态清理
+- **下载任务注册表**：`DownloadTaskRegistry` 新增幂等 `dispose()`，关闭任务变更广播流
+- **网络解析加固**：QQ / 网易云 / 酷我热搜与歌单解析对脏 JSON（非 `Map` 元素）做类型守卫，单条脏数据不再导致整个列表失败
+- **其它**：设置页文件选择由 `.single` 改为 `.first`（防多选抛 `StateError`）；移除 `device_manager` 中未调用的调试死代码
+
 ## 2.4.3
 
 ### 🎬 新增 MV 播放（三平台：QQ 音乐 / 网易云 / 酷我）
