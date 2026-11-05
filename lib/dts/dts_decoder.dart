@@ -140,6 +140,35 @@ class DtsMusic {
   /// 返回 null 表示失败（调用方走音质降级链）。
   ///
   /// 同 [key] 的并发调用复用同一个进行中的任务（见 [_inflight]）。
+  /// 转码工具用：把**本地** DT03 mp4 直接解成指定 WAV（v2.4.7）。
+  ///
+  /// 与 [decodeToWav] 的区别：不做网络下载、不走缓存 key，直接以调用方给的
+  /// [sourcePath] / [wavPath] 跑同一套 FFI。产物固定为 WAV，返回 wavPath；
+  /// null = 当前平台不支持或解码失败。
+  static Future<String?> decodeLocalToWav(
+    String sourcePath,
+    String wavPath,
+  ) async {
+    if (!isSupported) return null;
+    final (licPath, cfgPath) = await _ensureLicenseFiles();
+    try {
+      final dropped = await Isolate.run(() => _decodeNative(
+            mp4Path: sourcePath,
+            wavPath: wavPath,
+            licPath: licPath,
+            cfgPath: cfgPath,
+          ));
+      if (dropped == null) return null;
+      if (!File(wavPath).existsSync() || File(wavPath).lengthSync() < 44) {
+        return null;
+      }
+      return wavPath;
+    } catch (e) {
+      AppLog.w('DtsMusic', '本地转 WAV 失败: $e');
+      return null;
+    }
+  }
+
   static Future<DtsDecodeResult?> decodeToWav(
     String mp4Url,
     String key, {

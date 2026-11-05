@@ -186,6 +186,32 @@ class Ra360Music {
   ///
   /// [onProgress] 进度 0~100（下载占前 20%，解码占后 80%）；360RA 全曲
   /// 真机解码约数秒到数十秒。返回 null 表示失败（调用方走音质降级链）。
+  /// 转码工具用：把**本地** MHA1/MHM1 mp4 直接解成指定 WAV（v2.4.7）。
+  /// 复用 [decodeToWav] 同一套 FFI，只是跳过下载与缓存 key。
+  static Future<String?> decodeLocalToWav(
+    String sourcePath,
+    String wavPath,
+  ) async {
+    if (!isSupported) return null;
+    await _ensureCoefFiles();
+    final root = await _coefRoot();
+    try {
+      final out = await Isolate.run(() => _decodeNative(
+            mp4Path: sourcePath,
+            wavPath: wavPath,
+            appRoot: root,
+          ));
+      if (out == null) return null;
+      if (!File(wavPath).existsSync() || File(wavPath).lengthSync() < 44) {
+        return null;
+      }
+      return wavPath;
+    } catch (e) {
+      AppLog.w('Ra360Music', '本地转 WAV 失败: $e');
+      return null;
+    }
+  }
+
   static Future<Ra360DecodeResult?> decodeToWav(
     String mp4Url,
     String key, {

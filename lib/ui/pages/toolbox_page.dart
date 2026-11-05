@@ -14,6 +14,7 @@ import 'decrypt_keys_page.dart';
 import 'decrypt_page.dart';
 import 'kuwo_direct_page.dart';
 import 'log_page.dart';
+import 'transcode_page.dart';
 
 class ToolboxPage extends StatelessWidget {
   const ToolboxPage({super.key});
@@ -31,6 +32,18 @@ class ToolboxPage extends StatelessWidget {
             padding: EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
+                _ToolRow(
+                  icon: Icons.swap_horiz_rounded,
+                  color: AppColors.magenta,
+                  title: '音频转码',
+                  tag: 'WAV · FLAC · MP3 · M4A · MP4 · AC-3 · E-AC-3 · OGG',
+                  description: '用 ffmpeg 把本地音频转成常见格式，自定义声道数、位深、'
+                      '采样率与码率；支持 DTS:X、360RA、NAC、AV3A 等特殊音质'
+                      '（这四种只能输出 WAV）。',
+                  page: const TranscodePage(),
+                ),
+                MiuixHorizontalDivider(
+                    thickness: 1, color: AppColors.strokeGlass),
                 _ToolRow(
                   icon: Icons.lock_open_rounded,
                   color: AppColors.accent,

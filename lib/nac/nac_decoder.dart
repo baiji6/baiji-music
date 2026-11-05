@@ -131,6 +131,31 @@ class NacMusic {
   /// 若同 key 的解码正在进行，返回该任务 Future（同 [DtsMusic.waitOngoing]）。
   static Future<NacDecodeResult?>? waitOngoing(String key) => _inflight[key];
 
+  /// 转码工具用：把**本地** .nac 直接解成指定 WAV（v2.4.7）。
+  /// 复用 [decodeToWav] 同一套 FFI，只是跳过下载与缓存 key。
+  static Future<String?> decodeLocalToWav(
+    String sourcePath,
+    String wavPath,
+  ) async {
+    if (!isSupported) return null;
+    final modelPath = await _ensureModel();
+    try {
+      final out = await Isolate.run(() => _decodeNative(
+            nacPath: sourcePath,
+            wavPath: wavPath,
+            modelPath: modelPath,
+          ));
+      if (out == null) return null;
+      if (!File(wavPath).existsSync() || File(wavPath).lengthSync() < 44) {
+        return null;
+      }
+      return wavPath;
+    } catch (e) {
+      AppLog.w('NacMusic', '本地转 WAV 失败: $e');
+      return null;
+    }
+  }
+
   /// 下载 .nac 到缓存并解码成 WAV（44.1k/16bit/2ch）。
   ///
   /// [onProgress] 进度 0~100（下载占前 10%，解码占后 90%）。

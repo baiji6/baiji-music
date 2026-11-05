@@ -97,11 +97,13 @@ jobs:
           find ~/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
           find /home/runner/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
 
-      # Android 构建失败最常见的根因：flutter.ndkVersion 默认 28.2.13676358，
-      # 而 GitHub ubuntu-latest runner 预装 NDK 只到 27.x，AGP 需要现下载 28.2。
-      # 该下载偶发超时/失败会直接让 externalNativeBuild 崩。这里在构建前用
-      # sdkmanager 确定性地装好对应 NDK（runner 网络到 dl.google.com 稳定），
-      # 避免依赖 AGP 的静默自动下载。
+      # v2.4.5 首次 Android 失败的实测根因（CI 日志）：:gradle:compileKotlin
+      # 解析 kotlinBuildToolsApiClasspath 时下载 kotlin-compiler-embeddable-2.2.21.jar
+      # 被 GitHub Releases 返回 504 Gateway Time-out，Flutter 自带的 100ms 单次
+      # 重试来不及恢复 → 属于大依赖下载瞬时抖动，与原生代码 / NDK 无关。
+      # 这里额外显式装好 flutter.ndkVersion（28.2.13676358）：runner 预装 NDK
+      # 只到 27.x，避免 AGP 静默自动下载再引入一个不确定性；构建步骤的重试
+      # 用于抵御上述 504 类抖动。
       - name: Install NDK (flutter.ndkVersion)
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
@@ -114,13 +116,29 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          # 抵御 Gradle 分发版 / NDK / AGP 等大依赖下载的瞬时抖动：
-          # 失败后最多重试 3 次（CI runner 到 google 源网络偶发不稳定）。
+          # 抵御 Gradle 分发版 / Kotlin 编译器 jar / NDK / AGP 等大依赖下载的
+          # 瞬时抖动：最多重试 3 次，每次间隔 15s。
+          # 关键：循环本身不能吞掉失败——for 循环最后一条命令是 sleep，
+          # 若三次全失败，步骤会以 0 退出，导致「构建失败却标记成功」，
+          # 后续签名/重命名步骤拿到不存在的 APK 才炸。必须显式检查产物。
+          set -e
+          built=0
           for i in 1 2 3; do
-            flutter build apk --release ${{ env.OBF_ARGS }} && break
+            if flutter build apk --release ${{ env.OBF_ARGS }}; then
+              built=1
+              break
+            fi
             echo "::warning::Android 构建第 $i 次失败，15s 后重试"
             sleep 15
           done
+          if [ "$built" -ne 1 ]; then
+            echo "::error::Android 构建连续 3 次失败"
+            exit 1
+          fi
+          # 兜底校验：APK 必须真实存在，防止任何「命令成功但没产物」的情况
+          find build/app/outputs -name "*.apk" -print -quit | grep -q . || {
+            echo "::error::flutter build 返回成功但未找到 APK 产物"; exit 1;
+          }
 
       - name: Rename APK
         run: |

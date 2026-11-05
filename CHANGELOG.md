@@ -6,6 +6,23 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.7
+
+### ✨ 新功能
+
+- **音频转码（工具箱）**：新增「工具箱 → 音乐工具 → 音频转码」页面，支持 WAV / FLAC / M4A / MP4 / WMA / AAC / AC-3 / E-AC-3 / MP3 / OGG 十种输出格式，可自定义声道数（1–8）、采样率（8k–384k Hz）、位深（16 / 24 / 32 bit）、码率（32–1411 kbps）。支持批量选文件 / 选文件夹、逐任务进度条、随时停止；同名产物自动追加 `(2)/(3)`，不覆盖已有文件。核心服务层 `lib/core/audio_transcoder.dart` 负责参数校验、ffmpeg 命令构造（显式 `-f` 容器 + `-progress pipe:1` 进度解析）、可执行文件探测（页面手动指定 / 环境变量 `BAIJI_FFMPEG` → 随包内置 `bin` → 系统 PATH）、失败与半成品清理。
+- **关于「内置 ffmpeg」**：播放链路（media_kit / libmpv）内嵌的 ffmpeg 是 `--disable-muxers --disable-encoders --disable-programs` 的纯解码白名单构建，能解几乎所有音质（含 `ac3` / `eac3` / `av3a` / `ac4` / `dca`），但**没有音频编码器、没有 muxer、没有命令行**，无法产出文件。因此转码调用标准 ffmpeg 可执行文件，桌面端通常直接命中系统 PATH，移动端可在页面手动选择或用 `BAIJI_FFMPEG` 指定；找不到时明确报错，不再静默失败。
+- **特殊音质转码**：DTS:X、索尼 360RA、NAC、AV3A 按产品约束**只能输出 WAV**（选其它格式自动锁定）。前三者通过新增的 `decodeLocalToWav()` 复用与在线播放同一套 FFI，走 App 自研原生解码器直接产出 PCM WAV；AV3A 由 ffmpeg 解码成 WAV（当前 ffmpeg 无 `av3a` 解码器时给出可操作提示）。特殊格式靠扩展名 + 文件头 / 尾部 fourcc 魔数（`dtsx` / `mha1` / `mhm1` / `av3a` / `ac-3` / `ec-3`）+ 下载文件名音质标记识别；mp4、ac3、eac3 等 ffmpeg 可解格式既可作输入也可作输出。若对特殊格式额外指定声道 / 采样率，会在解码出的 WAV 上再跑一次 ffmpeg 做 PCM 变换。
+
+### 🐛 修复（CI 两个 bug）
+
+- **重试循环吞掉失败**：Android 构建的 3 次重试写法在三次全失败时，循环最后一条命令是 `sleep`，步骤仍可能以 0 退出，导致「构建失败却标记成功」，后续签名 / 重命名步骤拿到不存在的 APK 才炸。改为 `set -e` + 显式 `built` 标志，循环结束检查 `built != 1` 就 `exit 1`，并用 `find build/app/outputs -name "*.apk"` 兜底校验产物真实存在。
+- **注释里的失败根因写错**：把首次 Android 失败的注释从「NDK 28.2 不在 runner 预装列表」更正为 CI 日志实测根因——`:gradle:compileKotlin` 解析 `kotlinBuildToolsApiClasspath` 时下载 `kotlin-compiler-embeddable-2.2.21.jar` 被 GitHub Releases 返回 504 Gateway Time-out，属于大依赖下载瞬时抖动，与原生代码 / NDK 无关。显式安装 NDK 保留为减少不确定性的措施，重试用于抵御这类抖动。
+
+### 🧪 测试
+
+- 新增 `test/audio_transcoder_test.dart`（36 项离线）；沙箱用真实 ffmpeg 端到端验证 10 种输出格式均能产出、ffprobe 可读、解码成 PCM 后非静音（可播放）、进度回调正常、同名不覆盖；`flutter analyze` 零问题，全量 `flutter test` **960 项**通过（原 924 + 36）。
+
 ## 2.4.6
 
 ### 🐛 修复
