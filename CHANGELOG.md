@@ -6,6 +6,20 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.6
+
+### 🐛 修复
+
+- **切换音质后播放进度从头开始（全平台）**：音质切换、自动降级、baka 解码器重试等重开播放的场景下，续播位置会丢失、从头播放。根因是 media_kit 的 `open()` 内部先 `stop()`（把 `position` 归零）再异步 `loadlist` 加载新轨道，`open()` 返回时轨道尚未 demux 完成，此时紧接发出的 `seek` 命令会被 libmpv 丢弃。修复：改用 `open(play:false)` 先挂载轨道，等 `duration` 就绪（轨道已可读，最长等 5 秒）后再 `seek` 续播位置，最后才 `play()` 正式发声；切换前的位置作为 `resumeAt` 透传给取流链路，不同音质时长超界时夹到末尾，避免直接跳到 EOF。
+
+### 🔧 构建
+
+- **Android CI 构建偶发失败**：构建前显式用 `sdkmanager` 安装 `ndk;28.2.13676358`（`flutter.ndkVersion` 默认值，GitHub `ubuntu-latest` runner 预装不含），并给 `flutter build apk` 加最多 3 次重试，避免依赖 AGP 静默自动下载大依赖时的瞬时抖动。
+
+### 📖 文档
+
+- README 版本速览补齐 v2.4.3–v2.4.6，测试数量同步为 924 项。
+
 ## 2.4.5
 
 ### 🚀 解码器提速（DTS / 360RA / NAC）

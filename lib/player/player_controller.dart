@@ -433,7 +433,7 @@ class PlayerController {
 
   // ===== 播放控制 =====
 
-  Future<void> _playUrlInternal(String url) async {
+  Future<void> _playUrlInternal(String url, {Duration? resumeAt}) async {
     _ensurePlayer();
     if (url.trim().isEmpty) {
       AppLog.w('PlayerController', '播放链接为空，已跳过 open');
@@ -442,8 +442,11 @@ class PlayerController {
       return;
     }
     try {
-      await _player!.open(Media(url));
-      await _player!.play();
+      // play:false 先挂载轨道但不发声：open() 内部会先 stop()（进度归零）再
+      // loadlist，返回时轨道往往还没 demux 完。若此时立刻 seek，命令会被 mpv
+      // 丢弃，导致切音质/自动降级后续播位置丢失、从头开始（"切换音质后进度不变/不续播"）。
+      // 这里先挂载 + 重放倍速，等轨道真正就绪后再定位续播，最后才正式 play()。
+      await _player!.open(Media(url), play: false);
       // open() 会把 libmpv 的 speed 重置回 1.0（media_kit 默认参数），
       // 每次开播后必须重放记忆倍速，否则切歌后倍速悄悄丢掉。
       if (_rate != 1.0) {
@@ -453,12 +456,51 @@ class PlayerController {
           AppLog.w('PlayerController', '恢复倍速失败: $e');
         }
       }
-      AppLog.i('PlayerController', '播放: $url');
+      // 续播：等轨道加载完成（duration 出现）再定位，确保 seek 落到已就绪的
+      // 解码位置。不同音质时长可能略有差异，超界则夹到末尾，避免 mpv 直接跳到 EOF。
+      if (resumeAt != null && resumeAt > Duration.zero) {
+        await _waitForLoaded();
+        final dur = _player!.state.duration;
+        final target = (dur > Duration.zero && resumeAt > dur) ? dur : resumeAt;
+        await _player!.seek(target);
+        // 主动广播一次续播位置，避免 UI 在 track 加载回调到来前停在 0:00。
+        if (!_positionStream.isClosed) _positionStream.add(target);
+      }
+      // 一切就绪后再正式发声，保证用户听到的第一帧就是续播位置。
+      await _player!.play();
+      AppLog.i('PlayerController', '播放: $url'
+          '${resumeAt != null && resumeAt > Duration.zero ? '（续播 @$resumeAt）' : ''}');
     } catch (e) {
       AppLog.e('PlayerController', '播放失败: $e');
       if (!_errorStream.isClosed) _errorStream.add('播放失败: $e');
       if (!_playState.isClosed) _playState.add(false);
     }
+  }
+
+  /// 等当前轨道加载就绪（duration 出现），最长 [timeout]。
+  ///
+  /// [open] 内部先 stop() 再 loadlist，返回时轨道往往还没 demux 完；此时发的
+  /// seek 会被 mpv 丢弃，导致切音质/降级后续播位置丢失。等到 duration 出现
+  /// （track 已可读）再 seek，续播位置才可靠。
+  Future<void> _waitForLoaded(
+      [Duration timeout = const Duration(seconds: 5)]) async {
+    final p = _player;
+    if (p == null) return;
+    if (p.state.duration > Duration.zero) return; // 已就绪
+    final done = Completer<void>();
+    late final StreamSubscription<Duration> sub;
+    sub = p.stream.duration.listen((d) {
+      if (d > Duration.zero && !done.isCompleted) done.complete();
+    });
+    try {
+      await done.future.timeout(timeout);
+    } on TimeoutException {
+      AppLog.w('PlayerController', '等待轨道加载超时，仍尝试续播定位');
+    } finally {
+      await sub.cancel();
+    }
+    // 给一帧让 mpv 真正接受 seek 命令。
+    await Future<void>.delayed(const Duration(milliseconds: 60));
   }
 
   Future<void> play(Song song, String url) async {
@@ -520,7 +562,8 @@ class PlayerController {
           if (song2 != null) {
             final url = await _resolveUrl(song2);
             if (url.isNotEmpty && url != _resolveSuperseded) {
-              await _playUrlInternal(url);
+              // 同一首的重试：带走当前进度，避免 baka 切解码器后从头播。
+              await _playUrlInternal(url, resumeAt: position);
             }
           }
         } catch (e) {
@@ -559,8 +602,8 @@ class PlayerController {
       if (!_playState.isClosed) _playState.add(false);
       return;
     }
-    await _playUrlInternal(url);
-    if (pos > Duration.zero) await seek(pos);
+    // 续播：把切音质前的位置带回新链路（_playUrlInternal 内部等轨道加载后再定位）。
+    await _playUrlInternal(url, resumeAt: pos);
   }
 
   Future<void> playQueue(List<Song> songs, {int startIndex = 0}) async {
@@ -1037,8 +1080,8 @@ class PlayerController {
       if (!_errorStream.isClosed) _errorStream.add('该歌曲没有可用的$failLabel音质');
       return;
     }
-    await _playUrlInternal(url);
-    if (pos > Duration.zero) await seek(pos);
+    // 续播：把切音质前的位置带回新链路（_playUrlInternal 内部等轨道加载后再定位）。
+    await _playUrlInternal(url, resumeAt: pos);
   }
 
   // ===== 播放模式 =====
