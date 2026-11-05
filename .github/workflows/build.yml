@@ -97,13 +97,30 @@ jobs:
           find ~/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
           find /home/runner/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
 
+      # Android 构建失败最常见的根因：flutter.ndkVersion 默认 28.2.13676358，
+      # 而 GitHub ubuntu-latest runner 预装 NDK 只到 27.x，AGP 需要现下载 28.2。
+      # 该下载偶发超时/失败会直接让 externalNativeBuild 崩。这里在构建前用
+      # sdkmanager 确定性地装好对应 NDK（runner 网络到 dl.google.com 稳定），
+      # 避免依赖 AGP 的静默自动下载。
+      - name: Install NDK (flutter.ndkVersion)
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;28.2.13676358"
+
       - name: Build release APK（R8 + jks 直签 v1+v2+v3）
         env:
           ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/app/keystore/baiji9527.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: flutter build apk --release ${{ env.OBF_ARGS }}
+        run: |
+          # 抵御 Gradle 分发版 / NDK / AGP 等大依赖下载的瞬时抖动：
+          # 失败后最多重试 3 次（CI runner 到 google 源网络偶发不稳定）。
+          for i in 1 2 3; do
+            flutter build apk --release ${{ env.OBF_ARGS }} && break
+            echo "::warning::Android 构建第 $i 次失败，15s 后重试"
+            sleep 15
+          done
 
       - name: Rename APK
         run: |
