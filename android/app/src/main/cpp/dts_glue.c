@@ -424,12 +424,14 @@ int dtsglue_decode_to_wav(const char *wav_path,
     if (!w) { LOGE("wav open %s", wav_path); return -21; }
     wav_write_header(w, 0, 2, 48000); /* 占位：声道数/时长解码后回填 */
 
-    FILE *raw = tmpfile();
-    if (!raw) { fclose(w); return -22; }
     int ch = 0, frames_total = 0, first_bad = -1;
     long long dropped = 0;
     float **planar = NULL;
     int last_pct = -1;
+    long total_s16 = 0;          /* 已写入 WAV 的 s16 字节数 */
+    /* 复用的单帧交错缓冲（随最大帧尺寸增长，避免每帧 malloc） */
+    static long fcap = 0;
+    static short *fbuf = NULL;
     for (unsigned int i = 0; i < g_mp4.count; i++) {
         int consumed = 0, och = 0, ofr = 0;
         int rc = g_decode(g_instance, g_mp4.data + g_mp4.offsets[i], g_mp4.sizes[i],
@@ -437,9 +439,24 @@ int dtsglue_decode_to_wav(const char *wav_path,
         if (rc == 0 && och > 0 && ofr > 0) {
             ch = och;
             frames_total += ofr;
+            /* 直接在循环内转 s16 交错并写入 WAV：省去原 tmpfile 整曲磁盘
+             * 中转 + 二次读回 + 二次转换（实测可省一整趟 60~70MB float 的
+             * 磁盘读写，并把每样本一次 fwrite 降为每帧一次）。 */
+            long need = (long)ofr * och;
+            if (need > fcap) {
+                free(fbuf);
+                fbuf = (short *)malloc((size_t)need * 2);
+                fcap = need;
+            }
             for (int fr = 0; fr < ofr; fr++)
-                for (int c = 0; c < och; c++)
-                    fwrite(&planar[c][fr], 4, 1, raw);
+                for (int c = 0; c < och; c++) {
+                    float v = planar[c][fr];
+                    if (v > 1.0f) v = 1.0f;
+                    if (v < -1.0f) v = -1.0f;
+                    fbuf[fr * och + c] = (short)(v * 32767.0f);
+                }
+            fwrite(fbuf, 2, (size_t)need, w);
+            total_s16 += need * 2;
         } else {
             if (first_bad < 0) {
                 LOGW("frame %u rc=%d consumed=%d och=%d ofr=%d", i, rc, consumed, och, ofr);
@@ -454,32 +471,13 @@ int dtsglue_decode_to_wav(const char *wav_path,
     }
     LOGI("decoded frames=%d ch=%d dropped=%lld first_bad=%d", frames_total, ch, dropped, first_bad);
 
-    /* float -> s16 交错 */
-    if (ch <= 0 || frames_total <= 0) { fclose(raw); fclose(w); return -23; }
-    fseek(raw, 0, SEEK_END);
-    long fsz = ftell(raw);
-    fseek(raw, 0, SEEK_SET);
-    long nsamp = fsz / 4;
-    float *buf = (float *)malloc((size_t)fsz);
-    short *s16 = (short *)malloc((size_t)nsamp * 2);
-    if (!buf || !s16 || fread(buf, 4, (size_t)nsamp, raw) != (size_t)nsamp) {
-        free(buf); free(s16); fclose(raw); fclose(w); return -24;
-    }
-    fclose(raw);
-    for (long i = 0; i < nsamp; i++) {
-        float v = buf[i];
-        if (v > 1.0f) v = 1.0f;
-        if (v < -1.0f) v = -1.0f;
-        s16[i] = (short)(v * 32767.0f);
-    }
-    free(buf);
+    if (ch <= 0 || frames_total <= 0) { fclose(w); return -23; }
     int rate = 48000;
     if (g_mp4.timescale > 0 && g_mp4.timescale != 1) rate = (int)g_mp4.timescale;
-    unsigned int dsz = (unsigned int)(nsamp * 2);
-    wav_write_header(w, dsz, ch, rate);
-    fseek(w, 0, SEEK_END);
-    fwrite(s16, 1, (size_t)dsz, w);
-    free(s16);
+    /* 回填真实头：先回到文件头覆盖开头的占位头，否则真头会被写到数据之后 */
+    fseek(w, 0, SEEK_SET);
+    wav_write_header(w, (unsigned int)total_s16, ch, rate);
+    fflush(w);
     fclose(w);
     if (progress) progress(100, user);
     return dropped > 0 && frames_total == 0 ? -25 : 0;

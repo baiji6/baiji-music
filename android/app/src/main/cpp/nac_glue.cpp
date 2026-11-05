@@ -51,6 +51,10 @@
 #include <vector>
 
 #ifdef __ANDROID__
+#include <unistd.h>  /* sysconf(_SC_NPROCESSORS_ONLN) —— 多核加速 MNN 推理 */
+#endif
+
+#ifdef __ANDROID__
 #include <android/log.h>
 #define TAG "nac_glue"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -471,10 +475,22 @@ int nacglue_init(const char *model_path) {
     if (!model_path || !model_path[0]) return -1;
     if (mnnBind() != 0) return -2;
 
-    /* ScheduleConfig：全零 + CPU 后端 + 4 线程（等价默认构造） */
+    /* ScheduleConfig：全零 + CPU 后端 + 多线程。
+     * numThread 写在 +28 字段。旧实现写死 4，在多核设备上严重亏待推理吞吐；
+     * 这里按在线 CPU 核数自适应（封顶 8、保底 2），单核设备退化为 4 兜底。
+     * MNN 对超额订阅有内部调度，核数写大不会崩，只是略增开销。 */
     MNNScheduleConfig cfg;
     memset(&cfg, 0, sizeof cfg);
-    *(int *)(cfg.raw + 28) = 4;
+    int numThread = 4;
+#ifdef __ANDROID__
+    long np = sysconf(_SC_NPROCESSORS_ONLN);
+    if (np > 0) {
+        numThread = (int)np;
+        if (numThread > 8) numThread = 8;
+        if (numThread < 2) numThread = 2;
+    }
+#endif
+    *(int *)(cfg.raw + 28) = numThread;
 
     void *interp = g_createFromFile(model_path);
     LOGI("createFromFile(%s) -> %p", model_path, interp);

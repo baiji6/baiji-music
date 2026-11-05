@@ -99,30 +99,55 @@ abstract final class PlaylistApi {
   }
 
   /// 网易云歌单详情。
+  ///
+  /// 关键坑：老 `/api/playlist/detail` 对**用户自建歌单**只回前 10 首预览
+  /// （trackCount 也谎报 10），导致登录账号的歌单只显示 10 首。
+  /// 正确做法（与 [share_playlist_api.NeteasePlaylist] 一致）：用
+  /// `/api/v6/playlist/detail` 拿元数据 + 完整 `trackIds`，再分批调
+  /// `/api/v3/song/detail`（每批 ≤100，实测 200 会回 0 条）补全详情，
+  /// 并按 `trackIds` 顺序还原。走 `NeteaseClient.postApi` 自动带登录
+  /// Cookie，私有歌单也能取到全量。
   static Future<PlaylistDetail?> netease(String id) async {
     try {
-      final url = Uri.parse('https://music.163.com/api/playlist/detail')
-          .replace(queryParameters: {'id': id}).toString();
-      final data = await getJsonWithRetry(url, headers: const {
-        'Referer': 'https://music.163.com/',
-        'User-Agent': 'Mozilla/5.0',
-      });
-      final r = data['result'];
-      if (r is! Map<String, dynamic>) return null;
-      final songs = <Song>[];
-      for (final t in (r['tracks'] ?? const []) as List<dynamic>) {
-        if (t is! Map<String, dynamic>) continue;
-        final song = AppServices.instance.netease.api.toSong(t);
-        if (song == null) continue;
-        songs.add(song);
+      final client = AppServices.instance.netease;
+      final json = await client.postApi(
+        '${NeteaseClient.apiBase}/v6/playlist/detail',
+        {'id': id, 'n': '100000', 's': '0'},
+      );
+      final playlist = json['playlist'];
+      if (playlist is! Map<String, dynamic>) return null;
+
+      // 全量歌曲 id（trackIds 含全部；tracks 仅前 10 预览，作兜底）
+      final trackIds = (playlist['trackIds'] ?? const []) as List<dynamic>;
+      final ids = <int>[];
+      for (final t in trackIds) {
+        if (t is Map && t['id'] is num) ids.add((t['id'] as num).toInt());
       }
-      final cr = r['creator'];
+
+      final List<Song> songs;
+      if (ids.isEmpty) {
+        // 极少数歌单不回 trackIds，退化到预览 tracks（旧行为兜底）
+        songs = [
+          for (final t in (playlist['tracks'] ?? const []) as List<dynamic>)
+            if (t is Map<String, dynamic>) client.api.toSong(t)
+        ].whereType<Song>().toList();
+      } else {
+        // 分批补详情（v3 song/detail，每批 100），按 id 顺序还原
+        final fetched = <Song>[];
+        for (var i = 0; i < ids.length; i += 100) {
+          final end = (i + 100).clamp(0, ids.length);
+          fetched.addAll(await client.api.songDetailSongs(ids.sublist(i, end)));
+        }
+        songs = mergeNeteaseTracks(ids, fetched);
+      }
+
+      final creator = playlist['creator'];
       return PlaylistDetail(
         id: id,
-        name: (r['name'] ?? '').toString(),
-        cover: _https((r['coverImgUrl'] ?? '').toString()),
-        creator: cr is Map ? (cr['nickname'] ?? '').toString() : '',
-        desc: (r['description'] ?? '').toString(),
+        name: (playlist['name'] ?? '').toString(),
+        cover: _https((playlist['coverImgUrl'] ?? '').toString()),
+        creator: creator is Map ? (creator['nickname'] ?? '').toString() : '',
+        desc: (playlist['description'] ?? '').toString(),
         songs: songs,
       );
     } catch (e) {
@@ -203,6 +228,19 @@ abstract final class PlaylistApi {
       AppLog.w('PlaylistApi', '酷我歌单详情失败 pid=$pid: $e');
       return null;
     }
+  }
+
+  /// 纯逻辑：把全量 id 与分批拿到的 [Song] 合并成有序列表（便于单测）。
+  ///
+  /// [ids] 为歌单真实顺序（来自 v6 的 trackIds），[fetched] 为各批次
+  /// song/detail 返回的并集（顺序/缺失不定）。按 [ids] 顺序还原，缺失的
+  /// id（网易云下架/无版权曲目不返回详情）直接跳过。
+  static List<Song> mergeNeteaseTracks(List<int> ids, List<Song> fetched) {
+    final byId = <int, Song>{};
+    for (final s in fetched) {
+      byId[s.songId] = s;
+    }
+    return [for (final id in ids) byId[id]].whereType<Song>().toList();
   }
 
   /// 按平台取歌单详情。

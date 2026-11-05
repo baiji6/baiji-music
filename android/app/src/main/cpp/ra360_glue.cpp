@@ -253,6 +253,17 @@ int ra360glue_decode_to_wav(const char *wav_path,
     unsigned char *buf = (unsigned char *)malloc((size_t)g_minbuf);
     if (!buf) { fclose(w); return -21; }
 
+    /* 输出缓冲：SDK 每帧仅回 ~8KB，逐帧 fwrite 会产生海量 syscall。
+     * 攒到 256KB 再落盘，显著减少写次数（不改变输出字节序/内容）。 */
+    static unsigned char *outbuf = NULL;
+    static long outcap = 0;
+    static long outlen = 0;
+    if (outcap == 0) {
+        outcap = 256 * 1024;
+        outbuf = (unsigned char *)malloc((size_t)outcap);
+    }
+    outlen = 0;
+
     long total = 0;
     int empty_run = 0;
     int last_pct = -1;
@@ -260,7 +271,13 @@ int ra360glue_decode_to_wav(const char *wav_path,
     for (int i = 0; i < 200000; i++) {
         long n = g_decode(g_dec, buf, 0, (unsigned long)g_minbuf);
         if (n > 0) {
-            fwrite(buf, 1, (size_t)n, w);
+            /* 写入输出缓冲，满则 flush */
+            if (outlen + n > outcap) {
+                fwrite(outbuf, 1, (size_t)outlen, w);
+                outlen = 0;
+            }
+            memcpy(outbuf + outlen, buf, (size_t)n);
+            outlen += n;
             total += n;
             empty_run = 0;
         } else if (n < 0) {
@@ -279,11 +296,14 @@ int ra360glue_decode_to_wav(const char *wav_path,
             if (pct != last_pct) { last_pct = pct; progress(pct, user); }
         }
     }
+    if (outlen > 0) fwrite(outbuf, 1, (size_t)outlen, w);
     free(buf);
     LOGI("decoded total=%ld bytes", total);
     if (total <= 0) { fclose(w); return -22; }
     unsigned int dsz = (unsigned int)total;
+    fseek(w, 0, SEEK_SET);   /* 回填真头：先回到文件头覆盖占位头，否则真头会写到数据之后 */
     wav_write_header(w, dsz);
+    fflush(w);
     fclose(w);
     if (progress) progress(100, user);
     return 0;

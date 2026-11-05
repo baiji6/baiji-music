@@ -189,24 +189,6 @@ class NeteaseApi {
 
   // ================= 歌单 / 专辑 =================
 
-  /// 歌单详情中的歌曲列表。
-  Future<List<Song>> playlistDetail(int playlistId) async {
-    final json = await client.postApi(
-      '${NeteaseClient.apiBase}/v6/playlist/detail',
-      {'id': '$playlistId', 'n': '100000', 's': '0'},
-    );
-    final playlist = json['playlist'];
-    if (playlist is! Map<String, dynamic>) return const [];
-    final tracks = playlist['tracks'] as List<dynamic>?;
-    if (tracks == null) return const [];
-    final result = <Song>[];
-    for (final item in tracks) {
-      final s = toSong(item is Map<String, dynamic> ? item : {});
-      if (s != null) result.add(s);
-    }
-    return result;
-  }
-
   /// 专辑详情中的歌曲列表。
   Future<List<Song>> albumDetail(int albumId) async {
     final json = await client.getApi('${NeteaseClient.apiBase}/v1/album/$albumId');
