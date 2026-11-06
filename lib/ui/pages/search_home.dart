@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -351,6 +352,16 @@ class _SearchHomeState extends State<SearchHome> {
     setState(() {
       _pendingDownloadSong = song;
       _showDownloadSheet = true;
+    });
+    // 旧持久化歌曲没有音质标记，打开弹层时按需补全（v2.4.10）。
+    unawaited(_ensureQualityCodes(song));
+  }
+
+  Future<void> _ensureQualityCodes(Song song) async {
+    final s = await MusicApi.ensureQualityCodes(song);
+    if (!mounted || identical(s, song)) return;
+    setState(() {
+      if (_pendingDownloadSong != null) _pendingDownloadSong = s;
     });
   }
 

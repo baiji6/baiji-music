@@ -1,5 +1,7 @@
-// 音质列表「按歌曲实际有的音质展示」回归测试（v2.4.9）。
+// 音质列表「按歌曲实际有的音质展示」回归测试（v2.4.9 起，v2.4.10 修正）。
 // 全部离线：用真实接口响应片段驱动解析，不联网、不依赖平台通道。
+// v2.4.10：网易云改为按歌曲文件对象 l/m/h/sq/hr 判定，不再误用
+// privilege 里的账号等级（那会让每首歌解析出同一套档位）。
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -34,6 +36,8 @@ const String _qqFileDolbyJson = '''
 ''';
 
 // 网易云搜索接口真实 song.privilege（「晴天 周杰伦」，2026-11 抓取）。
+// playMaxBrLevel / maxBrLevel 是账号可播等级：实测三首音质不同的歌都返回
+// vivid。v2.4.9 误把它当歌曲音质，这里保留作为「不应影响解析」的干扰项。
 const String _nePrivilegeJson = '''
 {"flag":3641604,"code":0,"dlLevel":"none","subp":1,"fl":320000,"fee":8,
 "dl":0,"plLevel":"exhigh","maxBrLevel":"vivid","rightSource":0,
@@ -128,65 +132,170 @@ void main() {
     });
   });
 
-  group('网易云：privilege → 可用 level', () {
-    test('maxBrLevel=vivid：基础档 + 无损 + Hi-Res + vivid，不虚报其它空间音质', () {
-      final song = <String, dynamic>{
-        'privilege': jsonDecode(_nePrivilegeJson),
-        'sq': <String, dynamic>{'br': 999000},
-        'hr': <String, dynamic>{'br': 1394128},
-      };
-      final levels = NeteaseQuality.availableLevelsFrom(song);
-      expect(levels, containsAll(<String>[
+  group('网易云：歌曲文件标记 → 可用 level（v2.4.10）', () {
+    // 真实 cloudsearch/pc 响应：三首同名「晴天」的文件对象各不相同，
+    // 但 privilege 里的 playMaxBrLevel / maxBrLevel 全都是 vivid（账号等级）。
+    Map<String, dynamic> songOf({
+      bool l = true,
+      bool m = true,
+      bool h = true,
+      bool sq = false,
+      bool hr = false,
+    }) =>
+        <String, dynamic>{
+          'privilege': jsonDecode(_nePrivilegeJson),
+          if (l) 'l': <String, dynamic>{'br': 128000, 'size': 4332717},
+          if (m) 'm': <String, dynamic>{'br': 192000, 'size': 6499053},
+          if (h) 'h': <String, dynamic>{'br': 320000, 'size': 10831725},
+          if (sq) 'sq': <String, dynamic>{'br': 646443, 'size': 21882106},
+          if (hr) 'hr': <String, dynamic>{'br': 1394128, 'size': 47185529},
+        };
+
+    test('有 sq + hr 的歌：标准 / 极高 / 无损 / Hi-Res，不虚报 vivid', () {
+      final levels =
+          NeteaseQuality.availableLevelsFrom(songOf(sq: true, hr: true));
+      expect(levels, equals(<String>{
         NeteaseQuality.standard.level,
         NeteaseQuality.exhigh.level,
         NeteaseQuality.lossless.level,
         NeteaseQuality.hires.level,
-        NeteaseQuality.vivid.level,
-      ]));
+      }));
+      expect(levels, isNot(contains(NeteaseQuality.vivid.level)));
       expect(levels, isNot(contains(NeteaseQuality.dolby.level)));
       expect(levels, isNot(contains(NeteaseQuality.sky.level)));
-      expect(levels, isNot(contains(NeteaseQuality.jymaster.level)));
-      expect(levels, isNot(contains(NeteaseQuality.jyeffect.level)));
     });
 
-    test('只有 320k 权限且无 sq/hr：只显示标准与极高', () {
-      final levels = NeteaseQuality.availableLevelsFrom(<String, dynamic>{
-        'privilege': <String, dynamic>{
-          'playMaxBrLevel': 'exhigh',
-          'maxBrLevel': 'exhigh',
-          'flLevel': 'exhigh',
-          'plLevel': 'exhigh',
-        },
-      });
+    test('只有 sq 没有 hr 的歌：不虚报 Hi-Res', () {
+      final levels = NeteaseQuality.availableLevelsFrom(songOf(sq: true));
+      expect(levels, equals(<String>{
+        NeteaseQuality.standard.level,
+        NeteaseQuality.exhigh.level,
+        NeteaseQuality.lossless.level,
+      }));
+      expect(levels, isNot(contains(NeteaseQuality.hires.level)));
+    });
+
+    test('只有 l/m/h 的歌：只有标准与极高', () {
+      final levels = NeteaseQuality.availableLevelsFrom(songOf());
       expect(levels, equals(<String>{
         NeteaseQuality.standard.level,
         NeteaseQuality.exhigh.level,
       }));
     });
 
-    test('无 privilege / 未知 level 时返回空集合（回退全量）', () {
-      expect(NeteaseQuality.availableLevelsFrom(<String, dynamic>{}), isEmpty);
+    test('回归：三首音质不同的歌不再解析出同一套档位', () {
+      final a =
+          NeteaseQuality.availableLevelsFrom(songOf(sq: true, hr: true));
+      final b = NeteaseQuality.availableLevelsFrom(songOf(sq: true));
+      final c = NeteaseQuality.availableLevelsFrom(songOf());
+      expect(a.length, greaterThan(b.length));
+      expect(b.length, greaterThan(c.length));
+      expect(a, isNot(equals(b)));
+      expect(b, isNot(equals(c)));
+    });
+
+    test('账号等级 playMaxBrLevel / maxBrLevel 不再影响结果', () {
+      final a = songOf(sq: true, hr: true);
+      final b = <String, dynamic>{
+        ...a,
+        'privilege': <String, dynamic>{
+          'playMaxBrLevel': 'standard',
+          'maxBrLevel': 'standard',
+          'plLevel': 'standard',
+          'maxbr': 128000,
+        },
+      };
+      expect(NeteaseQuality.availableLevelsFrom(b),
+          equals(NeteaseQuality.availableLevelsFrom(a)));
+    });
+
+    test('/v3/song/detail 无 privilege 也能按文件对象解析（按需补全用）', () {
+      final detail = <String, dynamic>{
+        'l': <String, dynamic>{'br': 128000, 'size': 4332717},
+        'h': <String, dynamic>{'br': 320000, 'size': 10831725},
+        'sq': <String, dynamic>{'br': 646443, 'size': 21882106},
+        'hr': <String, dynamic>{'br': 1394128, 'size': 47185529},
+      };
+      expect(NeteaseQuality.availableLevelsFrom(detail), equals(<String>{
+        NeteaseQuality.standard.level,
+        NeteaseQuality.exhigh.level,
+        NeteaseQuality.lossless.level,
+        NeteaseQuality.hires.level,
+      }));
+    });
+
+    test('qualities 对象明确标记时才显示空间/母带档', () {
+      final s = songOf(sq: true, hr: true)
+        ..['qualities'] = <String, dynamic>{
+          'dolbyMusic': 1,
+          'jyMasterMusic': 'yes',
+        };
+      final levels = NeteaseQuality.availableLevelsFrom(s);
+      expect(levels, contains(NeteaseQuality.dolby.level));
+      expect(levels, contains(NeteaseQuality.jymaster.level));
+      expect(levels, isNot(contains(NeteaseQuality.sky.level)));
+      expect(levels, isNot(contains(NeteaseQuality.vivid.level)));
+    });
+
+    test('老版字段 lMusic/hMusic/sqMusic/hrMusic 同样可解析', () {
+      final levels =
+          NeteaseQuality.availableLevelsFrom(<String, dynamic>{
+        'lMusic': <String, dynamic>{'br': 128000},
+        'hMusic': <String, dynamic>{'br': 320000},
+        'sqMusic': <String, dynamic>{'br': 999000},
+      });
+      expect(levels, equals(<String>{
+        NeteaseQuality.standard.level,
+        NeteaseQuality.exhigh.level,
+        NeteaseQuality.lossless.level,
+      }));
+    });
+
+    test('兜底：只有 privilege.maxbr 时按数值推基础档，不读 level 名', () {
       expect(
         NeteaseQuality.availableLevelsFrom(<String, dynamic>{
-          'privilege': <String, dynamic>{'playMaxBrLevel': 'none'},
+          'privilege': <String, dynamic>{
+            'maxbr': 320000,
+            'maxBrLevel': 'vivid',
+          },
         }),
-        isEmpty,
+        equals(<String>{
+          NeteaseQuality.standard.level,
+          NeteaseQuality.exhigh.level,
+        }),
+      );
+      expect(
+        NeteaseQuality.availableLevelsFrom(<String, dynamic>{
+          'privilege': <String, dynamic>{'maxbr': 1999000},
+        }),
+        equals(<String>{
+          NeteaseQuality.standard.level,
+          NeteaseQuality.exhigh.level,
+          NeteaseQuality.lossless.level,
+          NeteaseQuality.hires.level,
+        }),
       );
     });
 
-    test('NeteaseApi.toSong 把标记带进 Song', () {
-      // toSong 需要最小歌曲对象；用 NeteaseApi 实例调用。
+    test('无任何标记时返回空集合（调用方回退全量）', () {
+      expect(NeteaseQuality.availableLevelsFrom(<String, dynamic>{}), isEmpty);
+    });
+
+    test('NeteaseApi.toSong 把歌曲文件标记带进 Song', () {
       final api = NeteaseApi(NeteaseClient());
       final song = api.toSong(<String, dynamic>{
         'id': 266839735,
         'name': '晴天',
         'privilege': jsonDecode(_nePrivilegeJson),
-        'hr': <String, dynamic>{'br': 1394128},
+        'l': <String, dynamic>{'br': 128000, 'size': 4332717},
+        'h': <String, dynamic>{'br': 320000, 'size': 10831725},
+        'hr': <String, dynamic>{'br': 1394128, 'size': 47185529},
       });
       expect(song, isNotNull);
-      expect(song!.qualityCodes, contains(NeteaseQuality.vivid.level));
-      expect(song.qualityCodes, contains(NeteaseQuality.hires.level));
-      expect(song.qualityCodes, isNot(contains(NeteaseQuality.dolby.level)));
+      expect(song!.qualityCodes, contains(NeteaseQuality.hires.level));
+      expect(song.qualityCodes, contains(NeteaseQuality.standard.level));
+      expect(song.qualityCodes, isNot(contains(NeteaseQuality.lossless.level)));
+      expect(song.qualityCodes, isNot(contains(NeteaseQuality.vivid.level)));
     });
   });
 
@@ -271,6 +380,27 @@ void main() {
 
       final legacy = Song.fromJson(<String, dynamic>{'mid': 'old'});
       expect(legacy.qualityCodes, isEmpty);
+    });
+
+    test('专辑补齐用 copyWith 时保留 qualityCodes（v2.4.10 回归）', () {
+      final s = Song(
+        mid: 'ne1',
+        songId: 1,
+        name: '晴天',
+        singer: '周杰伦',
+        album: '',
+        albumMid: '',
+        duration: 0,
+        cover: '',
+        qualityCodes: <String>{
+          NeteaseQuality.hires.level,
+          NeteaseQuality.lossless.level,
+        },
+      );
+      final patched = s.copyWith(album: '叶惠美', cover: 'http://x/cover.jpg');
+      expect(patched.album, '叶惠美');
+      expect(patched.cover, 'http://x/cover.jpg');
+      expect(patched.qualityCodes, equals(s.qualityCodes));
     });
 
     test('copyWith 可覆盖 qualityCodes', () {

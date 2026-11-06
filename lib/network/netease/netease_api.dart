@@ -207,18 +207,12 @@ class NeteaseApi {
       if (item is! Map<String, dynamic>) continue;
       final song = toSong(item);
       if (song == null) continue;
-      // 专辑接口的歌曲可能缺少专辑信息，补齐
+      // 专辑接口的歌曲可能缺少专辑信息，补齐。必须用 copyWith，
+      // 否则会把 toSong 已解析出的 qualityCodes 丢掉（v2.4.10）。
       if (song.album.isEmpty) {
-        result.add(Song(
-          mid: song.mid,
-          songId: song.songId,
-          name: song.name,
-          singer: song.singer,
+        result.add(song.copyWith(
           album: albumName,
-          albumMid: song.albumMid,
-          duration: song.duration,
           cover: song.cover.isEmpty ? albumCover : song.cover,
-          source: song.source,
         ));
       } else {
         result.add(song);

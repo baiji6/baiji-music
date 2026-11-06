@@ -414,37 +414,82 @@ class NeteaseQuality {
     'vivid': 8,
   };
 
-  /// 从搜索/详情接口歌曲对象（含 `privilege`）解析实际可播放的 level 集合。
+  /// 从歌曲对象解析这首歌**实际存在**的音质 level 集合（v2.4.10）。
   ///
-  /// 依据 `playMaxBrLevel`（回退 `maxBrLevel` / `flLevel` / `plLevel`）、
-  /// `sq`（无损）、`hr`（Hi-Res）标记。特殊空间/母带档位只在服务端把最高
-  /// 档明确标为该 level 时才显示，避免「能播 vivid」被误当成「同时有
-  /// dolby / sky / jymaster」。返回空集合表示接口未给标记（回退全量）。
+  /// 判据是歌曲自身的文件对象 `l/m/h/sq/hr`（`cloudsearch/pc` 与
+  /// `/api/v3/song/detail` 都返回，且**与账号身份无关**：有该对象即表示
+  /// 服务端存在对应码率的文件），另兼容开放平台 `qualities` 对象与老版
+  /// `lMusic/mMusic/hMusic/sqMusic/hrMusic/bMusic` 字段。
+  ///
+  /// 注意：`privilege.playMaxBrLevel` / `plLevel` 是**用户可播放上限**，
+  /// `maxBrLevel` 在搜索接口里也常被填成账号等级（实测三首音质不同的歌
+  /// 都返回 `vivid`）。v2.4.9 误用了它们，导致每首歌都解析出同一套档位、
+  /// 还虚报歌曲没有的 Hi-Res / 全景声。仅当文件对象全部缺失时，才用
+  /// `privilege.maxbr`（数值，歌曲最大码率）给基础档兜底，不用 level 名，
+  /// 也不虚报空间/母带档。返回空集合表示接口未给标记（调用方回退全量）。
   static Set<String> availableLevelsFrom(Map<String, dynamic> song) {
-    final p = song['privilege'];
-    if (p is! Map) return const <String>{};
-    final priv = Map<String, dynamic>.from(p);
-    String level(String key) => (priv[key] ?? '').toString();
-    final candidates = <String>[
-      level('playMaxBrLevel'),
-      level('maxBrLevel'),
-      level('flLevel'),
-      level('plLevel'),
-    ];
-    final maxLevelRaw =
-        candidates.firstWhere((s) => s.isNotEmpty, orElse: () => '');
-    final maxRank = levelRank[maxLevelRaw];
-    if (maxRank == null) return const <String>{};
+    final out = <String>{};
 
-    final out = <String>{standard.level, exhigh.level};
-    if (song['sq'] is Map || maxRank >= levelRank['lossless']!) {
+    bool hasFile(dynamic v) {
+      if (v is! Map) return false;
+      final m = Map<String, dynamic>.from(v);
+      final br = m['br'];
+      final size = m['size'];
+      return (br is num && br > 0) || (size is num && size > 0);
+    }
+
+    // 标准 128k：l / lMusic / bMusic（m / mMusic 是 192k，无独立档位）
+    if (hasFile(song['l']) ||
+        hasFile(song['lMusic']) ||
+        hasFile(song['bMusic'])) {
+      out.add(standard.level);
+    }
+    // 极高 320k：h / hMusic
+    if (hasFile(song['h']) || hasFile(song['hMusic'])) {
+      out.add(exhigh.level);
+    }
+    // 无损：sq / sqMusic
+    if (hasFile(song['sq']) || hasFile(song['sqMusic'])) {
       out.add(lossless.level);
     }
-    if (song['hr'] is Map || maxRank >= levelRank['hires']!) {
+    // Hi-Res：hr / hrMusic
+    if (hasFile(song['hr']) || hasFile(song['hrMusic'])) {
       out.add(hires.level);
     }
-    for (final q in <NeteaseQuality>[jyeffect, sky, jymaster, dolby, vivid]) {
-      if (maxLevelRaw == q.level) out.add(q.level);
+
+    // 空间 / 母带档：只有服务端明确给出对应标记才显示，避免虚报。
+    final q = song['qualities'];
+    if (q is Map) {
+      final m = Map<String, dynamic>.from(q);
+      void addSpecial(String key, NeteaseQuality level) {
+        final v = m[key];
+        if (v == null) return;
+        final present = v is num
+            ? v > 0
+            : (v is Map ? v.isNotEmpty : v.toString().trim().isNotEmpty);
+        if (present) out.add(level.level);
+      }
+
+      addSpecial('jyEffectMusic', jyeffect);
+      addSpecial('skMusic', sky);
+      addSpecial('jyMasterMusic', jymaster);
+      addSpecial('dolbyMusic', dolby);
+    }
+
+    // 兜底：极老接口只给 privilege 时，用「歌曲最大码率」数值推基础档。
+    // 不读 playMaxBrLevel / maxBrLevel（账号等级），也不加空间/母带档。
+    if (out.isEmpty) {
+      final p = song['privilege'];
+      if (p is Map) {
+        final priv = Map<String, dynamic>.from(p);
+        final maxbr = priv['maxbr'];
+        if (maxbr is num && maxbr > 0) {
+          out.add(standard.level);
+          if (maxbr >= 320000) out.add(exhigh.level);
+          if (maxbr >= 999000) out.add(lossless.level);
+          if (maxbr >= 1999000) out.add(hires.level);
+        }
+      }
     }
     return out;
   }

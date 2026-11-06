@@ -128,6 +128,52 @@ class MusicApi {
         qualityCodes: s.qualities.map((q) => q.id).toSet(),
       );
 
+  /// 音质标记按需补全缓存（进程内）。key = `source:mid`，避免同一首歌
+  /// 反复查详情接口。
+  static final Map<String, Set<String>> _qualityCache =
+      <String, Set<String>>{};
+
+  /// 按需补全 [song] 的 `qualityCodes`（v2.4.10）。
+  ///
+  /// 历史 / 收藏 / 歌单里持久化的旧 Song 没有音质标记，或分享歌单、
+  /// 歌单详情等接口构造时没带上，UI 会因此回退全量档位，表现为
+  /// 「每首歌都一样」。这里按平台查一次歌曲详情（都是与账号身份无关的
+  /// 歌曲级标记），成功后返回带 qualityCodes 的新 Song；失败静默返回原
+  /// 对象，UI 仍回退全量，不会比现在更差。仅在打开音质弹层时调用。
+  static Future<Song> ensureQualityCodes(Song song) async {
+    if (song.isLocal || song.qualityCodes.isNotEmpty) return song;
+    final key = '${song.source}:${song.mid}';
+    final cached = _qualityCache[key];
+    if (cached != null && cached.isNotEmpty) {
+      return song.copyWith(qualityCodes: cached);
+    }
+    try {
+      Set<String> codes = const <String>{};
+      if (song.isNetease) {
+        if (song.songId > 0) {
+          final list = await AppServices.instance.netease.api
+              .songDetailSongs(<int>[song.songId]);
+          if (list.isNotEmpty) codes = list.first.qualityCodes;
+        }
+      } else if (song.isKuwo) {
+        final info = await KuwoApi.songInfo(song.mid);
+        if (info != null) {
+          codes = info.qualities.map((q) => q.id).toSet();
+        }
+      } else {
+        final track = await AppServices.instance.qq.song.getDetail(song.mid);
+        if (track != null) codes = Quality.availableCodesFrom(track['file']);
+      }
+      if (codes.isNotEmpty) {
+        _qualityCache[key] = codes;
+        return song.copyWith(qualityCodes: codes);
+      }
+    } catch (e) {
+      AppLog.w('MusicApi', '音质标记补全失败 $key: $e');
+    }
+    return song;
+  }
+
   /// 按来源获取相关搜索建议；失败时返回空列表。
   static Future<List<String>> suggestions(String source, String keyword,
       {int num = 8}) async {

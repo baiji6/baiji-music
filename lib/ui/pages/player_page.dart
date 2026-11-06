@@ -305,6 +305,18 @@ class _PlayerPageState extends State<PlayerPage> {
       _pendingDownloadSong = s;
       _showDownloadQualitySheet = true;
     });
+    // 历史/收藏里的旧 Song 没有音质标记，打开弹层时按需补全一次（v2.4.10）。
+    await _ensureQualityCodes(s);
+  }
+
+  /// 补全当前歌曲的音质标记，成功后刷新弹层选项。
+  Future<void> _ensureQualityCodes(Song s0) async {
+    final s = await MusicApi.ensureQualityCodes(s0);
+    if (!mounted || identical(s, s0)) return;
+    setState(() {
+      _song = s;
+      if (_pendingDownloadSong != null) _pendingDownloadSong = s;
+    });
   }
 
   /// 第二步：音质与歌词粒度都已选好，落库并加入下载队列。
@@ -709,8 +721,11 @@ class _PlayerPageState extends State<PlayerPage> {
             actualQq: _actualQq,
             actualNe: _actualNe,
             actualKuwo: _actualKuwo,
-            onOpenSheet: () =>
-                setState(() => _showPlayQualitySheet = true),
+            onOpenSheet: () {
+              setState(() => _showPlayQualitySheet = true);
+              final s = _song;
+              if (s != null) unawaited(_ensureQualityCodes(s));
+            },
           ),
           const SizedBox(width: 12),
           // 倍速（0.01~50 无级）：图标按钮与「音频规格」同款；
