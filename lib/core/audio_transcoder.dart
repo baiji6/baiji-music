@@ -6,11 +6,17 @@
 /// App 播放链路用的 media_kit / libmpv 内嵌 ffmpeg 是**白名单纯解码构建**
 /// （`--disable-muxers --disable-encoders --disable-programs`），能解几乎所有
 /// 音质，但**不含编码器 / muxer / ffmpeg 命令行**，无法用来产出文件。
-/// 因此转码走标准 ffmpeg 可执行文件，路径按三级探测：
+///
+/// v2.4.8 起 Android 随 APK 打包一份「裁剪版静态 ffmpeg CLI」
+/// （`libffmpeg_exec.so`，放在 `nativeLibraryDir`），由 UI 层通过
+/// `FfmpegLocator.extraCandidates` 注入候选路径，因此移动端开箱即用。
+/// 探测顺序：
 ///   1. 页面手动指定 / 环境变量 `BAIJI_FFMPEG`；
-///   2. 随包内置目录（可执行文件同目录的 `bin/ffmpeg[.exe]`）；
-///   3. 系统 PATH（`which ffmpeg` / `where ffmpeg`）。
-/// 桌面端三平台通常可直接命中 PATH；移动端若未提供可执行文件会明确报错。
+///   2. `extraCandidates`（Android 内置引擎）；
+///   3. 随包内置目录（可执行文件同目录的 `bin/ffmpeg[.exe]`）；
+///   4. 系统 PATH（`which ffmpeg` / `where ffmpeg`）。
+/// 注意 [AudioTranscoder.ffmpegPath] 可为空：DTS/360RA/NAC 直出 WAV
+/// 走自研解码器，不需要 ffmpeg，只有真正需要编码/封装时才要求引擎可用。
 ///
 /// ## 特殊格式
 /// DTS:X / 360RA / NAC / AV3A 这四个格式的上游解码器不在通用 ffmpeg 里，
@@ -370,6 +376,7 @@ class TranscodeResult {
 class FfmpegLocator {
   FfmpegLocator({
     this.overridePath,
+    this.extraCandidates = const <String>[],
     bool Function(String)? fileExists,
     this.pathProbe,
     Map<String, String>? environment,
@@ -378,6 +385,11 @@ class FfmpegLocator {
 
   /// 手动指定路径（优先于环境变量 BAIJI_FFMPEG）。
   final String? overridePath;
+
+  /// 由 UI 层注入的额外候选（Android 随 APK 内置的 ffmpeg 位于
+  /// `applicationInfo.nativeLibraryDir/libffmpeg_exec.so`）。
+  /// 放在「手动指定」之后、「随包 bin / PATH」之前探测。
+  final List<String> extraCandidates;
 
   /// 可注入的文件存在性判断，便于离线测试。
   final bool Function(String) fileExists;
@@ -410,9 +422,9 @@ class FfmpegLocator {
       final p = manual.trim();
       return fileExists(p) ? p : null;
     }
-    // 2) 随包内置
-    for (final c in bundledCandidates()) {
-      if (fileExists(c)) return c;
+    // 2) 内置引擎（Android nativeLibraryDir）+ 随包 bin
+    for (final c in <String>[...extraCandidates, ...bundledCandidates()]) {
+      if (c.isNotEmpty && fileExists(c)) return c;
     }
     // 3) 系统 PATH（拿到局部变量才能做空值提升）
     final probe = pathProbe;
@@ -451,12 +463,15 @@ typedef SpecialDecoder = Future<String?> Function(
 /// 转码执行器。
 class AudioTranscoder {
   AudioTranscoder({
-    required this.ffmpegPath,
+    this.ffmpegPath,
     this.specialDecoder,
     this.probeDurationMs,
   });
 
-  final String ffmpegPath;
+  /// ffmpeg 可执行路径；可为 null。
+  /// DTS/360RA/NAC 直出 WAV 走自研解码器，不需要它；其余转码路径
+  /// 在缺少引擎时会返回带操作指引的明确错误，而不是抛出空指针。
+  final String? ffmpegPath;
 
   /// DTS / 360RA / NAC 本地解码回调；null 表示当前平台不支持这些格式。
   final SpecialDecoder? specialDecoder;
@@ -512,6 +527,17 @@ class AudioTranscoder {
         return TranscodeResult.failure(
             '${sp.label} 需要 App 内置解码器，当前平台不可用');
       }
+      // 自研解码器直出的是 s16 PCM WAV，无法应用自定义声道/采样率/位深。
+      // 这些参数需要 ffmpeg 做二次 PCM 变换，提前判断，避免白解码一遍。
+      final exe = ffmpegPath;
+      final needResample = effective.channels > 0 ||
+          effective.sampleRate > 0 ||
+          effective.bitDepth > 16;
+      if (needResample && (exe == null || exe.isEmpty)) {
+        return const TranscodeResult.failure(
+            '自定义声道 / 采样率 / 位深需要 ffmpeg 引擎：请清除自定义参数以直出 WAV，'
+            '或在「转码引擎」里指定 ffmpeg');
+      }
       final wav = await decoder(sp, inputPath, outputPath);
       if (_cancelled || (isCancelled?.call() ?? false)) {
         _cleanup(outputPath);
@@ -520,9 +546,7 @@ class AudioTranscoder {
       if (wav == null) {
         return TranscodeResult.failure('${sp.label} 解码失败（内置解码器不可用）');
       }
-      // 解码产物即 WAV；若用户额外要求改声道/采样率，再跑一次 ffmpeg 做 PCM 变换。
-      final needResample =
-          effective.channels > 0 || effective.sampleRate > 0;
+      // 解码产物即 WAV；若用户额外要求改声道/采样率/位深，再跑一次 ffmpeg 做 PCM 变换。
       if (!needResample) {
         onProgress?.call(const TranscodeProgress(processedMs: 0, totalMs: 1));
         return TranscodeResult.success(outputPath);
@@ -599,8 +623,14 @@ class AudioTranscoder {
       } catch (_) {}
     }
 
+    final exe = ffmpegPath;
+    if (exe == null || exe.isEmpty) {
+      return const TranscodeResult.failure(
+          '当前平台没有可用的 ffmpeg 转码引擎：请在「转码引擎」里手动指定，'
+          '或在 Android 上使用带内置引擎的安装包');
+    }
     try {
-      _process = await Process.start(ffmpegPath, args);
+      _process = await Process.start(exe, args);
     } catch (e) {
       return TranscodeResult.failure('无法启动 ffmpeg：$e');
     }

@@ -39,6 +39,17 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // v2.4.8 音频转码：返回 APK 解压出的 native 库目录。Android 10+ 禁止
+        // 执行应用私有数据目录里的文件，但 nativeLibraryDir 属于 /data/app
+        // 安装目录，其中的 libffmpeg_exec.so 可直接 execve。Dart 侧用它拼出
+        // 内置 ffmpeg 引擎路径，交给 FfmpegLocator 探测。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "baiji/native")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "nativeLibraryDir" -> result.success(applicationInfo.nativeLibraryDir)
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     /** Android ID（Settings.Secure.ANDROID_ID）；读不到返回空串。 */

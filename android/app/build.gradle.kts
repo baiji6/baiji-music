@@ -123,6 +123,19 @@ android {
         buildConfig = true
     }
 
+    // v2.4.8 音频转码：内置 ffmpeg 引擎是一个可执行文件，必须从 APK 里
+    // 解压成实体文件才能 execve。AGP 8+ / minSdk >= 23 默认把 native libs
+    // 以未压缩形式留在 APK 内（extractNativeLibs=false），nativeLibraryDir
+    // 里不会有可执行的实体文件。打开 legacy packaging 后，系统安装时把
+    // lib/<abi>/libffmpeg_exec.so 释放到 /data/app/.../lib/<abi>/ 并授予
+    // 执行权限——该目录只读，正是 Android 10+ W^X 下允许执行二进制的位置。
+    // AGP 9 起 Kotlin DSL 用 packaging（旧名 packagingOptions 已移除）。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     buildTypes {
         release {
             // CI 注入签名密钥时用 release 签名；本地无密钥时回退 debug 签名便于出包

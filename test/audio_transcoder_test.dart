@@ -6,6 +6,7 @@
 // 因此不把它放进会跑在 CI 里的单元测试，避免 flaky）。
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:baiji_music/core/audio_transcoder.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -419,5 +420,234 @@ void main() {
         'mha1', 'mhm1', 'flac', 'wav', 'mp3', 'ogg', 'm4a',
       ]),
     );
+  });
+
+  // v2.4.8：Android 随包内置 ffmpeg 引擎 + 特殊格式解绑硬依赖。
+  group('内置引擎探测与 ffmpeg 解绑', () {
+    test('extraCandidates（Android nativeLibraryDir）优先于随包 bin 与 PATH',
+        () async {
+      const bundled = '/data/app/lib/arm64/libffmpeg_exec.so';
+      final loc = FfmpegLocator(
+        extraCandidates: const [bundled],
+        environment: <String, String>{},
+        fileExists: (p) => p == bundled,
+        pathProbe: () async => '/usr/bin/ffmpeg',
+      );
+      expect(await loc.resolve(), bundled);
+    });
+
+    test('内置引擎不存在时继续回退 PATH', () async {
+      final loc = FfmpegLocator(
+        extraCandidates: const ['/missing/libffmpeg_exec.so'],
+        environment: <String, String>{},
+        fileExists: (p) => false,
+        pathProbe: () async => '/usr/bin/ffmpeg',
+      );
+      expect(await loc.resolve(), '/usr/bin/ffmpeg');
+    });
+
+    test('手动指定仍优先于内置引擎', () async {
+      final loc = FfmpegLocator(
+        overridePath: '/manual/ffmpeg',
+        extraCandidates: const ['/bundled/libffmpeg_exec.so'],
+        environment: <String, String>{},
+        fileExists: (p) => true,
+        pathProbe: () async => null,
+      );
+      expect(await loc.resolve(), '/manual/ffmpeg');
+    });
+
+    test('无 ffmpeg 时特殊格式直出 WAV 仍成功', () async {
+      final dir = await Directory.systemTemp.createTemp('baiji_nullff_');
+      try {
+        final input = File('${dir.path}${Platform.pathSeparator}song.nac');
+        await input.writeAsBytes(const [1, 2, 3, 4]);
+        var called = false;
+        final tc = AudioTranscoder(
+          ffmpegPath: null,
+          specialDecoder: (fmt, src, target) async {
+            called = true;
+            expect(fmt, SpecialFormat.nac);
+            await File(target).writeAsBytes(const [0, 0]);
+            return target;
+          },
+        );
+        final res = await tc.transcode(
+          inputPath: input.path,
+          outputDir: '${dir.path}${Platform.pathSeparator}out',
+          // wavOnly 源会把非 WAV 请求自动锁定为 WAV
+          options: const TranscodeOptions(
+            format: TranscodeFormat.mp3,
+            channels: 0,
+            sampleRate: 0,
+            bitDepth: 16,
+            bitrateKbps: 0,
+          ),
+        );
+        expect(called, isTrue);
+        expect(res.ok, isTrue, reason: res.error);
+        expect(res.outputPath, endsWith('.wav'));
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
+
+    /// 构造标准 44.1k/16bit/2ch s16 PCM WAV（非静音），模拟三个自研解码器
+    /// `decodeLocalToWav` 的产物规格。不依赖 ffprobe，CI runner 也能跑。
+    List<int> pcmWav() {
+      const rate = 44100;
+      const ch = 2;
+      const frames = 4410; // 0.1s，足够覆盖头部与 PCM 判定
+      final dataLen = frames * ch * 2;
+      final b = <int>[];
+      void u32(int v) => b.addAll(
+          [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >> 24) & 255]);
+      void u16(int v) => b.addAll([v & 255, (v >> 8) & 255]);
+      b.addAll('RIFF'.codeUnits);
+      u32(36 + dataLen);
+      b.addAll('WAVE'.codeUnits);
+      b.addAll('fmt '.codeUnits);
+      u32(16);
+      u16(1); // PCM
+      u16(ch);
+      u32(rate);
+      u32(rate * ch * 2);
+      u16(ch * 2);
+      u16(16);
+      b.addAll('data'.codeUnits);
+      u32(dataLen);
+      for (var i = 0; i < frames * ch; i++) {
+        b.addAll(const [0x00, 0x40]); // 非零样本 → 非静音
+      }
+      return b;
+    }
+
+    for (final c in <(String, SpecialFormat)>[
+      ('track.dtshd', SpecialFormat.dts),
+      ('track.mha1', SpecialFormat.ra360),
+      ('track.nac', SpecialFormat.nac),
+    ]) {
+      test('解绑后 ${c.$1} 无 ffmpeg 直出标准 PCM WAV（可播放）', () async {
+        final dir = await Directory.systemTemp.createTemp('baiji_wav_');
+        try {
+          final input = File('${dir.path}${Platform.pathSeparator}${c.$1}');
+          await input.writeAsBytes(const [1, 2, 3, 4]);
+          var calls = 0;
+          SpecialFormat? got;
+          final tc = AudioTranscoder(
+            ffmpegPath: null,
+            specialDecoder: (fmt, src, target) async {
+              calls++;
+              got = fmt;
+              await File(target).writeAsBytes(pcmWav());
+              return target;
+            },
+          );
+          final res = await tc.transcode(
+            inputPath: input.path,
+            outputDir: '${dir.path}${Platform.pathSeparator}out',
+            options: const TranscodeOptions(format: TranscodeFormat.flac),
+          );
+          expect(calls, 1, reason: '应只调用一次自研解码器，不触碰 ffmpeg');
+          expect(got, c.$2);
+          expect(res.ok, isTrue, reason: res.error);
+          expect(res.outputPath, endsWith('.wav'),
+              reason: 'wavOnly 应把非 WAV 请求锁定回 WAV');
+          final bytes = await File(res.outputPath!).readAsBytes();
+          expect(bytes.length, greaterThan(44));
+          expect(String.fromCharCodes(bytes, 0, 4), 'RIFF');
+          expect(String.fromCharCodes(bytes, 8, 12), 'WAVE');
+          expect(String.fromCharCodes(bytes, 12, 16), 'fmt ');
+          // fmt chunk：audio_format=1(PCM)、channels=2、rate=44100、bits=16
+          final rd = ByteData.sublistView(Uint8List.fromList(bytes));
+          expect(rd.getUint16(20, Endian.little), 1);
+          expect(rd.getUint16(22, Endian.little), 2);
+          expect(rd.getUint32(24, Endian.little), 44100);
+          expect(rd.getUint16(34, Endian.little), 16);
+          expect(String.fromCharCodes(bytes, 36, 40), 'data');
+          expect(bytes.sublist(44).any((v) => v != 0), isTrue,
+              reason: 'PCM 数据全零即静音，不算可播放');
+        } finally {
+          dir.deleteSync(recursive: true);
+        }
+      });
+    }
+
+    test('自研解码器返回 null（真机不可用）时给出精确错误而非假成功', () async {
+      final dir = await Directory.systemTemp.createTemp('baiji_nullff_');
+      try {
+        final input = File('${dir.path}${Platform.pathSeparator}song.nac');
+        await input.writeAsBytes(const [1, 2, 3, 4]);
+        final tc = AudioTranscoder(
+          ffmpegPath: null,
+          specialDecoder: (fmt, src, target) async => null,
+        );
+        final res = await tc.transcode(
+          inputPath: input.path,
+          outputDir: '${dir.path}${Platform.pathSeparator}out',
+          options: const TranscodeOptions(),
+        );
+        expect(res.ok, isFalse);
+        expect(res.error, contains('内置解码器不可用'));
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
+
+    test('无 ffmpeg 且要求自定义采样率时明确报错，不白解码一遍', () async {
+      final dir = await Directory.systemTemp.createTemp('baiji_nullff_');
+      try {
+        final input = File('${dir.path}${Platform.pathSeparator}song.nac');
+        await input.writeAsBytes(const [1, 2, 3, 4]);
+        var called = false;
+        final tc = AudioTranscoder(
+          ffmpegPath: null,
+          specialDecoder: (fmt, src, target) async {
+            called = true;
+            return target;
+          },
+        );
+        final res = await tc.transcode(
+          inputPath: input.path,
+          outputDir: '${dir.path}${Platform.pathSeparator}out',
+          options: const TranscodeOptions(
+            format: TranscodeFormat.wav,
+            channels: 0,
+            sampleRate: 48000,
+            bitDepth: 16,
+            bitrateKbps: 0,
+          ),
+        );
+        expect(called, isFalse);
+        expect(res.ok, isFalse);
+        expect(res.error, contains('自定义声道'));
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
+
+    test('无 ffmpeg 时普通格式返回可操作错误而不是抛异常', () async {
+      final dir = await Directory.systemTemp.createTemp('baiji_nullff_');
+      try {
+        final input = File('${dir.path}${Platform.pathSeparator}song.flac');
+        await input.writeAsBytes(const [1, 2, 3, 4]);
+        final tc = AudioTranscoder(ffmpegPath: null);
+        final res = await tc.transcode(
+          inputPath: input.path,
+          outputDir: '${dir.path}${Platform.pathSeparator}out',
+          options: const TranscodeOptions(
+            format: TranscodeFormat.mp3,
+            channels: 0,
+            sampleRate: 0,
+            bitDepth: 16,
+            bitrateKbps: 128,
+          ),
+        );
+        expect(res.ok, isFalse);
+        expect(res.error, contains('没有可用的 ffmpeg'));
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
   });
 }

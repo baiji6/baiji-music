@@ -6,6 +6,27 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.8
+
+### ✨ Android 端音频转码内置引擎（修复「安卓端没有探测到」）
+
+- **根因**：v2.4.7 的转码页在 Android 上显示「未找到 ffmpeg」并非探测逻辑写错——APK 内只有 media_kit / libmpv 的**纯解码白名单 ffmpeg**（`--disable-muxers --disable-encoders --disable-programs`），没有编码器 / muxer / 命令行，产不出文件；而 Android 10+ 的 W^X 限制又禁止从应用数据目录 `execve`，页面里「手动选择 ffmpeg」在真机上基本无效。
+- **内置裁剪版静态 ffmpeg**：用 NDK 28.2.13676358 交叉编译 FFmpeg 7.1.3 + lame 3.100（LGPL-2.1）+ libogg 1.3.5 + libvorbis 1.3.7（BSD），`--disable-everything` 白名单只启用转码所需的 demuxer / decoder / encoder / muxer / filter（10 种输出：WAV / FLAC / M4A / MP4 / WMA / AAC / AC-3 / E-AC-3 / MP3 / OGG），**未启用任何 GPL 组件**。产物为 static-PIE、无动态库依赖、API 24+，三 ABI（arm64-v8a / armeabi-v7a / x86_64）各 4.5–5.6MB。编译脚本固化为 `tools/build-android-ffmpeg.sh`，可复现。
+- **随包与下载**：二进制按现有 media-kit 约定打成 `lib/<abi>/libffmpeg_exec.so` jar，托管在 `libs-ffmpeg-v1` release；构建期由 `third_party/media_kit_libs_android_audio/android/build.gradle` 的 `downloadDependencies` 下载并做 MD5 校验，不往仓库塞二进制。
+- **可执行性**：`build.gradle.kts` 打开 `packaging.jniLibs.useLegacyPackaging = true`，Manifest 同步 `android:extractNativeLibs="true"`，安装时系统把 `.so` 释放到 `nativeLibraryDir` 并授予执行权限——这是 Android 10+ 允许执行随包二进制的位置。
+- **探测链**：`MainActivity` 新增 `baiji/native` 通道返回 `applicationInfo.nativeLibraryDir`，`FfmpegLocator` 增加可注入 `extraCandidates`，顺序为「手动指定 / `BAIJI_FFMPEG` → **Android 内置引擎** → 随包 `bin` → 系统 PATH」。
+
+### 🐛 解绑特殊格式对 ffmpeg 的硬依赖
+
+- v2.4.7 里 DTS:X / 360RA / NAC 转 WAV 走自研 FFI 解码器 `decodeLocalToWav()`，**本来就不需要 ffmpeg**，但 `_start()` 的前置硬校验和 `AudioTranscoder` 必填的 `ffmpegPath` 把这条唯一能在 Android 上跑的能力也挡住了。现在 `ffmpegPath` 可空，只在真正需要 ffmpeg（普通格式、或自定义声道 / 采样率 / 位深需二次 PCM 变换）时才校验；页面去掉前置拦截，UI 区分「内置引擎可用 / 需手动指定」。
+- 附带确认：DTS 许可、360RA BRIR 系数、NAC 模型全部来自 APK 内置 assets（`rootBundle`），本地文件转码全程离线、不联网。
+
+### 🧪 测试与验证
+
+- 新增 10 项离线测试：`Android nativeLibraryDir` 探测优先级、内置引擎缺失时的回退、手动路径仍优先、**解绑后 `ffmpegPath=null` 时 DTS / 360RA / NAC 直出标准 RIFF/WAVE s16 PCM WAV（断言 fmt chunk 与 PCM 非静音）**、解码器不可用时精确报错、缺引擎时自定义参数提前拒绝、普通格式缺引擎的可操作提示。`flutter analyze` 零问题，全量 `flutter test` **970 项**通过。
+- 沙箱用 `qemu-aarch64-static` 跑真编译出的 Android 引擎：ffmpeg 7.1.3、10 个编码器与 10 个 muxer 齐全，用生产代码 `buildFfmpegArgs()` 生成的命令真实转出 10 种格式，`ffprobe` 可读、PCM 非静音（可播放）、自定义参数与 `-progress` 回调正常，**12/12 通过**（不进 CI，避免 runner 环境差异导致 flaky）。
+- 需真机确认的部分：DTS:X / 360RA / NAC 三个自研解码器仅在 Android、对应 ABI、官方 glue 库与许可齐备时可用（`isSupported`），沙箱是 Linux x86_64 无法跑真实 FFI 解码；这一层需在 arm64 真机上验证。
+
 ## 2.4.7
 
 ### ✨ 新功能

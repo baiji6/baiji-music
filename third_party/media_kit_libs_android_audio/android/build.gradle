@@ -61,7 +61,15 @@ task downloadDependencies(type: Exec)  {
             ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v6/default-arm64-v8a.jar", "md5": "034552527a143f00b52acaec86f74289", "destination": file("$buildDir/libs-ac4-v6/default-arm64-v8a.jar")],
             ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v6/default-armeabi-v7a.jar", "md5": "a78c28e1ed52a7bd1c93538dfffe1e21", "destination": file("$buildDir/libs-ac4-v6/default-armeabi-v7a.jar")],
             ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v6/default-x86_64.jar", "md5": "d4fe999ec40dcc5f4212136ab34a275b", "destination": file("$buildDir/libs-ac4-v6/default-x86_64.jar")],
-            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v6/default-x86.jar", "md5": "34aa314c2ead30734a89f6f51d6cf50c", "destination": file("$buildDir/libs-ac4-v6/default-x86.jar")]
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ac4-v6/default-x86.jar", "md5": "34aa314c2ead30734a89f6f51d6cf50c", "destination": file("$buildDir/libs-ac4-v6/default-x86.jar")],
+            // v2.4.8 音频转码：Android 随包内置的裁剪版静态 ffmpeg CLI。
+            // jar 内部路径为 lib/<abi>/libffmpeg_exec.so，与官方 media-kit jar
+            // 一致；宿主 app 打开 useLegacyPackaging 后，安装时系统会把它
+            // 解压到 nativeLibraryDir 并授予执行权限。二进制由
+            // tools/build-android-ffmpeg.sh 用 NDK 28.2 交叉编译（LGPL）。
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ffmpeg-v1/ffmpeg-arm64-v8a.jar", "md5": "5bae5b47f03527ee7ba8f872645ea5f6", "destination": file("$buildDir/libs-ffmpeg-v1/ffmpeg-arm64-v8a.jar")],
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ffmpeg-v1/ffmpeg-armeabi-v7a.jar", "md5": "8c8bbb3bda3e63c8db31666ea836bcd4", "destination": file("$buildDir/libs-ffmpeg-v1/ffmpeg-armeabi-v7a.jar")],
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ffmpeg-v1/ffmpeg-x86_64.jar", "md5": "1ca8da747e35c9c938a194fd0dd05f9a", "destination": file("$buildDir/libs-ffmpeg-v1/ffmpeg-x86_64.jar")]
         ]
 
         filesToDownload.each { fileInfo ->
@@ -78,16 +86,44 @@ task downloadDependencies(type: Exec)  {
             }
 
             if (!destFile.exists()) {
-                destFile.parentFile.mkdirs()
                 println "Downloading file from: ${fileInfo.url}"
-                destFile.withOutputStream { os ->
-                    os << new URL(fileInfo.url).openStream()
+                // v2.4.8: GitHub Releases 大文件偶发 504 / 读超时（CI 日志实测）。
+                // 原来的 openStream() 无超时无重试，一次抖动就会让整个 Android
+                // 构建挂死。这里加连接 / 读取超时 + 3 次重试，MD5 不符也重下。
+                def lastErr = null
+                def downloaded = false
+                for (int attempt = 1; attempt <= 3 && !downloaded; attempt++) {
+                    try {
+                        def conn = (java.net.HttpURLConnection) new URL(fileInfo.url).openConnection()
+                        conn.setConnectTimeout(60000)
+                        conn.setReadTimeout(120000)
+                        conn.setInstanceFollowRedirects(true)
+                        conn.setRequestProperty("User-Agent", "baiji-music-gradle")
+                        if (conn.getResponseCode() != 200) {
+                            throw new java.io.IOException("HTTP ${conn.getResponseCode()}")
+                        }
+                        destFile.parentFile.mkdirs()
+                        conn.getInputStream().withStream { ins ->
+                            destFile.withOutputStream { os -> os << ins }
+                        }
+                        conn.disconnect()
+                        def calculatedMD5 = MessageDigest.getInstance("MD5").digest(Files.readAllBytes(destFile.toPath())).encodeHex().toString()
+                        if (calculatedMD5 != fileInfo.md5) {
+                            throw new java.io.IOException("MD5 mismatch ${calculatedMD5} != ${fileInfo.md5}")
+                        }
+                        downloaded = true
+                    } catch (Exception e) {
+                        lastErr = e
+                        destFile.delete()
+                        if (attempt < 3) {
+                            println "Download attempt ${attempt} failed (${e.message}), retrying..."
+                            Thread.sleep(2000L * attempt)
+                        }
+                    }
                 }
-                def calculatedMD5 = MessageDigest.getInstance("MD5").digest(Files.readAllBytes(destFile.toPath())).encodeHex().toString()
-                if (calculatedMD5 != fileInfo.md5) {
-                    throw new GradleException("MD5 verification failed for ${destFile}")
+                if (!downloaded) {
+                    throw new GradleException("下载失败（已重试 3 次）: ${fileInfo.url} -> ${lastErr?.message}")
                 }
-               
             }
 
             copy {

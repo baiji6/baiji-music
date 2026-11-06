@@ -1,18 +1,22 @@
-/// 音频转码页（v2.4.7）。
+/// 音频转码页（v2.4.8）。
 ///
 /// 复用「本地音乐解密」的批量任务范式：选文件 → 设参数 → 开始 / 停止。
 ///
 /// 引擎用**标准 ffmpeg 可执行文件**：App 播放内核内嵌的 ffmpeg 是纯解码
 /// 构建（`--disable-encoders --disable-muxers --disable-programs`），能解几乎
-/// 所有音质但没有编码器 / 复用器 / 命令行，无法产出文件。详见
-/// `lib/core/audio_transcoder.dart` 顶部说明。
+/// 所有音质但没有编码器 / 复用器 / 命令行，无法产出文件。
+/// v2.4.8 起 Android 随 APK 内置裁剪版静态 ffmpeg
+/// （`applicationInfo.nativeLibraryDir/libffmpeg_exec.so`），
+/// 通过 `baiji/native` 通道取目录后自动探测，移动端开箱即用。
+/// DTS/360RA/NAC 直出 WAV 走自研解码器，不依赖 ffmpeg。
+/// 详见 `lib/core/audio_transcoder.dart` 顶部说明。
 library;
 
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -98,10 +102,31 @@ class _TranscodePageState extends State<TranscodePage> {
 
   // ==================== ffmpeg 探测 ====================
 
+  /// Android 随 APK 内置的 ffmpeg 位于 applicationInfo.nativeLibraryDir，
+  /// Dart 侧无法直接拿到，走平台通道取目录后作为额外探测候选注入。
+  static const MethodChannel _nativeChannel = MethodChannel('baiji/native');
+
+  Future<List<String>> _androidEngineCandidates() async {
+    if (!Platform.isAndroid) return const <String>[];
+    try {
+      final dir = await _nativeChannel.invokeMethod<String>('nativeLibraryDir');
+      if (dir == null || dir.isEmpty) return const <String>[];
+      return <String>['$dir${Platform.pathSeparator}libffmpeg_exec.so'];
+    } catch (e) {
+      AppLog.w('TranscodePage', 'nativeLibraryDir 获取失败: $e');
+      return const <String>[];
+    }
+  }
+
+  /// 统一解析：手动指定 / BAIJI_FFMPEG → Android 内置引擎 → 随包 bin → PATH。
+  Future<String?> _resolveFfmpeg() async => FfmpegLocator(
+        extraCandidates: await _androidEngineCandidates(),
+      ).resolve();
+
   Future<void> _probeFfmpeg() async {
     String? p;
     try {
-      p = await FfmpegLocator().resolve();
+      p = await _resolveFfmpeg();
     } catch (e) {
       AppLog.w('TranscodePage', 'ffmpeg 探测失败: $e');
     }
@@ -136,12 +161,11 @@ class _TranscodePageState extends State<TranscodePage> {
   }
 
   /// 返回本次可用的 ffmpeg 路径；找不到返回 null。
+  /// 返回 null 不是致命错误：DTS/360RA/NAC 直出 WAV 走自研解码器不需要它。
   Future<String?> _ensureFfmpeg() async {
     final manual = _ffmpegController.text.trim();
-    if (manual.isNotEmpty) {
-      return await File(manual).exists() ? manual : null;
-    }
-    final p = await FfmpegLocator().resolve();
+    if (manual.isNotEmpty && await File(manual).exists()) return manual;
+    final p = await _resolveFfmpeg();
     if (p != null && mounted) {
       setState(() => _ffmpegPath = p);
       _ffmpegController.text = p;
@@ -330,11 +354,9 @@ class _TranscodePageState extends State<TranscodePage> {
     }
     if (_busy) return;
 
+    // ffmpeg 允许为 null：DTS/360RA/NAC 直出 WAV 走自研解码器不需要它；
+    // 其余格式由 AudioTranscoder 在缺少引擎时给出精确的操作指引。
     final ffmpeg = await _ensureFfmpeg();
-    if (ffmpeg == null || !await File(ffmpeg).exists()) {
-      _toast('未找到 ffmpeg：请在「转码引擎」里手动指定可执行文件');
-      return;
-    }
 
     final options = TranscodeOptions(
       format: _format,
@@ -493,8 +515,11 @@ class _TranscodePageState extends State<TranscodePage> {
               const SizedBox(height: 8),
               Text(
                 '• 依赖完整版 ffmpeg 可执行文件：播放内核内嵌的是纯解码 ffmpeg，'
-                '没有编码器 / 复用器，无法产出文件；会自动按「手动指定 → '
-                'BAIJI_FFMPEG → 随包内置 bin → 系统 PATH」探测，桌面端通常直接可用。\n'
+                '没有编码器 / 复用器，无法产出文件。Android 安装包已内置裁剪版'
+                '静态 ffmpeg 引擎（含编码器 / 封装器），开箱即用；桌面端通常'
+                '直接命中系统 PATH。也可手动指定或设置 BAIJI_FFMPEG。\n'
+                '• DTS:X、360RA、NAC 直出 WAV 走 App 自研解码器，无需转码引擎；'
+                '仅在自定义声道 / 采样率 / 位深时才需要 ffmpeg。\n'
                 '• 输出支持 WAV / FLAC / M4A / MP4 / WMA / AAC / AC-3 / E-AC-3 / '
                 'MP3 / OGG，可自定义声道数、采样率、位深与码率。\n'
                 '• DTS:X、360RA、NAC、AV3A 只能输出 WAV：前三者走 App 自研解码器，'
@@ -535,10 +560,13 @@ class _TranscodePageState extends State<TranscodePage> {
                   Expanded(
                     child: Text(
                       _probing
-                          ? '正在探测 ffmpeg…'
+                          ? '正在探测转码引擎…'
                           : (_ffmpegPath != null
-                              ? '已找到 ffmpeg'
-                              : '未找到 ffmpeg，请手动指定'),
+                              ? '转码引擎已就绪'
+                              : (Platform.isAndroid
+                                  ? '未找到转码引擎（可手动指定）；'
+                                      'DTS/360RA/NAC 直出 WAV 仍可用'
+                                  : '未找到 ffmpeg，请手动指定')),
                       style: TextStyle(
                           fontSize: 13, color: AppColors.textPrimary),
                     ),
@@ -569,7 +597,8 @@ class _TranscodePageState extends State<TranscodePage> {
               ),
               const SizedBox(height: 8),
               Text(
-                '探测顺序：输入框 / 环境变量 BAIJI_FFMPEG → 随包内置 bin → 系统 PATH。',
+                '探测顺序：输入框 / 环境变量 BAIJI_FFMPEG → Android 内置引擎 → '
+                '随包内置 bin → 系统 PATH。',
                 style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
               ),
             ],
