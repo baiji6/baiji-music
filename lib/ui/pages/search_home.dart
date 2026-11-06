@@ -539,7 +539,11 @@ class _SearchHomeState extends State<SearchHome> {
           : netease
               ? DownloadOptionsSheet<NeteaseQuality>(
                   options: filterQualityOptions(
-                      codes, NeteaseQuality.downloadOptions, (q) => q.level),
+                codes,
+                NeteaseQuality.downloadOptions,
+                (q) => q.level,
+                alwaysShow: NeteaseQuality.alwaysAvailable,
+              ),
                   current: DownloadManager.instance.neQuality,
                   label: (q) => q.label,
                   subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),

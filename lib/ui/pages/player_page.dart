@@ -523,7 +523,11 @@ class _PlayerPageState extends State<PlayerPage> {
               : song != null && song.isNetease
               ? DownloadOptionsSheet<NeteaseQuality>(
                   options: filterQualityOptions(
-                      dlCodes, NeteaseQuality.downloadOptions, (q) => q.level),
+                    dlCodes,
+                    NeteaseQuality.downloadOptions,
+                    (q) => q.level,
+                    alwaysShow: NeteaseQuality.alwaysAvailable,
+                  ),
                   current: DownloadManager.instance.neQuality,
                   label: (q) => q.label,
                   subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
@@ -579,7 +583,11 @@ class _PlayerPageState extends State<PlayerPage> {
               : song != null && song.isNetease
               ? _QualitySheet<NeteaseQuality>(
                   options: filterQualityOptions(
-                      pqCodes, NeteaseQuality.playbackOptions, (q) => q.level),
+                    pqCodes,
+                    NeteaseQuality.playbackOptions,
+                    (q) => q.level,
+                    alwaysShow: NeteaseQuality.alwaysAvailable,
+                  ),
                   current: _player.effectiveNeteaseQuality,
                   label: (q) => q.label,
                   onSelect: (q) {

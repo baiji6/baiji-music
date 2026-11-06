@@ -414,19 +414,40 @@ class NeteaseQuality {
     'vivid': 8,
   };
 
-  /// 从歌曲对象解析这首歌**实际存在**的音质 level 集合（v2.4.10）。
+  /// 播放等级档（不是「歌曲拥有的文件」）：这些 level 是播放请求档位，
+  /// 服务端在歌曲没有对应内容时会**自动向下匹配**可用的最高音质流；
+  /// 且搜索 / 详情接口都不返回歌曲级的空间音质标记（`qualities` 恒为
+  /// null，`maxBrLevel` / `playMaxBrLevel` 实测对所有歌曲都是同一个账号
+  /// 上限 vivid）。官方客户端也是常驻显示、按 VIP 权限灰置，不按歌曲隐藏。
   ///
-  /// 判据是歌曲自身的文件对象 `l/m/h/sq/hr`（`cloudsearch/pc` 与
-  /// `/api/v3/song/detail` 都返回，且**与账号身份无关**：有该对象即表示
-  /// 服务端存在对应码率的文件），另兼容开放平台 `qualities` 对象与老版
-  /// `lMusic/mMusic/hMusic/sqMusic/hrMusic/bMusic` 字段。
+  /// 因此它们不参与「按歌曲实际音质」过滤，由 `filterQualityOptions` 的
+  /// `alwaysShow` 常驻，避免把 9 档砍成 3~4 档（v2.4.11 修复音质缺失）。
+  static const Set<String> alwaysAvailable = <String>{
+    'jyeffect',
+    'sky',
+    'jymaster',
+    'dolby',
+    'vivid',
+  };
+
+  /// 从歌曲对象解析这首歌**实际存在**的音质 level 集合（v2.4.11）。
   ///
-  /// 注意：`privilege.playMaxBrLevel` / `plLevel` 是**用户可播放上限**，
-  /// `maxBrLevel` 在搜索接口里也常被填成账号等级（实测三首音质不同的歌
-  /// 都返回 `vivid`）。v2.4.9 误用了它们，导致每首歌都解析出同一套档位、
-  /// 还虚报歌曲没有的 Hi-Res / 全景声。仅当文件对象全部缺失时，才用
-  /// `privilege.maxbr`（数值，歌曲最大码率）给基础档兜底，不用 level 名，
-  /// 也不虚报空间/母带档。返回空集合表示接口未给标记（调用方回退全量）。
+  /// 基础档取三类**歌曲级**标记的**并集**，任一来源缺失都不会少档位：
+  /// 1. 文件对象 `l/m/h/sq/hr`（`cloudsearch/pc` 与 `/api/v3/song/detail`
+  ///    都返回，与账号身份无关），并兼容老版 `lMusic/hMusic/...`；
+  /// 2. `privilege.chargeInfoList` 的 `rate`：服务端列出的歌曲可用码率
+  ///    （128000 / 192000 / 320000 / 999000 / 1999000），能补上 `sq`/`hr`
+  ///    对象缺失时的无损 / Hi-Res 档；
+  /// 3. `privilege.maxbr`（歌曲最大码率）数值兜底。
+  ///
+  /// 空间 / 母带档（[alwaysAvailable]）不是歌曲文件档：接口不给歌曲级
+  /// 标记，服务端请求时会自动降级，因此不在这里判定，由
+  /// `filterQualityOptions` 的 `alwaysShow` 常驻；只有开放平台 `qualities`
+  /// 明确给出对应标记时才加入。
+  ///
+  /// 注意：`privilege.playMaxBrLevel` / `plLevel` / `dlLevel` 是用户权限，
+  /// `maxBrLevel` 实测对所有歌曲都填成同一个账号上限（vivid），一律不读。
+  /// 返回空集合表示接口未给任何标记（调用方回退全量）。
   static Set<String> availableLevelsFrom(Map<String, dynamic> song) {
     final out = <String>{};
 
@@ -438,26 +459,54 @@ class NeteaseQuality {
       return (br is num && br > 0) || (size is num && size > 0);
     }
 
-    // 标准 128k：l / lMusic / bMusic（m / mMusic 是 192k，无独立档位）
+    // 1) 文件对象：标准 128k / 极高 320k / 无损 / Hi-Res。
+    //    （m / mMusic 是 192k，枚举里无独立档位，忽略）
     if (hasFile(song['l']) ||
         hasFile(song['lMusic']) ||
         hasFile(song['bMusic'])) {
       out.add(standard.level);
     }
-    // 极高 320k：h / hMusic
     if (hasFile(song['h']) || hasFile(song['hMusic'])) {
       out.add(exhigh.level);
     }
-    // 无损：sq / sqMusic
     if (hasFile(song['sq']) || hasFile(song['sqMusic'])) {
       out.add(lossless.level);
     }
-    // Hi-Res：hr / hrMusic
     if (hasFile(song['hr']) || hasFile(song['hrMusic'])) {
       out.add(hires.level);
     }
 
-    // 空间 / 母带档：只有服务端明确给出对应标记才显示，避免虚报。
+    final p = song['privilege'];
+    final priv = p is Map
+        ? Map<String, dynamic>.from(p)
+        : <String, dynamic>{};
+
+    // 2) chargeInfoList：服务端列出的歌曲可用码率。
+    void addRates(dynamic raw) {
+      if (raw is! List) return;
+      for (final item in raw) {
+        final rate = item is Map ? item['rate'] : item;
+        if (rate is! num) continue;
+        if (rate >= 128000) out.add(standard.level);
+        if (rate >= 320000) out.add(exhigh.level);
+        if (rate >= 999000) out.add(lossless.level);
+        if (rate >= 1999000) out.add(hires.level);
+      }
+    }
+
+    addRates(priv['chargeInfoList']);
+    addRates(song['chargeInfoList']);
+
+    // 3) maxbr 数值兜底（只推基础档，不推空间/母带档）。
+    final maxbr = priv['maxbr'];
+    if (maxbr is num && maxbr > 0) {
+      out.add(standard.level);
+      if (maxbr >= 320000) out.add(exhigh.level);
+      if (maxbr >= 999000) out.add(lossless.level);
+      if (maxbr >= 1999000) out.add(hires.level);
+    }
+
+    // 4) 开放平台 qualities 明确标记的空间档（网页接口通常不给）。
     final q = song['qualities'];
     if (q is Map) {
       final m = Map<String, dynamic>.from(q);
@@ -476,21 +525,6 @@ class NeteaseQuality {
       addSpecial('dolbyMusic', dolby);
     }
 
-    // 兜底：极老接口只给 privilege 时，用「歌曲最大码率」数值推基础档。
-    // 不读 playMaxBrLevel / maxBrLevel（账号等级），也不加空间/母带档。
-    if (out.isEmpty) {
-      final p = song['privilege'];
-      if (p is Map) {
-        final priv = Map<String, dynamic>.from(p);
-        final maxbr = priv['maxbr'];
-        if (maxbr is num && maxbr > 0) {
-          out.add(standard.level);
-          if (maxbr >= 320000) out.add(exhigh.level);
-          if (maxbr >= 999000) out.add(lossless.level);
-          if (maxbr >= 1999000) out.add(hires.level);
-        }
-      }
-    }
     return out;
   }
 
@@ -776,13 +810,22 @@ class Song {
 ///
 /// [codes] 为空（旧持久化数据 / 接口未给标记）或过滤结果为空时回退全量，
 /// 保证弹层永远有可选项；否则只保留标记存在的档位。
+///
+/// [alwaysShow] 是不参与按歌过滤的常驻档位（如网易云的空间 / 母带播放
+/// 等级档，见 [NeteaseQuality.alwaysAvailable]）：这些档位没有歌曲级
+/// 标记、服务端请求时自动降级，隐藏它们会让音质列表严重缺档。QQ / 酷我
+/// 调用时不传该参数，行为不变。
 List<T> filterQualityOptions<T>(
   Set<String> codes,
   List<T> options,
-  String Function(T) codeOf,
-) {
+  String Function(T) codeOf, {
+  Set<String> alwaysShow = const <String>{},
+}) {
   if (codes.isEmpty) return options;
-  final filtered = options.where((o) => codes.contains(codeOf(o))).toList();
+  final filtered = options
+      .where((o) =>
+          alwaysShow.contains(codeOf(o)) || codes.contains(codeOf(o)))
+      .toList();
   return filtered.isEmpty ? options : filtered;
 }
 
