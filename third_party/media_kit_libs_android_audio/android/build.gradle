@@ -67,9 +67,9 @@ task downloadDependencies(type: Exec)  {
             // 一致；宿主 app 打开 useLegacyPackaging 后，安装时系统会把它
             // 解压到 nativeLibraryDir 并授予执行权限。二进制由
             // tools/build-android-ffmpeg.sh 用 NDK 28.2 交叉编译（LGPL）。
-            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ffmpeg-v1/ffmpeg-arm64-v8a.jar", "md5": "5bae5b47f03527ee7ba8f872645ea5f6", "destination": file("$buildDir/libs-ffmpeg-v1/ffmpeg-arm64-v8a.jar")],
-            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ffmpeg-v1/ffmpeg-armeabi-v7a.jar", "md5": "8c8bbb3bda3e63c8db31666ea836bcd4", "destination": file("$buildDir/libs-ffmpeg-v1/ffmpeg-armeabi-v7a.jar")],
-            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ffmpeg-v1/ffmpeg-x86_64.jar", "md5": "1ca8da747e35c9c938a194fd0dd05f9a", "destination": file("$buildDir/libs-ffmpeg-v1/ffmpeg-x86_64.jar")]
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ffmpeg-v2/ffmpeg-arm64-v8a.jar", "md5": "828314760030847df55fa52fad10d669", "destination": file("$buildDir/libs-ffmpeg-v2/ffmpeg-arm64-v8a.jar")],
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ffmpeg-v2/ffmpeg-armeabi-v7a.jar", "md5": "3fae412f9464ce4d7a5609c5009fadf2", "destination": file("$buildDir/libs-ffmpeg-v2/ffmpeg-armeabi-v7a.jar")],
+            ["url": "https://github.com/baiji6/baiji-music/releases/download/libs-ffmpeg-v2/ffmpeg-x86_64.jar", "md5": "53b76be76e3d496d1f8f05cb67f8f2cb", "destination": file("$buildDir/libs-ffmpeg-v2/ffmpeg-x86_64.jar")]
         ]
 
         filesToDownload.each { fileInfo ->

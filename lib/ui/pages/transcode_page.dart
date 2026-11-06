@@ -1,13 +1,16 @@
-/// 音频转码页（v2.4.8）。
+/// 音频转码页（v2.4.9）。
 ///
 /// 复用「本地音乐解密」的批量任务范式：选文件 → 设参数 → 开始 / 停止。
 ///
 /// 引擎用**标准 ffmpeg 可执行文件**：App 播放内核内嵌的 ffmpeg 是纯解码
 /// 构建（`--disable-encoders --disable-muxers --disable-programs`），能解几乎
 /// 所有音质但没有编码器 / 复用器 / 命令行，无法产出文件。
-/// v2.4.8 起 Android 随 APK 内置裁剪版静态 ffmpeg
-/// （`applicationInfo.nativeLibraryDir/libffmpeg_exec.so`），
-/// 通过 `baiji/native` 通道取目录后自动探测，移动端开箱即用。
+/// v2.4.9 起 Android 随 APK 内置裁剪版**动态 PIE** ffmpeg
+/// （`applicationInfo.nativeLibraryDir/libffmpeg_exec.so`）——v2.4.8 的
+/// static-PIE 无 INTERP 在真机 execve 会被系统拒绝，已换成带
+/// `/system/bin/linker64` 的标准形态。通过 `baiji/native` 通道取目录后
+/// 自动探测，并在页面上跑一次 `ffmpeg -version` 自检。
+/// 保存位置支持「应用目录 / 公共音乐 / 自定义」切换并持久化，切换前做写入预检。
 /// DTS/360RA/NAC 直出 WAV 走自研解码器，不依赖 ffmpeg。
 /// 详见 `lib/core/audio_transcoder.dart` 顶部说明。
 library;
@@ -19,10 +22,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_miuix/miuix.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/app_logger.dart';
 import '../../core/audio_transcoder.dart';
 import '../../core/cache_manager.dart';
+import '../../core/kv_store.dart';
 import '../../dts/dts_decoder.dart';
 import '../../nac/nac_decoder.dart';
 import '../../ra360/ra360_decoder.dart';
@@ -64,8 +69,14 @@ class _TranscodePageState extends State<TranscodePage> {
   final TextEditingController _ffmpegController = TextEditingController();
 
   String? _outputDir;
+
+  /// 保存位置模式：app（应用私有目录）/ public（公共 Music）/ custom（用户指定）。
+  String _outputMode = 'app';
   String? _ffmpegPath;
   bool _probing = true;
+
+  /// 引擎自检结果（跑一次 `ffmpeg -version`），真机上能直接看出能否 execve。
+  String? _engineCheck;
 
   TranscodeFormat _format = TranscodeFormat.wav;
   int _channels = 0;
@@ -78,10 +89,13 @@ class _TranscodePageState extends State<TranscodePage> {
   int _finished = 0;
   AudioTranscoder? _transcoder;
 
+  static const String _kOutputDir = 'transcode_output_dir';
+  static const String _kOutputMode = 'transcode_output_mode';
+
   @override
   void initState() {
     super.initState();
-    _loadDefaultOutputDir();
+    _loadOutputDir();
     _probeFfmpeg();
   }
 
@@ -91,13 +105,105 @@ class _TranscodePageState extends State<TranscodePage> {
     super.dispose();
   }
 
-  Future<void> _loadDefaultOutputDir() async {
+  /// 恢复上次的保存位置（v2.4.9：选择会持久化，不再每次进页面重置）。
+  Future<void> _loadOutputDir() async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      if (!mounted) return;
-      setState(
-          () => _outputDir = '${dir.path}${Platform.pathSeparator}转码音乐');
-    } catch (_) {/* 取不到就让用户手动选 */}
+      final savedMode = KvStore.instance.getString(_kOutputMode);
+      final savedDir = KvStore.instance.getString(_kOutputDir);
+      if (savedDir != null && savedDir.isNotEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _outputMode = savedMode ?? 'custom';
+          _outputDir = savedDir;
+        });
+        return;
+      }
+    } catch (_) {/* KvStore 未初始化时走默认 */}
+    await _applyOutputMode('app', persist: false);
+  }
+
+  /// 应用私有目录：无需任何权限即可写，但文件管理器里不易直接看到。
+  Future<String> _appOutputDir() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return '${dir.path}${Platform.pathSeparator}转码音乐';
+  }
+
+  /// Android 公共 Music 目录（白姬音乐/）；其它平台返回 null。
+  Future<String?> _publicOutputDir() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      final dir = await _nativeChannel.invokeMethod<String>('publicMusicDir');
+      if (dir == null || dir.isEmpty) return null;
+      return '$dir${Platform.pathSeparator}白姬音乐';
+    } catch (e) {
+      AppLog.w('TranscodePage', '公共 Music 目录获取失败: $e');
+      return null;
+    }
+  }
+
+  /// 写入预检：真正创建目录并写一个探针文件，避免转码到一半才发现写不了。
+  Future<bool> _checkWritable(String path) async {
+    try {
+      final d = Directory(path);
+      if (!await d.exists()) await d.create(recursive: true);
+      final probe =
+          File('${d.path}${Platform.pathSeparator}.baiji_write_test');
+      await probe.writeAsString('test', flush: true);
+      await probe.delete();
+      return true;
+    } catch (e) {
+      AppLog.w('TranscodePage', '保存位置不可写: $path, $e');
+      return false;
+    }
+  }
+
+  Future<bool> _ensureAllFilesAccess() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      if (await Permission.manageExternalStorage.isGranted) return true;
+      return (await Permission.manageExternalStorage.request()).isGranted;
+    } catch (e) {
+      AppLog.w('TranscodePage', '申请所有文件访问权限失败: $e');
+      return false;
+    }
+  }
+
+  /// 切换保存位置：app / public / custom。公共目录先申请权限，全部做写入预检。
+  Future<void> _applyOutputMode(String mode, {bool persist = true}) async {
+    String? path;
+    if (mode == 'app') {
+      path = await _appOutputDir();
+    } else if (mode == 'public') {
+      path = await _publicOutputDir();
+      if (path == null) {
+        _toast('当前平台无法定位公共音乐目录，请改用「自定义」');
+        return;
+      }
+      if (!await _ensureAllFilesAccess()) {
+        _toast('需要「所有文件访问权限」才能写入公共目录；'
+            '可改用「应用目录」，或在系统设置里开启后重试');
+        return;
+      }
+    } else {
+      await _chooseOutputDir();
+      return;
+    }
+    if (!await _checkWritable(path)) {
+      _toast('保存位置不可写：$path\n请改用「应用目录」或开启存储权限');
+      return;
+    }
+    if (persist) {
+      try {
+        await KvStore.instance.setString(_kOutputMode, mode);
+        await KvStore.instance.setString(_kOutputDir, path);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _outputMode = mode;
+      _outputDir = path;
+    });
+    if (persist) _toast('保存位置已设为：$path');
   }
 
   // ==================== ffmpeg 探测 ====================
@@ -134,11 +240,36 @@ class _TranscodePageState extends State<TranscodePage> {
     setState(() {
       _probing = false;
       _ffmpegPath = p;
+      _engineCheck = null;
     });
     // 用户已手动填过路径时不要覆盖。
     if (p != null && _ffmpegController.text.trim().isEmpty) {
       _ffmpegController.text = p;
     }
+    if (p != null) await _verifyEngine(p);
+  }
+
+  /// 真机自检：实际 execve 一次 `ffmpeg -version`。
+  /// 「文件存在但系统不允许执行」（static-PIE / SELinux / 权限）会在这里
+  /// 直接暴露，而不是转码到一半才报一句模糊的失败。
+  Future<void> _verifyEngine(String path) async {
+    String msg;
+    try {
+      final r = await Process.run(path, const ['-version']);
+      final out = (r.stdout as String).trim();
+      final err = (r.stderr as String).trim();
+      if (r.exitCode == 0 && out.isNotEmpty) {
+        msg = '自检通过 · ${out.split('\n').first.trim()}';
+      } else {
+        final detail = err.isNotEmpty ? err.split('\n').last : out;
+        msg = '自检失败（退出码 ${r.exitCode}）'
+            '${detail.isNotEmpty ? '：$detail' : ''}';
+      }
+    } catch (e) {
+      msg = '自检失败（无法执行引擎）：$e';
+    }
+    AppLog.i('TranscodePage', '引擎自检: $msg');
+    if (mounted) setState(() => _engineCheck = msg);
   }
 
   Future<void> _chooseFfmpeg() async {
@@ -334,10 +465,64 @@ class _TranscodePageState extends State<TranscodePage> {
     try {
       final dir = await FilePicker.platform.getDirectoryPath();
       if (dir == null || !mounted) return;
-      setState(() => _outputDir = dir);
+      if (!await _checkWritable(dir)) {
+        _toast('所选目录不可写（Android 11+ 写公共目录需要「所有文件访问权限」）：\n$dir');
+        return;
+      }
+      try {
+        await KvStore.instance.setString(_kOutputMode, 'custom');
+        await KvStore.instance.setString(_kOutputDir, dir);
+      } catch (_) {}
+      if (!mounted) return;
+      setState(() {
+        _outputMode = 'custom';
+        _outputDir = dir;
+      });
+      _toast('保存位置已设为：$dir');
     } catch (e) {
       _toast('选择目录失败：$e');
     }
+  }
+
+  /// 手动输入绝对路径：目录选择器在部分 Android 文件管理器上不可用时兜底。
+  Future<void> _inputOutputDir() async {
+    final controller = TextEditingController(text: _outputDir ?? '');
+    final value = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('输入保存目录'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '/storage/emulated/0/Music/白姬音乐',
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+              child: const Text('确定')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (value == null || value.isEmpty) return;
+    if (!await _checkWritable(value)) {
+      _toast('该目录不可写：$value');
+      return;
+    }
+    try {
+      await KvStore.instance.setString(_kOutputMode, 'custom');
+      await KvStore.instance.setString(_kOutputDir, value);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _outputMode = 'custom';
+      _outputDir = value;
+    });
+    _toast('保存位置已设为：$value');
   }
 
   // ==================== 转码 ====================
@@ -371,11 +556,11 @@ class _TranscodePageState extends State<TranscodePage> {
       return;
     }
 
-    try {
-      final d = Directory(dir);
-      if (!await d.exists()) await d.create(recursive: true);
-    } catch (e) {
-      _toast('无法创建保存目录：$e');
+    // 写入预检：公共目录在 Android 11+ 未开「所有文件访问权限」时会被拒，
+    // 这里提前拦下并给出可操作的指引，避免逐个任务都失败。
+    if (!await _checkWritable(dir)) {
+      _toast('保存位置不可写：$dir\n请在「保存位置」切换到应用目录，'
+          '或开启「所有文件访问权限」后重试');
       return;
     }
     if (!mounted) return;
@@ -516,8 +701,12 @@ class _TranscodePageState extends State<TranscodePage> {
               Text(
                 '• 依赖完整版 ffmpeg 可执行文件：播放内核内嵌的是纯解码 ffmpeg，'
                 '没有编码器 / 复用器，无法产出文件。Android 安装包已内置裁剪版'
-                '静态 ffmpeg 引擎（含编码器 / 封装器），开箱即用；桌面端通常'
-                '直接命中系统 PATH。也可手动指定或设置 BAIJI_FFMPEG。\n'
+                '动态 PIE ffmpeg 引擎（含编码器 / 封装器），开箱即用；「转码引擎」'
+                '卡片会显示自检结果。桌面端通常直接命中系统 PATH，也可手动指定'
+                '或设置 BAIJI_FFMPEG。\n'
+                '• 保存位置可切换「应用目录 / 公共音乐 / 自定义」并记住选择；'
+                '公共目录需要「所有文件访问权限」，切换时会做写入预检。'
+                '完成后任务项显示完整输出路径，可复制。\n'
                 '• DTS:X、360RA、NAC 直出 WAV 走 App 自研解码器，无需转码引擎；'
                 '仅在自定义声道 / 采样率 / 位深时才需要 ffmpeg。\n'
                 '• 输出支持 WAV / FLAC / M4A / MP4 / WMA / AAC / AC-3 / E-AC-3 / '
@@ -601,6 +790,37 @@ class _TranscodePageState extends State<TranscodePage> {
                 '随包内置 bin → 系统 PATH。',
                 style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
               ),
+              if (_engineCheck != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      _engineCheck!.contains('通过')
+                          ? Icons.check_circle_outline_rounded
+                          : Icons.warning_amber_rounded,
+                      size: 14,
+                      color: _engineCheck!.contains('通过')
+                          ? AppColors.success
+                          : AppColors.danger,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _engineCheck!,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: _engineCheck!.contains('通过')
+                              ? AppColors.textSecondary
+                              : AppColors.danger,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -745,28 +965,96 @@ class _TranscodePageState extends State<TranscodePage> {
         // ---------------- 保存位置 ----------------
         const SectionHeader(title: '保存位置'),
         GlassCard(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: MiuixPressable(
-            onPressed: _busy ? null : _chooseOutputDir,
-            borderRadius: BorderRadius.circular(18),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Row(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  Icon(Icons.save_alt_rounded,
-                      size: 20, color: AppColors.accent),
-                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _OutputModeChip(
+                      label: '应用目录',
+                      selected: _outputMode == 'app',
+                      onTap: _busy ? null : () => _applyOutputMode('app'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _OutputModeChip(
+                      label: '公共音乐',
+                      selected: _outputMode == 'public',
+                      onTap: _busy ? null : () => _applyOutputMode('public'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _OutputModeChip(
+                      label: '自定义',
+                      selected: _outputMode == 'custom',
+                      onTap: _busy ? null : () => _applyOutputMode('custom'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(Icons.folder_open_outlined,
+                      size: 16, color: AppColors.accent),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       _outputDir ?? '未选择',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                          fontSize: 12, color: AppColors.textSecondary),
+                          fontSize: 11.5, color: AppColors.textSecondary),
                     ),
                   ),
-                  const Icon(Icons.edit_outlined, size: 17),
+                  MiuixTextButton(
+                    '复制',
+                    onPressed: _outputDir == null
+                        ? null
+                        : () {
+                            Clipboard.setData(ClipboardData(text: _outputDir!));
+                            _toast('已复制保存位置');
+                          },
+                    textStyle: const TextStyle(fontSize: 11),
+                  ),
                 ],
               ),
-            ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: _MiniButton(
+                      icon: Icons.folder_open_outlined,
+                      label: '选择文件夹',
+                      onTap: _busy ? null : _chooseOutputDir,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _MiniButton(
+                      icon: Icons.edit_outlined,
+                      label: '手动输入路径',
+                      onTap: _busy ? null : _inputOutputDir,
+                    ),
+                  ),
+                ],
+              ),
+              if (Platform.isAndroid) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '公共目录需「所有文件访问权限」；应用目录无需权限但不易在文件管理器中看到。'
+                  '选择会记住，下次打开自动沿用，转码完成后任务项会显示完整路径。',
+                  style: TextStyle(
+                      fontSize: 10.5,
+                      height: 1.5,
+                      color: AppColors.textTertiary),
+                ),
+              ],
+            ],
           ),
         ),
       ],
@@ -1022,7 +1310,7 @@ class _TaskTile extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       statusText,
-                      maxLines: 1,
+                      maxLines: task.error != null ? 4 : 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 11, color: statusColor),
                     ),
@@ -1031,6 +1319,31 @@ class _TaskTile extends StatelessWidget {
               ),
             ],
           ),
+          // 完成后给出完整输出路径，可直接复制，避免「转完了找不到文件」。
+          if (task.done && task.outputPath != null) ...[
+            const SizedBox(height: 5),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    task.outputPath!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 10, color: AppColors.textTertiary),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                GestureDetector(
+                  onTap: () => Clipboard.setData(
+                      ClipboardData(text: task.outputPath!)),
+                  child: Icon(Icons.copy_all_outlined,
+                      size: 14, color: AppColors.textTertiary),
+                ),
+              ],
+            ),
+          ],
           if (showBar) ...[
             const SizedBox(height: 8),
             ClipRRect(
@@ -1047,6 +1360,44 @@ class _TaskTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 保存位置模式切换 chip。
+class _OutputModeChip extends StatelessWidget {
+  const _OutputModeChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => MiuixPressable(
+        onPressed: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.accent.withValues(alpha: 0.14)
+                : AppColors.strokeGlass,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? AppColors.accent : AppColors.textSecondary,
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 class _MiniButton extends StatelessWidget {

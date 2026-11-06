@@ -125,6 +125,7 @@ class MusicApi {
         duration: s.durationSeconds * 1000,
         cover: s.pic,
         source: Source.kuwo,
+        qualityCodes: s.qualities.map((q) => q.id).toSet(),
       );
 
   /// 按来源获取相关搜索建议；失败时返回空列表。

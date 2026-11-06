@@ -269,6 +269,7 @@ class NeteaseApi {
       cover: cover,
       source: Source.netease,
       mvId: mvNum > 0 ? '$mvNum' : '',
+      qualityCodes: NeteaseQuality.availableLevelsFrom(o),
     );
   }
 

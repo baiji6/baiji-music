@@ -490,6 +490,8 @@ class _SearchHomeState extends State<SearchHome> {
   /// 下载选项弹层：歌词粒度（默认逐字，无逐字回退逐行）+ 音质（按平台）。
   Widget _buildDownloadSheet() {
     final song = _pendingDownloadSong;
+    // 只展示这首歌实际拥有的音质；未知时回退全量（v2.4.9）。
+    final codes = song?.qualityCodes ?? const <String>{};
     final kuwo = song != null && song.isKuwo;
     final netease = song != null && song.isNetease;
     return MiuixOverlayBottomSheet(
@@ -506,7 +508,8 @@ class _SearchHomeState extends State<SearchHome> {
       }),
       content: kuwo
           ? DownloadOptionsSheet<KuwoQuality>(
-              options: KuwoQuality.downloadOptions,
+              options: filterQualityOptions(
+                  codes, KuwoQuality.downloadOptions, (q) => q.id),
               current: DownloadManager.instance.kuwoQuality,
               label: (q) => q.label,
               subtitle: (q) =>
@@ -524,7 +527,8 @@ class _SearchHomeState extends State<SearchHome> {
             )
           : netease
               ? DownloadOptionsSheet<NeteaseQuality>(
-                  options: NeteaseQuality.downloadOptions,
+                  options: filterQualityOptions(
+                      codes, NeteaseQuality.downloadOptions, (q) => q.level),
                   current: DownloadManager.instance.neQuality,
                   label: (q) => q.label,
                   subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
@@ -540,7 +544,8 @@ class _SearchHomeState extends State<SearchHome> {
                   },
                 )
               : DownloadOptionsSheet<Quality>(
-                  options: Quality.downloadOptions,
+                  options: filterQualityOptions(
+                      codes, Quality.downloadOptions, (q) => q.code),
                   current: DownloadManager.instance.qqQuality,
                   label: (q) => q.label,
                   subtitle: (q) => q.bitrate > 0

@@ -8,6 +8,16 @@ UI 采用暗色玻璃拟态 + 霓虹渐变的现代化未来感设计，构建�
 
 ---
 
+## v2.4.9 更新速览
+
+| 能力 / 修复 | 说明 |
+| --- | --- |
+| 🤖 **Android 转码引擎改为动态 PIE** | 修复「引擎已找到但转码报错」：v2.4.8 的 static-PIE 无 `PT_INTERP`，真机 `execve` 易被 SELinux / seccomp 拒绝。改为 `ET_DYN` + `/system/bin/linker64` 的动态 PIE，仅依赖系统 `libc` / `libm`；同一份源码与白名单重编三 ABI，托管 `libs-ffmpeg-v2`，编译脚本默认 `dyn` |
+| 🔍 **引擎自检 + 错误可见** | 探测到引擎后实跑 `ffmpeg -version` 并显示结果；转码失败保留退出码、完整输出路径与 stderr 末尾数行 |
+| 💾 **自定义保存位置** | 「应用目录 / 公共音乐 / 自定义」一键切换，可手动输入路径，选择持久化；切换与开始前做写入预检，公共目录自动申请「所有文件访问权限」；完成后显示并可复制完整路径 |
+| 🎚️ **音质列表按歌曲过滤** | 播放页与搜索页的音质弹层只显示这首歌实际有的档位（QQ `file.size_*` / `size_new`、网易云 `privilege`、酷我 `N_MINFO`），零额外请求；无标记时回退全量。设置页全局默认音质保持全量 |
+| 🧪 **测试** | 新增 16 项音质解析 / 过滤离线测试；全量 970 → **986** 项全绿，`flutter analyze` 零问题 |
+
 ## v2.4.8 更新速览
 
 | 能力 / 修复 | 说明 |
@@ -383,14 +393,20 @@ GUID 首次生成后落盘保存，**永不重新生成**，避免服务端重�
 音质（含 `ac3` / `eac3` / `av3a` / `ac4` / `dca`），但**没有音频编码器、没有 muxer、没有 ffmpeg 命令行**，
 无法产出文件。因此转码调用标准 ffmpeg 可执行文件：
 
-- **Android（v2.4.8 起）**：随 APK 内置裁剪版静态 ffmpeg（FFmpeg 7.1.3 + lame / libogg / libvorbis，
-  NDK 交叉编译的 static-PIE，无动态库依赖），打包为 `lib/<abi>/libffmpeg_exec.so`，安装时由系统
-  释放到 `nativeLibraryDir` 并授予执行权限，`baiji/native` 通道取到目录后自动探测，**开箱即用**。
-  二进制托管在 `libs-ffmpeg-v1` release，构建期下载 + MD5 校验，编译脚本 `tools/build-android-ffmpeg.sh`。
+- **Android（v2.4.9 起）**：随 APK 内置裁剪版**动态 PIE** ffmpeg（FFmpeg 7.1.3 + lame / libogg / libvorbis，
+  NDK 交叉编译，带 `PT_INTERP=/system/bin/linker64`，仅依赖系统 `libc` / `libm`），打包为
+  `lib/<abi>/libffmpeg_exec.so`，安装时由系统释放到 `nativeLibraryDir` 并授予执行权限，
+  `baiji/native` 通道取到目录后自动探测并跑一次 `-version` 自检，**开箱即用**。
+  v2.4.8 的 static-PIE 无 INTERP，真机 `execve` 会被系统拒绝，已弃用。
+  二进制托管在 `libs-ffmpeg-v2` release，构建期下载 + MD5 校验，编译脚本 `tools/build-android-ffmpeg.sh`。
 - **桌面端**：按「页面手动指定 / 环境变量 `BAIJI_FFMPEG` → 随包内置 `bin/ffmpeg[.exe]` → 系统 PATH」
   探测，通常系统已装可直接命中。
 
 找不到引擎时给出明确提示而不是静默失败；DTS:X / 360RA / NAC 直出 WAV 例外见下。
+
+**保存位置**：支持「应用目录 / 公共音乐 / 自定义」切换并持久化，自定义可选文件夹或直接输入绝对路径；
+切换与开始转码前都做写入预检（写探针文件），Android 公共目录需要 `MANAGE_EXTERNAL_STORAGE`
+（页面会自动申请「所有文件访问权限」）。转码完成后任务项显示完整输出路径，可一键复制。
 
 **特殊音质约束**：DTS:X、索尼 360RA、NAC、AV3A 四种**只能输出 WAV**，选其它格式会自动锁定。
 前三者走 App 自研原生解码器（`decodeLocalToWav()`，复用与在线播放同一套 FFI）直接产出 PCM WAV，
@@ -401,9 +417,24 @@ AV3A 交给 ffmpeg 解码成 WAV（当前 ffmpeg 若无 `av3a` 解码器会明�
 若对特殊格式额外指定了声道 / 采样率 / 位深，才需要在解码出的 WAV 上再跑一次 ffmpeg 做 PCM 变换
 （此时若引擎不可用会提前提示清除自定义参数，避免白解码一遍）。
 
+## 音质列表（按歌曲实际音质）
+
+播放页「下载音质」「切换音质」与搜索页下载弹层，只列出当前歌曲**实际拥有**的档位，没有的隐藏；
+设置页的**全局默认音质**没有歌曲上下文，仍保持全量。`Song.qualityCodes` 由各平台搜索 / 详情接口
+解析，随 JSON 持久化，**零额外网络请求**：
+
+| 音源 | 判定依据 |
+| --- | --- |
+| QQ 音乐 | `track_info.file` 的 `size_128mp3` / `size_flac` / `size_hires` / `size_dts` / `size_dolby` / `size_360ra` / `size_*aac` / `size_*ogg` 与 `size_new` 位图（臻品母带 / 臻品音质 2.0 / 全景声 / OGG320 / 黑胶 / OGG640 / NAC / DTS:X），覆盖全部 25 档 |
+| 网易云 | `privilege.playMaxBrLevel`（回退 `maxBrLevel` / `flLevel` / `plLevel`）按 level 等级过滤，结合 `sq` / `hr` 标记；特殊空间 / 母带档位只在服务端明确标为该 level 时显示，避免虚报 |
+| 酷我 | 搜索结果 `N_MINFO` 解析出的 `KuwoSong.qualities`（接口本来就带音质列表） |
+
+接口未给音质标记或旧持久化数据 → 回退全量档位，保证弹层永远有可选项；过滤结果为空时同样回退。
+这是基于服务端标记的近似判定（登录态 / VIP 会改变实际可取流的档位），不额外逐档联网探测。
+
 ## 测试与质量
 
-- `flutter test`：**970 项测试全绿**。新增**音频转码核心回归（46 项：格式枚举与扩展名反查、参数校验边界、特殊格式扩展名 / fourcc / 裸流魔数嗅探、wavOnly 锁定 WAV、ffmpeg 参数构造与 10 种 muxer、同名输出去重、ffmpeg 路径探测优先级、Android `nativeLibraryDir` 内置引擎探测、解绑后无 ffmpeg 时 DTS / 360RA / NAC 直出标准 RIFF/WAVE PCM WAV 并断言非静音、缺引擎与解码器不可用的报错路径）**；并在沙箱用真实 ffmpeg 与 `qemu-aarch64-static` 跑真 Android 引擎做端到端验证（10 种输出格式均可产出、ffprobe 可读、解码成 PCM 后非静音可播放、进度回调正常、同名不覆盖）。原有覆盖 QQ 音乐签名算法（hash33 / zzc_sign / tripledes / qrc 解密，与 C 源码参考向量逐字节对照，含 15 字节 zzc_2 修复）、网易云加密、**网易云歌单全量还原（5 项：按 trackIds 顺序合并、分批跨批有序、下架曲目跳过、空列表、修复前只取 10 首预览的丢曲对照）**、**酷我 QMC 解密与歌词解码**、模型解析、二维码登录状态码语义、Cookie 登录的 QQ/微信两种账号形态（15 项）、封面 URL 降级、协议弹窗交互、版本检查、播放页进度条与倍速与音质偏好回归，**酷我 QMC v2 真实向量回归（6 项：用真实 ekey + 真实密文/明文前 6144 字节锁死解密链与 seek 一致性）**，**酷我 18 档音质与播放缓存回归（21 项：音质表逐字段对齐、播放缓存块边界与写读清闭环、中继 Range 逐字节正确、seek 任意偏移、二次请求命中缓存不回源）**，**酷我 `f=ar` 协议编解码（21 项：q 参数与响应体固化向量、协议往返、坏输入拒绝、填充规则）**，**酷我登录核心（28 项：设备身份形制与自愈、会话 JSON 往返、手机号校验、短信 secret 独立参考向量、口令 SM4 加解密、登录态监听）**，**酷我评论解析（18 项：真实抓包样本、时间串解析、分页边界、脏数据降级）**，以及本地音乐的元数据解析（五种容器 38 项）、扫描与增量（30 项）、持久化与页面（13 项）。
+- `flutter test`：**986 项测试全绿**。新增**音质可用性回归（16 项：QQ / 网易云 / 酷我音质标记解析、过滤与全量回退、`Song.qualityCodes` 序列化与 `copyWith`，用真实接口响应片段驱动）**；以及**音频转码核心回归（46 项：格式枚举与扩展名反查、参数校验边界、特殊格式扩展名 / fourcc / 裸流魔数嗅探、wavOnly 锁定 WAV、ffmpeg 参数构造与 10 种 muxer、同名输出去重、ffmpeg 路径探测优先级、Android `nativeLibraryDir` 内置引擎探测、解绑后无 ffmpeg 时 DTS / 360RA / NAC 直出标准 RIFF/WAVE PCM WAV 并断言非静音、缺引擎与解码器不可用的报错路径）**；并在沙箱用真实 ffmpeg 与 `qemu-aarch64-static` 跑真 Android 引擎做端到端验证（10 种输出格式均可产出、ffprobe 可读、解码成 PCM 后非静音可播放、进度回调正常、同名不覆盖）。原有覆盖 QQ 音乐签名算法（hash33 / zzc_sign / tripledes / qrc 解密，与 C 源码参考向量逐字节对照，含 15 字节 zzc_2 修复）、网易云加密、**网易云歌单全量还原（5 项：按 trackIds 顺序合并、分批跨批有序、下架曲目跳过、空列表、修复前只取 10 首预览的丢曲对照）**、**酷我 QMC 解密与歌词解码**、模型解析、二维码登录状态码语义、Cookie 登录的 QQ/微信两种账号形态（15 项）、封面 URL 降级、协议弹窗交互、版本检查、播放页进度条与倍速与音质偏好回归，**酷我 QMC v2 真实向量回归（6 项：用真实 ekey + 真实密文/明文前 6144 字节锁死解密链与 seek 一致性）**，**酷我 18 档音质与播放缓存回归（21 项：音质表逐字段对齐、播放缓存块边界与写读清闭环、中继 Range 逐字节正确、seek 任意偏移、二次请求命中缓存不回源）**，**酷我 `f=ar` 协议编解码（21 项：q 参数与响应体固化向量、协议往返、坏输入拒绝、填充规则）**，**酷我登录核心（28 项：设备身份形制与自愈、会话 JSON 往返、手机号校验、短信 secret 独立参考向量、口令 SM4 加解密、登录态监听）**，**酷我评论解析（18 项：真实抓包样本、时间串解析、分页边界、脏数据降级）**，以及本地音乐的元数据解析（五种容器 38 项）、扫描与增量（30 项）、持久化与页面（13 项）。
 - `flutter analyze`：No issues found。
 - 版本号的唯一真相来源是 `pubspec.yaml`：`test/app_version_test.dart` 会校验 UI 常量与之一致，CI 的 `read-version` 复合动作也从这里读取，避免「关于页显示旧版本」「Release 标题错位」。
 - 自 **v2.2.1** 起，Release 正文里的更新日志统一写在仓库根目录的 `CHANGELOG.md`：CI 的 `Extract changelog` 步骤会抽出与 tag 同版本的那一节填进 Release 正文，**抽不到就直接让流水线失败**；同时 `app_version_test.dart` 也会校验 `CHANGELOG.md` 里有对应条目，避免改了 tag 却忘了写日志。

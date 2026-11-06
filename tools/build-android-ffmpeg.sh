@@ -12,15 +12,21 @@
 #   libogg 1.3.5 (BSD)        https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz
 #   libvorbis 1.3.7 (BSD)     https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz
 # 随 APK 分发静态链接的 LGPL 库需保留本脚本与上游源码获取方式（见 release
-# libs-ffmpeg-v1 的说明），便于使用者自行重构建/替换。
+# libs-ffmpeg-v2 的说明），便于使用者自行重构建/替换。
 #
 # 用法：
 #   ANDROID_NDK_HOME=/path/to/ndk/28.2.13676358 ./tools/build-android-ffmpeg.sh
 #   ABIS="arm64-v8a" ./tools/build-android-ffmpeg.sh
 #   LINK_MODE=exe ./tools/build-android-ffmpeg.sh   # 产出 qemu 可跑的静态 ET_EXEC 验证版
+#   LINK_MODE=pie ./tools/build-android-ffmpeg.sh   # 旧版 static-PIE（已弃用，见下）
+#
+# 链接形态（重要，v2.4.9）：
+#   默认 dyn = 动态 PIE（ET_DYN + PT_INTERP=/system/bin/linker64），Android
+#   上 execve 的标准形态；只依赖系统 libc.so / libm.so。v2.4.8 的 static-PIE
+#   无 INTERP，在真机上易被 SELinux / seccomp 拒绝执行，已弃用。
 #
 # 产物：
-#   $ROOT/out/<abi>/libffmpeg_exec.so       static-PIE（随 APK 打包）
+#   $ROOT/out/<abi>/libffmpeg_exec.so       动态 PIE（随 APK 打包）
 #   $ROOT/jars/ffmpeg-<abi>.jar             jar 内路径 lib/<abi>/libffmpeg_exec.so
 #   $ROOT/jars/*.md5                        写进 third_party/.../build.gradle 的校验和
 #
@@ -35,7 +41,7 @@ SRC=$ROOT/src
 NDK=${ANDROID_NDK_HOME:-/opt/android-sdk/ndk/28.2.13676358}
 API=${ANDROID_API:-24}
 ABIS=${ABIS:-"arm64-v8a armeabi-v7a x86_64"}
-LINK_MODE=${LINK_MODE:-pie}   # pie（随包）/ exe（qemu 端到端验证）
+LINK_MODE=${LINK_MODE:-dyn}   # dyn（随包，默认）/ pie（旧 static-PIE）/ exe（qemu 验证）
 TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
 
 mkdir -p "$SRC" "$ROOT/jars"
@@ -67,9 +73,10 @@ DEPS_CFLAGS="-fPIC -O3 -DNDEBUG"
 FF_CFLAGS="$DEPS_CFLAGS -DANDROID -D__ANDROID_API__=$API"
 PAGE_ALIGN="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
 case "$LINK_MODE" in
+  dyn) FF_LDFLAGS="-pie $PAGE_ALIGN" ;;
   pie) FF_LDFLAGS="-static-pie $PAGE_ALIGN" ;;
   exe) FF_LDFLAGS="-static $PAGE_ALIGN" ;;
-  *) echo "LINK_MODE 只能是 pie 或 exe"; exit 2 ;;
+  *) echo "LINK_MODE 只能是 dyn / pie / exe"; exit 2 ;;
 esac
 
 build_autotools() {
@@ -157,5 +164,5 @@ done
 echo "=== 完成：$ROOT/jars ==="
 ( cd "$ROOT/jars" && md5sum ffmpeg-*.jar | tee checksums.md5 )
 echo
-echo "下一步：把 *.jar 上传到 release libs-ffmpeg-v1，并把上面的 MD5 同步到"
+echo "下一步：把 *.jar 上传到 release libs-ffmpeg-v2，并把上面的 MD5 同步到"
 echo "third_party/media_kit_libs_android_audio/android/build.gradle 的 filesToDownload。"

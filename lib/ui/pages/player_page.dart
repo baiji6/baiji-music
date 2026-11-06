@@ -463,6 +463,12 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 播放页的全部声明式弹层（歌词样式 / 音频规格 / 下载音质 / 播放音质）。
   Widget _buildSheets() {
     final song = _song;
+    // 音质列表只展示这首歌实际拥有的档位（v2.4.9）。
+    // 下载弹层用点下载时锁定的歌曲，播放音质弹层用当前播放歌曲；
+    // 旧数据 / 接口未给标记时 qualityCodes 为空，filterQualityOptions 回退全量。
+    final dlSong = _pendingDownloadSong ?? song;
+    final dlCodes = dlSong?.qualityCodes ?? const <String>{};
+    final pqCodes = song?.qualityCodes ?? const <String>{};
     return Stack(
       children: [
         // 歌词样式（字号 / 对齐 / 放大 / 字重 / 圆角 / 三色）
@@ -493,7 +499,8 @@ class _PlayerPageState extends State<PlayerPage> {
           }),
           content: song != null && song.isKuwo
               ? DownloadOptionsSheet<KuwoQuality>(
-                  options: KuwoQuality.downloadOptions,
+                  options: filterQualityOptions(
+                      dlCodes, KuwoQuality.downloadOptions, (q) => q.id),
                   current: DownloadManager.instance.kuwoQuality,
                   label: (q) => q.label,
                   subtitle: (q) => '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}',
@@ -503,7 +510,8 @@ class _PlayerPageState extends State<PlayerPage> {
                 )
               : song != null && song.isNetease
               ? DownloadOptionsSheet<NeteaseQuality>(
-                  options: NeteaseQuality.downloadOptions,
+                  options: filterQualityOptions(
+                      dlCodes, NeteaseQuality.downloadOptions, (q) => q.level),
                   current: DownloadManager.instance.neQuality,
                   label: (q) => q.label,
                   subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
@@ -512,7 +520,8 @@ class _PlayerPageState extends State<PlayerPage> {
                   onLyricOnly: _onLyricOnlyPicked,
                 )
               : DownloadOptionsSheet<Quality>(
-                  options: Quality.downloadOptions,
+                  options: filterQualityOptions(
+                      dlCodes, Quality.downloadOptions, (q) => q.code),
                   current: DownloadManager.instance.qqQuality,
                   label: (q) => q.label,
                   subtitle: (q) => q.bitrate > 0
@@ -546,7 +555,8 @@ class _PlayerPageState extends State<PlayerPage> {
           onDismissRequest: () => setState(() => _showPlayQualitySheet = false),
           content: song != null && song.isKuwo
               ? _QualitySheet<KuwoQuality>(
-                  options: KuwoQuality.playbackOptions,
+                  options: filterQualityOptions(
+                      pqCodes, KuwoQuality.playbackOptions, (q) => q.id),
                   current: _player.effectiveKuwoQuality,
                   label: (q) => q.label,
                   onSelect: (q) {
@@ -556,7 +566,8 @@ class _PlayerPageState extends State<PlayerPage> {
                 )
               : song != null && song.isNetease
               ? _QualitySheet<NeteaseQuality>(
-                  options: NeteaseQuality.playbackOptions,
+                  options: filterQualityOptions(
+                      pqCodes, NeteaseQuality.playbackOptions, (q) => q.level),
                   current: _player.effectiveNeteaseQuality,
                   label: (q) => q.label,
                   onSelect: (q) {
@@ -565,7 +576,8 @@ class _PlayerPageState extends State<PlayerPage> {
                   },
                 )
               : _QualitySheet<Quality>(
-                  options: Quality.playbackOptions,
+                  options: filterQualityOptions(
+                      pqCodes, Quality.playbackOptions, (q) => q.code),
                   current: _player.effectiveQuality,
                   label: (q) => q.label,
                   onSelect: (q) {

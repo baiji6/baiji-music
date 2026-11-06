@@ -6,6 +6,36 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.4.9
+
+### 🐛 修复安卓端「引擎已找到但转码报错」
+
+- **根因**：v2.4.8 随 APK 打包的是 **static-PIE**（`ET_DYN` 但没有 `PT_INTERP`）的 ffmpeg。Android 10+ 对 `untrusted_app` 的 `execve` 有 W^X / SELinux / seccomp 限制，无 INTERP 的静态 PIE 在真机上很容易被拒绝执行——表现为「文件探测到了，开始转码却失败」。官方支持的形态是**动态 PIE**（`ET_DYN` + `/system/bin/linker64`）。
+- **引擎换成动态 PIE**：同一份 FFmpeg 7.1.3 源码与组件白名单，链接方式由 `-static-pie` 改为 `-pie`，产物带 `PT_INTERP`；第三方库（lame / libogg / libvorbis）仍静态链接进二进制，只依赖系统 `libc.so` / `libm.so`，**无需 `LD_LIBRARY_PATH`**。三 ABI 重新交叉编译并托管到 `libs-ffmpeg-v2` release，`tools/build-android-ffmpeg.sh` 默认改为 `dyn` 模式，Gradle 下载项与 MD5 同步更新。
+- **引擎自检与完整错误**：页面探测到引擎后实际跑一次 `ffmpeg -version`，「转码引擎」卡片直接显示自检结果；`_runFfmpeg` 失败时保留退出码、完整输出路径与 stderr 末尾数行，不再只给一句模糊提示。
+- **保存位置导致的写入失败**：`file_picker.getDirectoryPath()` 在 Android 11+ 返回公共目录路径，写公共目录需要 `MANAGE_EXTERNAL_STORAGE`（「所有文件访问权限」）；旧版既不做权限检查也不做写入预检，且默认输出落在应用私有目录里、用户找不到产物。
+
+### ✨ 自定义转码保存位置
+
+- 「保存位置」支持 **应用目录 / 公共音乐 / 自定义** 三种模式一键切换；自定义可选文件夹或直接输入绝对路径（目录选择器在部分 Android 文件管理器上不可用时兜底）。
+- 选择会**持久化**（`KvStore`），下次打开页面自动沿用，不再每次重置。
+- 切换与开始转码前都做**写入预检**（创建目录 + 写探针文件），不可写时给出可操作指引；公共目录会自动申请「所有文件访问权限」。
+- 转码完成后任务项显示**完整输出路径**并可一键复制；「保存位置」卡片也可复制当前目录。
+
+### ✨ 音质列表按歌曲实际有的音质展示
+
+- 播放页「下载音质」「切换音质」、搜索页「下载」弹层，现在只列出这首歌**实际拥有**的档位，没有的档位隐藏；设置页的**全局默认音质**仍保持全量（没有歌曲上下文）。
+- `Song` 新增 `qualityCodes`（随 JSON 持久化，兼容旧数据）。三个音源各自从搜索 / 详情接口解析，**零额外网络请求**：
+  - **QQ 音乐**：`track_info.file` 的 `size_128mp3` / `size_320mp3` / `size_flac` / `size_hires` / `size_dts` / `size_dolby` / `size_360ra` / `size_*aac` / `size_*ogg` 与 `size_new` 位图（臻品母带 / 臻品音质 2.0 / 全景声 5.1 / OGG320 / 黑胶 / OGG640 / 全景声 7.1 / NAC / DTS:X），覆盖全部 25 档。
+  - **网易云**：`privilege.playMaxBrLevel`（回退 `maxBrLevel` / `flLevel` / `plLevel`）+ `sq` / `hr` 标记按 level 等级过滤；特殊空间 / 母带档位只在服务端明确标为该 level 时显示，避免虚报。
+  - **酷我**：复用搜索结果 `N_MINFO` 已解析出的 `KuwoSong.qualities`。
+- 接口未给音质标记或旧持久化数据 → 回退全量档位，保证弹层永远有可选项；过滤结果为空时同样回退。
+
+### 🧪 测试
+
+- 新增 16 项离线测试（QQ / 网易云 / 酷我音质标记解析、`filterQualityOptions` 过滤与回退、`Song.qualityCodes` 序列化与 `copyWith`），用真实接口响应片段驱动，不联网。
+- `flutter analyze` 零问题；全量测试 970 → **986 项全绿**。`libs-ffmpeg-v2` 三个 jar 匿名下载 MD5 校验通过。
+
 ## 2.4.8
 
 ### ✨ Android 端音频转码内置引擎（修复「安卓端没有探测到」）

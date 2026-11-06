@@ -270,6 +270,80 @@ class Quality {
     return null;
   }
 
+  /// 从 QQ 搜索/详情接口 `track_info.file` 解析这首歌**实际存在**的音质 code。
+  ///
+  /// 命名字段 `size_*` 与 `size_new` 位图覆盖 [downloadOptions] 全部 25 档；
+  /// `size_new` 索引含义参考 QQ 音乐开放平台 File 模型与开源实现
+  /// （L-1124/QQMusicApi `models/base.py`）：
+  /// 0 臻品母带 / 1 臻品音质2.0 / 2 全景声5.1 / 3 OGG320 /
+  /// 4 黑胶 / 5 OGG640 / 6 全景声7.1.4 / 7 NAC / 9 DTS:X。
+  /// 返回空集合表示接口未给音质标记（调用方回退全量）。
+  static Set<String> availableCodesFrom(dynamic rawFile) {
+    if (rawFile is! Map) return const <String>{};
+    final f = Map<String, dynamic>.from(rawFile);
+    int size(String key) {
+      final v = f[key];
+      return v is num ? v.toInt() : 0;
+    }
+
+    bool has(String key) => size(key) > 0;
+    final codes = <String>{};
+    void addIf(bool ok, String code) {
+      if (ok) codes.add(code);
+    }
+
+    addIf(has('size_128mp3'), mp3_128.code);
+    addIf(has('size_320mp3'), mp3_320.code);
+    addIf(has('size_flac'), flac.code);
+    addIf(has('size_hires'), hires.code);
+    addIf(has('size_48aac'), aac48.code);
+    addIf(has('size_96aac'), aac96.code);
+    addIf(has('size_192aac'), aac192.code);
+    addIf(has('size_192ogg') || has('size_96ogg'), ogg192.code);
+
+    final rawNew = f['size_new'];
+    final sn = rawNew is List
+        ? rawNew.map((e) => e is num ? e.toInt() : 0).toList()
+        : const <int>[];
+    int at(int i) => i < sn.length ? sn[i] : 0;
+    const newMap = <int, String>{
+      0: 'AI00', // 臻品母带
+      1: 'Q000', // 臻品音质 2.0
+      2: 'Q001', // 臻品全景声 5.1
+      3: 'O800', // OGG 320
+      4: 'V0M0', // 黑胶 VIP
+      5: 'O801', // OGG 640
+      6: 'Q003', // 臻品全景声 7.1
+      7: 'TL01', // NAC
+      9: 'DT03', // DTS:X
+    };
+    newMap.forEach((i, code) => addIf(at(i) > 0, code));
+    if (has('size_dts')) codes.add(dtsX.code);
+
+    // 杜比全景声：单个 size_dolby 无法细分 E-AC-3 三档 / AC-4，
+    // 有该音源就把同系列 4 档都列出，由取流降级链挑实际可用的一档。
+    if (has('size_dolby')) {
+      codes.addAll(<String>[
+        atmosEac3Lite.code,
+        atmosEac3.code,
+        atmosEac3Plus.code,
+        atmosDb.code,
+      ]);
+    }
+    // 360RA：数组元素对应 RA01~RA04 四档码率。
+    final ra = f['size_360ra'];
+    if (ra is List && ra.isNotEmpty) {
+      const raCodes = ['RA01', 'RA02', 'RA03', 'RA04'];
+      for (var i = 0; i < ra.length && i < raCodes.length; i++) {
+        final v = ra[i];
+        if (v is num && v > 0) codes.add(raCodes[i]);
+      }
+      // 数组元素不是数字（只给有无）时，四档都列。
+      if (ra.first is! num) codes.addAll(raCodes);
+    }
+    return codes;
+  }
+
   String filenameFor(String mid) => '$code$mid$mid$ext';
 
   String inferExt() => ext;
@@ -327,6 +401,54 @@ class NeteaseQuality {
     return null;
   }
 
+  /// level 的等级顺序（低 → 高）。特殊空间/母带档位排在普通无损之后。
+  static const Map<String, int> levelRank = <String, int>{
+    'standard': 0,
+    'exhigh': 1,
+    'lossless': 2,
+    'hires': 3,
+    'jyeffect': 4,
+    'sky': 5,
+    'jymaster': 6,
+    'dolby': 7,
+    'vivid': 8,
+  };
+
+  /// 从搜索/详情接口歌曲对象（含 `privilege`）解析实际可播放的 level 集合。
+  ///
+  /// 依据 `playMaxBrLevel`（回退 `maxBrLevel` / `flLevel` / `plLevel`）、
+  /// `sq`（无损）、`hr`（Hi-Res）标记。特殊空间/母带档位只在服务端把最高
+  /// 档明确标为该 level 时才显示，避免「能播 vivid」被误当成「同时有
+  /// dolby / sky / jymaster」。返回空集合表示接口未给标记（回退全量）。
+  static Set<String> availableLevelsFrom(Map<String, dynamic> song) {
+    final p = song['privilege'];
+    if (p is! Map) return const <String>{};
+    final priv = Map<String, dynamic>.from(p);
+    String level(String key) => (priv[key] ?? '').toString();
+    final candidates = <String>[
+      level('playMaxBrLevel'),
+      level('maxBrLevel'),
+      level('flLevel'),
+      level('plLevel'),
+    ];
+    final maxLevelRaw =
+        candidates.firstWhere((s) => s.isNotEmpty, orElse: () => '');
+    final maxRank = levelRank[maxLevelRaw];
+    if (maxRank == null) return const <String>{};
+
+    final out = <String>{standard.level, exhigh.level};
+    if (song['sq'] is Map || maxRank >= levelRank['lossless']!) {
+      out.add(lossless.level);
+    }
+    if (song['hr'] is Map || maxRank >= levelRank['hires']!) {
+      out.add(hires.level);
+    }
+    for (final q in <NeteaseQuality>[jyeffect, sky, jymaster, dolby, vivid]) {
+      if (maxLevelRaw == q.level) out.add(q.level);
+    }
+    return out;
+  }
+
   @override
   String toString() => 'NeteaseQuality($level,$label)';
 }
@@ -380,6 +502,14 @@ class Song {
   /// 容器格式：mp3 / flac / m4a / ogg / wav（仅本地歌曲有值）。
   final String format;
 
+  /// 这首歌**实际拥有**的音质标记（QQ 为 code、网易云为 level、酷我为 id）。
+  ///
+  /// 由各平台搜索/详情接口解析（见 [Quality.availableCodesFrom] /
+  /// [NeteaseQuality.availableLevelsFrom] / `KuwoSong.qualities`）。
+  /// 空集合 = 未知（旧持久化数据或接口未给标记），UI 应回退全量档位，
+  /// 避免弹层空白。v2.4.9 用于「没有该音质就隐藏」。
+  final Set<String> qualityCodes;
+
   const Song({
     required this.mid,
     required this.songId,
@@ -395,6 +525,7 @@ class Song {
     this.localSize = 0,
     this.localMtime = 0,
     this.format = '',
+    this.qualityCodes = const <String>{},
   });
 
   bool get isNetease => source == Source.netease;
@@ -512,6 +643,7 @@ class Song {
       duration: duration,
       cover: cover,
       mvId: mvId,
+      qualityCodes: Quality.availableCodesFrom(t['file']),
     );
   }
 
@@ -531,6 +663,10 @@ class Song {
         localSize: (map['localSize'] as num?)?.toInt() ?? 0,
         localMtime: (map['localMtime'] as num?)?.toInt() ?? 0,
         format: map['format'] as String? ?? '',
+        qualityCodes: (map['qualityCodes'] as List?)
+                ?.map((e) => e.toString())
+                .toSet() ??
+            const <String>{},
       );
 
   Map<String, dynamic> toJson() => {
@@ -548,6 +684,7 @@ class Song {
         if (localPath.isNotEmpty) 'localSize': localSize,
         if (localPath.isNotEmpty) 'localMtime': localMtime,
         if (format.isNotEmpty) 'format': format,
+        if (qualityCodes.isNotEmpty) 'qualityCodes': qualityCodes.toList(),
       };
 
   /// 拷贝并覆盖部分字段（本地歌曲刷新元数据时用）。
@@ -566,6 +703,7 @@ class Song {
     int? localSize,
     int? localMtime,
     String? format,
+    Set<String>? qualityCodes,
   }) =>
       Song(
         mid: mid ?? this.mid,
@@ -582,10 +720,25 @@ class Song {
         localSize: localSize ?? this.localSize,
         localMtime: localMtime ?? this.localMtime,
         format: format ?? this.format,
+        qualityCodes: qualityCodes ?? this.qualityCodes,
       );
 
   @override
   String toString() => 'Song($source:$mid,$name)';
+}
+
+/// 按歌曲可用音质标记过滤选项列表。
+///
+/// [codes] 为空（旧持久化数据 / 接口未给标记）或过滤结果为空时回退全量，
+/// 保证弹层永远有可选项；否则只保留标记存在的档位。
+List<T> filterQualityOptions<T>(
+  Set<String> codes,
+  List<T> options,
+  String Function(T) codeOf,
+) {
+  if (codes.isEmpty) return options;
+  final filtered = options.where((o) => codes.contains(codeOf(o))).toList();
+  return filtered.isEmpty ? options : filtered;
 }
 
 // ==================== 登录凭证 ====================

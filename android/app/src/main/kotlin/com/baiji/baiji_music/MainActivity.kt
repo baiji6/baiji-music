@@ -47,6 +47,15 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "nativeLibraryDir" -> result.success(applicationInfo.nativeLibraryDir)
+                    // v2.4.9：公共 Music 目录，供转码输出「保存到公共目录」使用。
+                    // Android 10+ 写入该目录需要 MANAGE_EXTERNAL_STORAGE，
+                    // Dart 侧会先做权限检测与写入预检再启用。
+                    "publicMusicDir" -> {
+                        @Suppress("DEPRECATION")
+                        val dir = android.os.Environment.getExternalStoragePublicDirectory(
+                            android.os.Environment.DIRECTORY_MUSIC)
+                        result.success(dir.absolutePath)
+                    }
                     else -> result.notImplemented()
                 }
             }

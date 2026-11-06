@@ -1,4 +1,4 @@
-/// 音频转码核心（v2.4.7）。
+/// 音频转码核心（v2.4.9）。
 ///
 /// 把本地音频文件转成目标格式，并支持自定义声道数、位深、采样率、码率。
 ///
@@ -7,9 +7,12 @@
 /// （`--disable-muxers --disable-encoders --disable-programs`），能解几乎所有
 /// 音质，但**不含编码器 / muxer / ffmpeg 命令行**，无法用来产出文件。
 ///
-/// v2.4.8 起 Android 随 APK 打包一份「裁剪版静态 ffmpeg CLI」
-/// （`libffmpeg_exec.so`，放在 `nativeLibraryDir`），由 UI 层通过
-/// `FfmpegLocator.extraCandidates` 注入候选路径，因此移动端开箱即用。
+/// Android 随 APK 打包一份「裁剪版 ffmpeg CLI」（`libffmpeg_exec.so`，放在
+/// `nativeLibraryDir`），由 UI 层通过 `FfmpegLocator.extraCandidates` 注入候选
+/// 路径，因此移动端开箱即用。v2.4.9 起该二进制改为**动态 PIE**
+/// （ET_DYN + `PT_INTERP=/system/bin/linker64`，仅依赖系统 libc/libm）——
+/// v2.4.8 的 static-PIE 没有 INTERP，真机上 execve 会被 SELinux/seccomp 拒绝。
+/// 页面探测到引擎后会跑一次 `ffmpeg -version` 自检，失败原因直接可见。
 /// 探测顺序：
 ///   1. 页面手动指定 / 环境变量 `BAIJI_FFMPEG`；
 ///   2. `extraCandidates`（Android 内置引擎）；
@@ -632,7 +635,7 @@ class AudioTranscoder {
     try {
       _process = await Process.start(exe, args);
     } catch (e) {
-      return TranscodeResult.failure('无法启动 ffmpeg：$e');
+      return TranscodeResult.failure('无法启动 ffmpeg（$exe）：$e');
     }
 
     final stderrBuf = StringBuffer();
@@ -683,14 +686,25 @@ class AudioTranscoder {
     }
     if (exitCode != 0) {
       _cleanup(output);
-      final msg = stderrBuf.toString().trim();
+      final raw = stderrBuf.toString().trim();
+      final lines = raw.isEmpty
+          ? const <String>[]
+          : raw.split('\n').where((l) => l.trim().isNotEmpty).toList();
+      // 保留末尾数行：ffmpeg 的关键错误（权限 / 编码器 / 输出路径）都在末尾，
+      // 只取最后一行常会把「Permission denied」之外的原因一起吞掉。
+      final tail = lines.isEmpty
+          ? ''
+          : (lines.length > 4
+              ? lines.sublist(lines.length - 4).join('\n')
+              : lines.join('\n'));
       return TranscodeResult.failure(
-        msg.isEmpty ? 'ffmpeg 退出码 $exitCode' : msg.split('\n').last,
+        'ffmpeg 退出码 $exitCode\n输出：$output'
+        '${tail.isNotEmpty ? '\n$tail' : ''}',
       );
     }
     if (!File(output).existsSync() || File(output).lengthSync() == 0) {
       if (cleanupOnFailure) _cleanup(output);
-      return const TranscodeResult.failure('转码未生成有效文件');
+      return TranscodeResult.failure('转码未生成有效文件：$output');
     }
     onProgress?.call(TranscodeProgress(processedMs: processedMs, totalMs: totalMs));
     return TranscodeResult.success(output);
