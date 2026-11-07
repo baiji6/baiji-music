@@ -15,6 +15,7 @@ import 'package:dio/dio.dart';
 import '../../core/app_logger.dart';
 import '../../lyrics/lyric_model.dart';
 import '../../models/models.dart';
+import 'kugou_auth.dart';
 import 'kugou_cipher.dart';
 import 'kugou_lyric.dart';
 
@@ -254,13 +255,22 @@ class KugouApi {
   }
 
   /// 单档取链：gateway.kugou.com/v5/url。
+  ///
+  /// v2.5.1：登录凭据（userid/token）+ 持久化设备三件套（mid/dfid/dev）
+  /// 随请求注入——HotDownloader `link.rs` 的 `get_download_link_with_
+  /// credentials` 就是这么解锁 flac / Hi-Res 的。未登录时 userid=0、
+  /// token 缺省，服务端按匿名处理（通常只能取 128k）。
+  /// 注意签名用的是 **gateway** salt（域名是 gateway.kugou.com），
+  /// 不是登录接口的 login salt；`key` 里也要带上真实 userid。
   static Future<String> _fetchUrl(
     String hash,
     String albumId,
     String albumAudioId,
     KugouQuality quality,
   ) async {
-    final mid = kugouDeviceMid();
+    final auth = await KugouAuth.requestParams();
+    final mid = auth['mid'] ?? kugouDeviceMid();
+    final userid = auth['userid'] ?? '0';
     final params = <String, String>{
       'hash': hash,
       'album_id': albumId,
@@ -279,14 +289,13 @@ class KugouApi {
       'cdnBackup': '1',
       'module': '',
       'clientver': '11430',
-      'dfid': '-',
       'uuid': '-',
       'appid': '1005',
-      'userid': '0',
-      'mid': mid,
       'clienttime': '${DateTime.now().millisecondsSinceEpoch ~/ 1000}',
+      // 设备 + 登录态：mid/dfid/dev 覆盖默认值，userid/token 解锁高音质。
+      ...auth,
     };
-    params['key'] = kugouUrlKey(hash, mid);
+    params['key'] = kugouUrlKey(hash, mid, userid: userid);
     params['signature'] = kugouSign(params, kugouGatewaySalt);
     final url = '$urlV5?${kugouBuildQuery(params)}';
     final headers = {

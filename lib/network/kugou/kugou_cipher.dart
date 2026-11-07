@@ -26,6 +26,10 @@ const String kugouLyricSalt = 'LnT6xpN3khm36zse0QzvmgTZ3waWdRSA';
 /// v5/url 取链 `key` 盐值（HotDownloader）。
 const String kugouUrlKeySalt = '57ae12eb6890223e355ccfcb74edf70d';
 
+/// login-user.kugou.com 二维码登录接口盐值
+/// （HotDownloader `client.rs` 只对 `base == login-user.kugou.com` 用它签名）。
+const String kugouLoginSalt = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt';
+
 /// 设备 mid（小写 32 位 hex），无登录时作为匿名标识。
 String kugouDeviceMid() {
   final seed =
