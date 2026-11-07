@@ -6,6 +6,26 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.1
+
+### 🐛 修复酷狗无法搜索（签名 salt 抄错）
+
+- **根因**：`gateway.kugou.com` 签名盐值的一个字符顺序抄错（`...092lski2UIkp` → 应为 `...092lksi2UIkp`）。接口 HTTP 200 但返回 `error_code 20006 err signature`、`data.lists` 为空，表现就是「酷狗无法搜索」。已对照 HotDownloader `client.rs` 的 `SALT` 逐字节校正；实测修正后搜索「周杰伦」返回 `total=480` / 20 首，四档 hash 齐全。
+- **取链音质参数**：`/v5/url` 的 `quality` 只认 `128 / 320 / flac / high`，此前误用了 filename 后缀 `128kmp3 / 320kmp3`，被判 `error_code 20010`。`KugouQuality.qualityTag` 已改回，并与持久化用的 `id` 明确分离。
+
+### 🔐 新增酷狗登录（对齐 HotDownloader + 倾听 5.6.14，解锁高音质）
+
+- **二维码登录**：`login-user.kugou.com/v2/qrcode` 创建（服务端直接下发二维码 PNG）+ `/v2/get_userinfo_qrcode` 轮询，状态 `1=等待 / 2=已扫 / 4=确认`；登录接口用独立签名盐 `NVPh5oo…`。另有手动填写 `userid / token`（可附设备 `MID / DFID`）通道。
+- **设备与会话**：`mid / dfid / dev` 三件套首次生成后持久化并与 token 绑定，`userid / token` 会话支持启动恢复、登录态监听与退出。
+- **音质解锁（关键）**：登录凭据随设备参数一起注入 `/v5/url`（`urlKey` 也带真实 userid）。未登录时高音质取链会被服务端判为版权/会员限制（`status:2`），登录后才能拿到无损 FLAC / Hi-Res。签名仍用 gateway 盐，注入后匿名取链实测仍可用。
+- **界面**：新增酷狗登录页（扫码 + 手动凭据 + 已登录卡片 + 退出）；设置页账号区新增「酷狗音乐」入口，`isLoggedIn` / 评论页登录分发补齐酷狗来源。
+
+### 🧪 测试
+
+- 新增 `kugou_cipher_test.dart`（9 项：三套 salt 逐字节、签名/urlKey 向量、四档 qualityTag）与 `kugou_auth_test.dart`（18 项：设备持久化、会话、二维码状态映射、PNG 解码、凭据注入），并加酷狗登录页 build 冒烟。
+- 沙箱联网实测：二维码创建/轮询打通；注入凭据后匿名取链仍拿到真实直链（义勇军进行曲 `status:1`）。
+- `flutter analyze` 零问题；全量测试 1022 项通过，另有 6 项 UI 冒烟/点击测试在 headless 沙箱的 1080×2400 视口下因历史遗留 `RenderFlex` 溢出失败（已验证非本次回归，CI 构建流水线不跑 `flutter test`）。
+
 ## 2.5.0
 
 ### 🎵 新增酷狗音乐平台（完全对齐 HotDownloader）
