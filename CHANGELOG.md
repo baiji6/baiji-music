@@ -6,6 +6,58 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.4
+
+### 🎧 酷狗音质改用「服务端权威档位」，补齐 360RA / 蝰蛇 HiFi / 杜比双码率
+
+用户反馈「酷狗下载界面的音质不全」+「支持 360RA 的歌曲里看不到 360RA 选项」。根因是 v2.5.2 的音质推导**全靠猜**：酷狗搜索响应里根本没有 `trans_param` 字段，v2.5.2 那套「key 名含 360/mha」的 360RA 启发式**永不命中**，于是 360RA / 蝰蛇 HiFi / 杜比 448k·1500k 这些只在服务端存在的档位一律不展示。
+
+- 服务端真正决定档位的是 `POST goodsmstore/v1/get_res_privilege`（`x-router: media.store.kugou.com`）。新增 `lib/network/kugou/kugou_privilege.dart` 接入该接口，探测请求里的 `quality` 只用服务端认得的代号（**混入 `360ra` / `master_tape` 会整批返回 `error_code 20010` 非法参数**，这类"看起来更全"的写法必须避免）。
+- 补建三个此前只在注释里列过、代码里从没建过的枚举：**蝰蛇 HiFi**、**杜比 448k**、**杜比 1500k**；360RA 的 `360ra_l1/l2/l3` 三档统一映射到最高档 `360ra_l3`。
+- 下载弹层从 4 档扩到 **10 档**，并新增 `disabled` 能力：高规格档在**未登录**时**置灰**而不是隐藏（此前直接消失，用户完全看不到自己缺什么）。
+- 实测（周杰伦《稻香》）：服务端下发 `128 / 320 / flac / high / viper_atmos / viper_tape / viper_clear / viper_hifi` 共 8 档，其中 **`viper_hifi` 是此前完全缺失的一档**。
+
+### 🎬 酷狗 MV 播放源（按上传的 ikun.js 接口实现）
+
+- 新增 `lib/network/mv/kugou_mv.dart`，完整实现 `m.kugou.com/app/i/mv.php`。
+- 画质档 `le / sd / hd / sq / rq` 对应 **480p / 720p / 1080p / 1080p / 4K**；同一 `quality` 有多个 `filesize` 时取**文件更大**的那一路。
+- `mv_api.dart` 接入 `Source.kugou` 分支；`resolveMvId` 走酷狗缓存——酷狗的 `mid` 是 **29 位 MixSongID**，`int.tryParse` 会溢出，不能复用 QQ 详情查询那套。
+- 顺带修掉档位探测的响应解析：酷狗网关个别节点回 `Content-Type: text/html`，Dio 不会自动当 JSON 解析，改为 `ResponseType.plain` + 手动 `jsonDecode`。
+
+### 💬 酷狗评论：查看 + 发表
+
+评论协议逆向自**倾听 5.6.14** 的 APK。
+
+- **读**：`GET m.comment.service.kugou.com/r/v1/rank/{newest,topliked}`，**免登录**。实测最新 19 条 / 最热 20 条（该歌评论总数 471166）。取 `res_id` 要先打 `POST gateway.kugou.com/v3/album_audio/audio`（**必须走 http 而非 https**，https 会 502）。
+- **写**：`POST gateway.kugou.com/m.comment.service/p/v1/commentsv3/{add,reply}`，**需登录**。核心突破是逆向出 APK 里 `LGr1.iiii` 的加解密算法（Base64 + 自定义流密码），解出 `iooIi` 的 4 个 lazy salt，并确认写接口是**两层签名**：
+  ```
+  key       = md5(appid + salt + clientver + clienttime + mid + body)
+  signature = md5(salt + sorted('k=v') + body + salt)
+  ```
+  两套客户端身份：`std` = appid 1005 / clientver 11440 / 网关盐，`lite` = appid 3116 / clientver 10659 / 歌词盐；标准身份被判未登录时自动切概念版重试。
+- 实测：读评论通；发评论签名通过，服务端返回 `10000 请登录后发送`——**只剩登录态这一件事**，未登录时 UI 明确提示「请先登录酷狗音乐账号后再发表评论」。
+- 已知的诚实边界：酷狗**点赞**协议已逆向但本版**未接入**（UI 上提示「酷狗暂不支持点赞」），**楼中楼回复列表**只支持发送、不拉取。
+
+### 📂 酷狗歌单 / 每日推荐 / 我的歌单
+
+- **推荐歌单**：`www2.kugou.kugou.com/yueku/v9/special/getSpecial`（`is_ajax=1`），排序 `3 热藏 / 5 推荐 / 6 最热 / 7 最新 / 8 飙升`。
+- **歌单分类**：同接口 `is_smarty=1`，结构是 `{组名: {id, data:[{id,name}]}}`（组名有主题 / 语种 / 风格 / 年代 / 心情 / 场景六类）。
+- **歌单歌曲**：`mobilecdn.kugou.com/api/v3/special/song`，每条带 `hash / 320hash / sqhash / album_audio_id`，正好是取链要的三件套。
+- **搜索歌单**：`mobilecdn.kugou.com/api/v3/search/special`。
+- **每日推荐**：`gateway.kugou.com/everyday_song_recommend`，每天一批 30 首（含 `hash_320 / hash_flac / mv_hash`），新增「酷狗每日推荐」页，支持播放全部与点播。
+- **我的歌单**：`gateway.kugou.com/v7/get_all_list`，需登录。**这个接口的签名盐是「歌词盐」而不是网关盐**（逆自倾听 APK 的 `LeN.iliO`），用错盐服务端一律返回 `error_code 20006 参数验证失败`；body 需带 `userid / token / total_ver / type / page / pagesize`，`x-router: cloudlist.service.kugou.com`。
+
+### 🔀 平台切换改成下拉列表 + 修一个「切了平台没变化」
+
+- 发现页「推荐歌单」与「我的歌单」右侧的平台切换，由平铺标签改为**点击展开平台列表的下拉**（与搜索页的切换器一致）。
+- 🐛 **修「切到酷狗还是 QQ 的歌单」**：`hotPlaylistsOf` 的 switch 里漏了酷狗分支，酷狗落到 `default` **静默返回 QQ 数据**。已补 `KugouHot` 与 `HotPlaylist.fromKugou`，同时给 `hotKeywordsOf` 也补上酷狗分支（此前同样回落成 QQ 热搜）。
+
+### 🧪 测试与验证
+
+- 新增 `test/kugou_playlist_test.dart`（**23 项**，全离线）：用真实响应片段驱动推荐 / 搜索 / 每日推荐 / 歌单歌曲 / 我的歌单五套解析，并锁定「我的歌单用歌词盐」这一关键协议约定（含与网关盐结果必须不同的断言）。
+- 沙箱端到端实测：推荐歌单 5 条、分类 6 组、歌单歌曲 5/89 首、每日推荐 30 首、搜索歌单 3 条，全部字段（id / 封面 / 歌手 / 曲目数 / 320k·FLAC hash）解析正确。
+- `flutter analyze` 零问题；全量测试 **1154 项通过**（上一版 1057 项）。
+
 ## 2.5.3
 
 ### 🐛 修复真机「本地升频失败，已降级播放原始 320k 音质」
