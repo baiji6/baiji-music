@@ -26,13 +26,13 @@ class LyricSettings extends ChangeNotifier {
   static const double minActiveScale = 1.0;
   static const double maxActiveScale = 2.0;
 
-  /// 默认只做**轻微**放大。
+  /// 默认**不放大**当前行（1.0）。
   ///
-  /// 之前是 1.45（当前行明显大一号），但用户给的参考视频里所有行字号一致，
-  /// 视觉层次几乎全靠颜色（当前行逐字填满、其余暗灰）建立。1.45 让当前行比相邻行
-  /// 大出一大截，行距被撑开、整屏可见行数骤减，观感与参考不符。
-  /// 1.12 保留一点点层次感，又不会喧宾夺主。
-  static const double defaultActiveScale = 1.12;
+  /// 参考实现 kunyin（Apple Music 风格）：所有行字号一致，视觉层次完全靠
+  /// 颜色建立——非当前行暗灰、当前行未唱半透明白、逐字已唱纯白。当前行
+  /// 放大（即使是 1.12）会撑开行距、整屏可见行数骤减，与参考观感不符，因此
+  /// 默认关闭放大。用户仍可在样式面板把 activeScale 调到 1.0~2.0 自行开启。
+  static const double defaultActiveScale = 1.0;
 
   /// 字重可调范围。视频里当前行是粗体（约 w800），非当前行轻一档。
   static const int minWeight = 300;

@@ -53,8 +53,17 @@ amll.LyricDocument toLyricDocument(Lyrics lyrics) {
 
 /// 把本工程的歌词样式设置映射为 AMLL 预设。
 ///
-/// 三色语义对齐 AMLL：非当前行 = 未激活色，当前行底字 = 未唱色，
-/// 逐字高亮（唱过的字）= 已唱色。字号/对齐/字重都来自设置页。
+/// 视觉对齐参考实现 kunyin（ikunshare/kunyin，Apple Music 风格歌词）：
+/// - **当前行只靠不透明度 / 颜色区分，不做放大**：非当前行 0.4 白、当前行未唱
+///   0.6 白、逐字已唱纯白 1.0——层次完全由文字色建立，当前行字号与相邻行
+///   一致（[LyricSettings.defaultActiveScale]=1.0），避免「当前行大一号」撑开行距。
+/// - **逐字软边擦除**：已唱歌词纯白不透明，未唱部分半透明白，尾迹柔边
+///   （[LyricHighlight] 的 tailFadeWidth）做平滑扫光。
+/// - **译文在主词下方**：translation 文本排在正文之下，行距单独留白。
+/// - **距离模糊关闭**：[LyricDistanceBlur.maxSigma]=0，远处行不再高斯模糊
+///   （中端机逐帧模糊开销大，且 kunyin 默认不开）。
+/// - **平滑滚动锚点居中**：[LyricAnchor.fraction]=0.5，当前行停在视口正中。
+/// - **间奏圆点**：[LyricCountdown] 主题化到已唱色，前奏 / 间奏显示呼吸圆点。
 amll.LyricPreset lyricPresetFrom(LyricSettings s) {
   final base = amll.LyricPresets.appleMusic;
   return base.copyWith(
@@ -67,6 +76,7 @@ amll.LyricPreset lyricPresetFrom(LyricSettings s) {
     activeTextStyle: TextStyle(
       fontSize: s.fontSize * s.activeScale,
       fontWeight: s.activeWeight,
+      height: 1.35,
       color: s.readableUnsungColor,
     ),
     translationTextStyle: TextStyle(
@@ -79,28 +89,26 @@ amll.LyricPreset lyricPresetFrom(LyricSettings s) {
       fontSize: s.fontSize * 0.6 * s.activeScale,
       color: s.readableUnsungColor.withValues(alpha: 0.9),
     ),
-    highlight: amll.LyricHighlight.solid(s.readableSungColor, tailFadeWidth: 10),
-    // 远处行可见性：appleMusic 预设的行过渡对非当前行施加 fade(.45)，
-    // 叠加深色底上的 40% 白文字色后远处行几乎不可见（实测有效亮度
-    // 不到背景的 1.15 倍），与参考视频1「灰色但清晰可读、仅虚化」不符。
-    // 这里自建过渡：保留 0.92 缩放维持层次，不透明度提到 0.88——灰度
-    // 由文字色本身（40% 白）承担，不再用透明度二次打折；虚化仍由
-    // 预设自带的 distanceBlur（maxSigma 4）负责。
-    lineTransition: amll.LyricLineTransition.effects(const [
-      amll.LyricLineEffect.scale(.92),
-      amll.LyricLineEffect.fade(.88),
-    ]),
-    // 远处行虚化的开销档位（v2.3.1）：引擎对每条远处行逐帧做
-    // saveLayer + 高斯模糊，预设默认 maxSigma 4 / 每行 +1——一屏 8~10 行
-    // 全在模糊，中端机直接掉帧（用户反馈「太卡了」）。降到 2.5 / 0.4：
-    // 只有相邻几行有轻微虚化，层次感保留，逐帧模糊开销降一个量级。
-    distanceBlur: const amll.LyricDistanceBlur(
-        maxSigma: 2.5, sigmaPerLine: 0.4, whenBrowsing: false),
-    // 预设自带的前奏/间奏圆点是白色的（面向深色底），浅色主题下会隐身；
-    // 换成主题已唱色，既看得见又与逐字高亮同源。
+    highlight: amll.LyricHighlight.solid(s.readableSungColor, tailFadeWidth: 14),
+    // 不缩放非当前行：层次全靠文字色（非当前 0.4 / 当前未唱 0.6 / 已唱 1.0）。
+    // 空 effects 表示 inactive 态为恒等变换，缩放与额外淡入都交给文字色本身，
+    // 对应 kunyin「当前行不放大、只靠不透明度区分」。逐字卡拉 OK 填充与
+    // 当前行配色过渡仍由引擎按 playback 进度平滑驱动。
+    lineTransition: amll.LyricLineTransition.effects(const []),
+    // kunyin 默认关闭远处行虚化：maxSigma=0 彻底关掉逐帧高斯模糊（既省
+    // 中端机开销，也避免远处行被糊掉看不清）。
+    distanceBlur:
+        const amll.LyricDistanceBlur(maxSigma: 0, sigmaPerLine: 0, whenBrowsing: false),
     countdown: amll.LyricCountdown(
       color: s.readableSungColor.withValues(alpha: 0.8),
     ),
+    // 平滑滚动锚点居中：当前播放行停在视口正中（kunyin 默认 0.5）。
+    activeAnchor:
+        const amll.LyricAnchor.fraction(0.5, target: amll.LyricAnchorTarget.mainText),
+    selectionAnchor:
+        const amll.LyricAnchor.fraction(0.5, target: amll.LyricAnchorTarget.mainText),
+    // 译文与主词之间留白，保证译文清晰排在正文下方。
+    translationSpacing: 10,
     textAlign: s.textAlign,
     contentAlignment:
         s.alignLeft

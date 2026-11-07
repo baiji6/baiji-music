@@ -3,6 +3,7 @@ import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/core/lyric_settings.dart';
 import 'package:baiji_music/lyrics/lyric_amll_adapter.dart';
 import 'package:baiji_music/lyrics/lyric_model.dart';
+import 'package:flutter_lyric/flutter_lyric.dart' as amll;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -108,12 +109,23 @@ void main() {
     expect(p.lineTransition.state(true).opacity, 1.0);
   });
 
-  test('预设映射：远处行虚化的开销档位（v2.3.1 卡顿回归）', () {
-    // appleMusic 预设默认 maxSigma 4 / sigmaPerLine 1——一屏 8~10 行
-    // 全在逐帧 saveLayer + 高斯模糊，中端机直接掉帧（用户反馈「太卡」）。
-    // 锁定降到 2.5 / 0.4 的性能档位。
+  test('预设映射：远处行虚化关闭（kunyin 对齐 + v2.3.1 卡顿回归）', () {
+    // kunyin（Apple Music 风格）默认不开远处行虚化；同时中端机逐帧
+    // saveLayer + 高斯模糊开销大（用户反馈「太卡」）。锁定 maxSigma=0 彻底
+    // 关掉逐帧模糊——远处行靠文字色（0.4 白）自带的灰度区分层次，不糊。
     final p = lyricPresetFrom(LyricSettings.instance);
-    expect(p.distanceBlur.maxSigma, 2.5);
-    expect(p.distanceBlur.sigmaPerLine, 0.4);
+    expect(p.distanceBlur.maxSigma, 0);
+    expect(p.distanceBlur.sigmaPerLine, 0);
+  });
+
+  test('预设映射：kunyin 视觉锁定（不放大 + 锚点居中）', () {
+    // 当前行不靠放大区分（activeScale 默认 1.0），平滑滚动锚点居中 0.5。
+    final p = lyricPresetFrom(LyricSettings.instance);
+    // 非当前行行过渡为恒等变换：不缩放、不额外淡入（层次全靠文字色）。
+    final inactive = p.lineTransition.state(false);
+    expect(inactive.scale, 1.0);
+    expect(inactive.opacity, 1.0);
+    expect(p.activeAnchor,
+        const amll.LyricAnchor.fraction(0.5, target: amll.LyricAnchorTarget.mainText));
   });
 }
