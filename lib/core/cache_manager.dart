@@ -57,6 +57,12 @@ class CacheManager {
   /// 「清理缓存」会连它一起清空。
   static const String playbackDirName = 'playback';
 
+  /// 本地升频（蝰蛇母带）产出的 96k/192k 24bit WAV 缓存。
+  ///
+  /// 单首歌可达数百 MB，必须纳入受管目录，否则「清理缓存」清不掉。
+  /// 与 `ViperUpscaler.dirName` 保持一致。
+  static const String viperDirName = 'viper';
+
   /// [clear] 会清空内容的子目录。
   ///
   /// **统计与清理必须用同一个列表**（[breakdown] 也用它）：
@@ -68,6 +74,7 @@ class CacheManager {
     miscDirName,
     tempDirName,
     playbackDirName,
+    viperDirName,
   ];
 
   /// libmpv 在各平台的默认缓存目录（best-effort，只为「顺手清掉」）。
