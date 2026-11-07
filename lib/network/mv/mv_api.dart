@@ -4,18 +4,22 @@
 //   - QQ    搜索/详情的 track.mv.vid（字符串型，如 w0026q7f01a）
 //   - 网易  v3 song detail 的 songs[0].mv（数字）
 //   - 酷我  搜索接口不带 MVID → mvId 留空，播放时用 rid 现查
+//   - 酷狗  搜索响应的 MvHash（v2.5.4；32 位 hex）
 //
 // 因此 [resolveMvId] 对 QQ/网易有兜底查询（历史持久化数据没有 mvId 时，
-// 点 MV 按钮现查一次详情）；酷我不需要（本就按 rid 播放）。
+// 点 MV 按钮现查一次详情）；酷我不需要（本就按 rid 播放）；酷狗从进程内
+// 缓存回查（搜索时已解析出 MvHash）。
 library;
 
 import 'dart:async';
 
 import '../../core/app_logger.dart';
 import '../../models/models.dart';
+import '../kugou/kugou_api.dart';
 import '../netease/netease_client.dart';
 import '../qq_music_client.dart';
 import '../song_api.dart';
+import 'kugou_mv.dart';
 import 'kuwo_mv.dart';
 import 'mv_source.dart';
 import 'netease_mv.dart';
@@ -53,7 +57,7 @@ class MvApi {
     if (song.isLocal) throw const MvUnavailable('本地歌曲没有 MV');
 
     var id = (mvId ?? song.mvId).trim();
-    if (id.isEmpty && !song.isKuwo) {
+    if (id.isEmpty && !song.isKuwo && !song.isKugou) {
       id = await resolveMvId(song, qq: qq, netease: netease);
     }
 
@@ -66,6 +70,16 @@ class MvApi {
       case Source.kuwo:
         source = await KuwoMvApi.getSource(song.songId.toString(), quality,
             vid: id.isEmpty ? null : id);
+        break;
+      case Source.kugou:
+        // v2.5.4：酷狗 MV 用 `MvHash`（32 位 hex）。历史持久化数据里
+        // 没有 mvId 时从进程内缓存回查。
+        if (id.isEmpty) {
+          final cached = KugouApi.cachedSong(song.mid);
+          id = cached?.mvHash ?? '';
+        }
+        if (id.isEmpty) throw const MvUnavailable('该歌曲没有 MV');
+        source = await KugouMvApi.getSource(id, quality);
         break;
       default:
         if (id.isEmpty) throw const MvUnavailable('该歌曲没有 MV');
@@ -90,11 +104,23 @@ class MvApi {
         AppLog.w('MvApi', 'availableQualities: $e');
       }
     }
+    if (song.source == Source.kugou) {
+      // v2.5.4：酷狗有 4K（`rq` 档），通用回退列表里没有，必须实测。
+      try {
+        final list = await KugouMvApi.availableQualities(mvId);
+        if (list.isNotEmpty) return list;
+      } catch (e) {
+        AppLog.w('MvApi', '酷狗画质列表获取失败: $e');
+      }
+    }
     return const [MvQuality.q240p, MvQuality.q360p, MvQuality.q480p,
       MvQuality.q720p, MvQuality.q1080p];
   }
 
   /// mvId 兜底查询：QQ 查歌曲详情、网易查 v3 song detail、酷我返回空。
+  ///
+  /// v2.5.4：酷狗从进程内缓存回查 `MvHash`（**不能**走 QQ 详情查询——
+  /// 酷狗 mid 是 29 位 MixSongID，`int.tryParse` 溢出必然查不到）。
   static Future<String> resolveMvId(
     Song song, {
     required QQMusicClient qq,
@@ -105,6 +131,9 @@ class MvApi {
         return await fetchNeteaseMvId(song.songId);
       }
       if (song.isKuwo) return '';
+      if (song.isKugou) {
+        return KugouApi.cachedSong(song.mid)?.mvHash ?? '';
+      }
       // QQ：getDetail 返回的就是 track_info，其 mv.vid 是目标
       final trackInfo = await SongApi(qq).getDetail(song.mid);
       final mv = trackInfo is Map<String, dynamic> ? trackInfo['mv'] : null;

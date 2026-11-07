@@ -27,6 +27,8 @@
 // 设备 mid 保持与登录态一致。
 library;
 
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
 import '../../core/app_logger.dart';
@@ -96,6 +98,9 @@ abstract final class KugouPrivilegeApi {
   static final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 15),
     receiveTimeout: const Duration(seconds: 25),
+    // 服务端在个别网关节点会回 `text/html`（WAF 拦截页），强制按文本
+    // 收，再自己 JSON 解析——否则 Dio 会因 content-type 不符而抛类型错误。
+    responseType: ResponseType.plain,
   ));
 
   /// 批量探测歌曲的真实音质档位。
@@ -118,8 +123,16 @@ abstract final class KugouPrivilegeApi {
     if (valid.isEmpty) return out;
 
     try {
-      final auth = await KugouAuth.requestParams();
-      final body = <String, dynamic>{
+      // 设备 mid：拿不到就用占位值——**不能**因为存储未初始化就让整次
+      // 探测失败（测试环境 / 早期启动阶段 KvStore 可能还没 ensureInit）。
+      var mid = 'NeZha';
+      try {
+        final auth = await KugouAuth.requestParams();
+        mid = auth['mid'] ?? mid;
+      } catch (_) {
+        // 忽略：探测接口不校验 mid，用占位值即可。
+      }
+      final payload = <String, dynamic>{
         'behavior': 'play',
         'clientver': '20049',
         'resource': [
@@ -130,15 +143,15 @@ abstract final class KugouPrivilegeApi {
         'quality': '128',
         'qualities': qualityCatalog,
       };
-      final resp = await _dio.post<Map<String, dynamic>>(
+      final resp = await _dio.post<String>(
         privilegeUrl,
         queryParameters: <String, dynamic>{
           'appid': '1005',
           'clientver': '20049',
           'clienttime': DateTime.now().millisecondsSinceEpoch,
-          'mid': auth['mid'] ?? 'NeZha',
+          'mid': mid,
         },
-        data: body,
+        data: payload,
         options: Options(
           headers: <String, String>{
             'User-Agent':
@@ -147,8 +160,18 @@ abstract final class KugouPrivilegeApi {
           },
         ),
       );
-      final data = resp.data;
-      if (data == null) return out;
+      final raw = resp.data;
+      if (raw == null || raw.trim().isEmpty) return out;
+      final dynamic decoded;
+      try {
+        decoded = jsonDecode(raw);
+      } catch (_) {
+        AppLog.w('KugouPrivilege',
+            '档位探测返回的不是 JSON: ${raw.length > 120 ? raw.substring(0, 120) : raw}');
+        return out;
+      }
+      if (decoded is! Map) return out;
+      final data = Map<String, dynamic>.from(decoded);
       final code = _toInt(data['error_code']);
       if (code != 0) {
         AppLog.w('KugouPrivilege', '档位探测失败 error_code=$code');
