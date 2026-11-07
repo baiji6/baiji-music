@@ -8,6 +8,7 @@
 library;
 
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 /// 解码后的多声道 PCM（归一化到 [-1,1]）。
@@ -32,6 +33,338 @@ class ViperAudio {
       }
     }
     return p;
+  }
+}
+
+/// 读取 [b] 在 [off] 处的 4 字节 ASCII 标签（如 `RIFF` / `data`）。
+String _wavTag(Uint8List b, int off) {
+  if (off + 4 > b.length) return '';
+  return String.fromCharCodes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
+}
+
+/// xorshift32 确定性 PRNG（用于 TPDF 抖动，测试可复现）。
+int _wavNext(int x) {
+  var v = x & 0xFFFFFFFF;
+  v ^= v << 13;
+  v &= 0xFFFFFFFF;
+  v ^= v >>> 17;
+  v ^= v << 5;
+  return v & 0xFFFFFFFF;
+}
+
+/// WAV 文件头信息（只读头，不加载音频数据）。
+///
+/// [dataLength] 是 `data` 块声明的长度；流式写入的 WAV 常常声明一个
+/// 虚高值（0xFFFFFFFF），实际可用长度由文件大小决定，见
+/// [ViperPcmStreamReader]。
+class ViperWavHeader {
+  const ViperWavHeader({
+    required this.audioFormat,
+    required this.channels,
+    required this.sampleRate,
+    required this.bits,
+    required this.dataOffset,
+    required this.dataLength,
+  });
+
+  /// 1 = PCM 整型，3 = IEEE float。
+  final int audioFormat;
+  final int channels;
+  final int sampleRate;
+  final int bits;
+
+  /// 音频数据在文件中的起始偏移。
+  final int dataOffset;
+
+  /// `data` 块声明的字节数。
+  final int dataLength;
+
+  int get bytesPerSample => (bits + 7) >> 3;
+
+  int get blockAlign => channels * bytesPerSample;
+}
+
+/// 流式 PCM 读取器：按块从 WAV 文件读取样本，内存占用与文件长度无关。
+///
+/// 用于「ffmpeg 解码成 48 kHz WAV → 纯 Dart 升频」这条链路：解码产物
+/// 直接以块的形式喂进升频引擎，不再整段读进内存。
+class ViperPcmStreamReader {
+  ViperPcmStreamReader._(this._file, this.header, this._availableBytes);
+
+  final RandomAccessFile _file;
+  final ViperWavHeader header;
+
+  /// 实际可读的数据字节数（已按文件大小校正）。
+  final int _availableBytes;
+
+  int _pos = 0;
+
+  /// 已读取的帧数。
+  int get framesRead => _pos ~/ header.blockAlign;
+
+  /// 总帧数（按实际可读字节计算）。
+  int get frames =>
+      header.blockAlign == 0 ? 0 : _availableBytes ~/ header.blockAlign;
+
+  /// 打开 [path] 并解析文件头；文件不是合法 WAV 时抛 [FormatException]。
+  static ViperPcmStreamReader open(String path) {
+    final f = File(path).openSync();
+    try {
+      final head = f.readSync(12);
+      if (head.length < 12) {
+        throw const FormatException('文件太短，不是合法 WAV');
+      }
+      if (_wavTag(head, 0) != 'RIFF' || _wavTag(head, 8) != 'WAVE') {
+        throw const FormatException('缺少 RIFF/WAVE 文件头');
+      }
+
+      var audioFormat = 1;
+      var channels = 0;
+      var sampleRate = 0;
+      var bits = 0;
+      var dataOffset = -1;
+      var dataLength = 0;
+      var haveFmt = false;
+
+      var off = 12;
+      while (true) {
+        final ch = f.readSync(8);
+        if (ch.length < 8) break;
+        final id = _wavTag(ch, 0);
+        final size = ByteData.sublistView(ch).getUint32(4, Endian.little);
+        final start = off + 8;
+
+        if (id == 'fmt ') {
+          final body = f.readSync(size);
+          if (body.length < 16) {
+            throw const FormatException('WAV fmt 块过短');
+          }
+          final bd = ByteData.sublistView(body);
+          audioFormat = bd.getUint16(0, Endian.little);
+          channels = bd.getUint16(2, Endian.little);
+          sampleRate = bd.getUint32(4, Endian.little);
+          bits = bd.getUint16(14, Endian.little);
+          if (audioFormat == 0xFFFE && body.length >= 40) {
+            audioFormat = bd.getUint16(24, Endian.little);
+          }
+          haveFmt = true;
+        } else if (id == 'data') {
+          dataOffset = start;
+          dataLength = size;
+          break;
+        }
+
+        final next = start + size + (size.isOdd ? 1 : 0);
+        if (next <= off) break;
+        off = next;
+        f.setPositionSync(off);
+      }
+
+      if (!haveFmt || dataOffset < 0 || channels <= 0 || sampleRate <= 0) {
+        throw const FormatException('WAV 缺少 fmt/data 块或字段非法');
+      }
+
+      final fileLen = f.lengthSync();
+      final available = (dataLength == 0 || dataLength > fileLen - dataOffset)
+          ? (fileLen - dataOffset)
+          : dataLength;
+      final headerInfo = ViperWavHeader(
+        audioFormat: audioFormat,
+        channels: channels,
+        sampleRate: sampleRate,
+        bits: bits,
+        dataOffset: dataOffset,
+        dataLength: available,
+      );
+      f.setPositionSync(dataOffset);
+      return ViperPcmStreamReader._(f, headerInfo, available);
+    } catch (_) {
+      f.closeSync();
+      rethrow;
+    }
+  }
+
+  /// 读取最多 [maxFrames] 帧到交错的 [dst]（长度需 ≥ maxFrames×声道数）。
+  ///
+  /// 返回实际读取的帧数；0 表示读完了。
+  int read(Float64List dst, int maxFrames) {
+    final ch = header.channels;
+    final ba = header.blockAlign;
+    if (ba <= 0 || _pos >= _availableBytes || maxFrames <= 0) return 0;
+
+    final want = math.min(maxFrames * ba, _availableBytes - _pos);
+    final raw = _file.readSync(want);
+    if (raw.isEmpty) return 0;
+
+    final bps = header.bytesPerSample;
+    final frames = raw.length ~/ ba;
+    final bd = ByteData.sublistView(raw);
+    final fmt = header.audioFormat;
+
+    for (var i = 0; i < frames; i++) {
+      for (var c = 0; c < ch; c++) {
+        final p = i * ba + c * bps;
+        double v;
+        if (fmt == 3) {
+          v = header.bits == 32
+              ? bd.getFloat32(p, Endian.little).toDouble()
+              : bd.getFloat64(p, Endian.little);
+        } else {
+          switch (header.bits) {
+            case 8:
+              v = (raw[p] - 128) / 128.0;
+              break;
+            case 16:
+              v = bd.getInt16(p, Endian.little) / 32768.0;
+              break;
+            case 24:
+              var x = raw[p] | (raw[p + 1] << 8) | (raw[p + 2] << 16);
+              if (x >= 0x800000) x -= 0x1000000;
+              v = x / 8388608.0;
+              break;
+            case 32:
+              v = bd.getInt32(p, Endian.little) / 2147483648.0;
+              break;
+            default:
+              throw FormatException('不支持的 PCM 位深: ${header.bits}');
+          }
+        }
+        dst[i * ch + c] = v;
+      }
+    }
+    _pos += frames * ba;
+    return frames;
+  }
+
+  void close() {
+    try {
+      _file.closeSync();
+    } catch (_) {}
+  }
+}
+
+/// 24-bit PCM WAV 流式写入器。
+///
+/// 与 [ViperWav.encode24] 的区别：**不一次性分配整段缓冲**，按块写入磁盘。
+/// 写一整首 192 kHz/24bit 歌曲（4 分钟 ≈ 264 MB）时，内存占用只有几十 KB。
+class ViperWav24Writer {
+  ViperWav24Writer._(this._file, this.sampleRate, this.channels, this.dither);
+
+  final RandomAccessFile _file;
+  final int sampleRate;
+  final int channels;
+
+  /// 是否加 TPDF 抖动（1 LSB 峰峰值）。关闭后往返误差只剩量化误差。
+  final bool dither;
+
+  int _frames = 0;
+  int _rng = 0x9E3779B9;
+  Uint8List _buf = Uint8List(0);
+
+  /// 已写入的帧数。
+  int get frames => _frames;
+
+  /// 已写入的字节数（含 44 字节文件头）。
+  int get bytes => 44 + _frames * channels * 3;
+
+  /// 在 [path] 创建写入器（会覆盖已有文件）。
+  static ViperWav24Writer create(
+    String path, {
+    required int sampleRate,
+    required int channels,
+    bool dither = true,
+  }) {
+    final f = File(path).openSync(mode: FileMode.write);
+    final w = ViperWav24Writer._(f, sampleRate, channels, dither);
+    w._writeHeader(0);
+    return w;
+  }
+
+  /// 写入 [frames] 帧交错 PCM（[interleaved] 长度 ≥ frames×声道数）。
+  void write(Float64List interleaved, int frames) {
+    if (frames <= 0) return;
+    final need = frames * channels * 3;
+    if (_buf.length < need) _buf = Uint8List(need);
+    const scale = 8388607.0; // 2^23-1
+    var p = 0;
+    for (var i = 0; i < frames; i++) {
+      for (var c = 0; c < channels; c++) {
+        var x = interleaved[i * channels + c];
+        if (dither) {
+          // 两个均匀随机数相减 → 三角分布（TPDF），幅度 1 LSB。
+          _rng = _wavNext(_rng);
+          final r1 = (_rng & 0xFFFFFF) / 0xFFFFFF;
+          _rng = _wavNext(_rng);
+          final r2 = (_rng & 0xFFFFFF) / 0xFFFFFF;
+          x += (r1 - r2) / scale;
+        }
+        var q = (x * scale).round();
+        if (q > 8388607) q = 8388607;
+        if (q < -8388608) q = -8388608;
+        final u = q < 0 ? q + 0x1000000 : q;
+        _buf[p] = u & 0xFF;
+        _buf[p + 1] = (u >> 8) & 0xFF;
+        _buf[p + 2] = (u >> 16) & 0xFF;
+        p += 3;
+      }
+    }
+    _file.writeFromSync(_buf, 0, need);
+    _frames += frames;
+  }
+
+  /// 收尾：把文件裁剪/补齐到恰好 [totalFrames] 帧并回填文件头。
+  ///
+  /// 流式升频在冲刷尾部帧时可能多产出少量「补零幻听」样本（尾部窗口延伸
+  /// 到了输入末尾之外），这里统一截断，保证输出时长与输入严格一致。
+  void finish(int totalFrames) {
+    final dataBytes = totalFrames * channels * 3;
+    final target = 44 + dataBytes;
+    final current = _file.lengthSync();
+    if (current > target) {
+      _file.truncateSync(target);
+    } else if (current < target) {
+      var left = target - current;
+      final zeros = Uint8List(left > 65536 ? 65536 : left);
+      while (left > 0) {
+        final n = left > zeros.length ? zeros.length : left;
+        _file.writeFromSync(zeros, 0, n);
+        left -= n;
+      }
+    }
+    _file.setPositionSync(0);
+    _writeHeader(dataBytes);
+    _file.flushSync();
+  }
+
+  void close() {
+    try {
+      _file.closeSync();
+    } catch (_) {}
+  }
+
+  void _writeHeader(int dataBytes) {
+    final b = Uint8List(44);
+    final bd = ByteData.sublistView(b);
+    void tag(int off, String s) {
+      for (var i = 0; i < 4; i++) {
+        b[off + i] = s.codeUnitAt(i);
+      }
+    }
+
+    tag(0, 'RIFF');
+    bd.setUint32(4, 36 + dataBytes, Endian.little);
+    tag(8, 'WAVE');
+    tag(12, 'fmt ');
+    bd.setUint32(16, 16, Endian.little);
+    bd.setUint16(20, 1, Endian.little); // PCM
+    bd.setUint16(22, channels, Endian.little);
+    bd.setUint32(24, sampleRate, Endian.little);
+    bd.setUint32(28, sampleRate * channels * 3, Endian.little);
+    bd.setUint16(32, channels * 3, Endian.little);
+    bd.setUint16(34, 24, Endian.little);
+    tag(36, 'data');
+    bd.setUint32(40, dataBytes, Endian.little);
+    _file.writeFromSync(b, 0, 44);
   }
 }
 
@@ -176,9 +509,9 @@ class ViperWav {
         var x = audio.data[c][i] * gain;
         if (dither) {
           // 两个均匀随机数相减 → 三角分布（TPDF），幅度 1 LSB。
-          rng = _next(rng);
+          rng = _wavNext(rng);
           final r1 = (rng & 0xFFFFFF) / 0xFFFFFF;
-          rng = _next(rng);
+          rng = _wavNext(rng);
           final r2 = (rng & 0xFFFFFF) / 0xFFFFFF;
           x += (r1 - r2) / scale;
         }
@@ -199,15 +532,6 @@ class ViperWav {
       {bool dither = true}) async {
     await File(path).writeAsBytes(encode24(audio, dither: dither),
         flush: true);
-  }
-
-  static int _next(int x) {
-    var v = x & 0xFFFFFFFF;
-    v ^= v << 13;
-    v &= 0xFFFFFFFF;
-    v ^= v >>> 17;
-    v ^= v << 5;
-    return v & 0xFFFFFFFF;
   }
 
   static String _tag(ByteData bd, int off) {

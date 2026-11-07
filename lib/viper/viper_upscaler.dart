@@ -1,17 +1,29 @@
-/// 本地升频的文件级管线：解码 → [ViperSuperResolution] → 24-bit WAV。
+/// 本地升频的文件级管线：解码 → [ViperStreamProcessor] → 24-bit WAV。
 ///
 /// 复用项目既有的 ffmpeg CLI 通道（`libffmpeg_exec.so` / PATH / 手动指定）
-/// 把任意输入（MP3 / FLAC / M4A / 加密格式解密后的文件 / 在线直链）解码成
-/// 48 kHz / 16 bit / 立体声裸 PCM，再交给纯 Dart 升频引擎。升频在独立
-/// isolate 里跑（一首歌可能数十秒到数分钟），进度通过 SendPort 回传，
-/// 不阻塞 UI。
+/// 把任意输入（MP3 / FLAC / M4A / 在线直链）解码成 48 kHz / 16 bit / 立体声
+/// PCM，再交给纯 Dart 升频引擎。
+///
+/// ## 关键约束（v2.5.3 修复）
+/// 1. **ffmpeg 输出格式**：Android 内置的是**裁剪版 ffmpeg**，muxer 白名单为
+///    `wav,flac,ipod,mp4,asf,adts,ac3,eac3,mp3,ogg`，**不含 `s16le`**。
+///    旧实现用 `-f s16le` 导出裸 PCM，真机上必然报
+///    `Requested output format 's16le' is not known.`，于是每次都走
+///    「本地升频失败 → 降级播放原始 320k」。现在改为 `-f wav` 落临时文件，
+///    再用 [ViperPcmStreamReader] 从 WAV 里流式取 PCM。
+/// 2. **内存**：整段实现一首 4 分钟的歌在 192 kHz 档下峰值接近 2.2 GB，
+///    Android 单进程 heap 只有 256~512 MB，必然 OOM。现在全链路是
+///    **流式**的：解码产物落磁盘 → 分块读 → 逐帧升频 → 分块写 24bit WAV，
+///    内存占用与歌曲长度无关（常数级）。
 library;
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 
 import '../core/audio_transcoder.dart' show FfmpegLocator;
@@ -98,35 +110,74 @@ class ViperUpscaler {
     final sw = Stopwatch()..start();
     if (isCancelled?.call() == true) throw const ViperCancelled();
 
-    final pcm = await _decodeTo48k(
-      inputPath,
-      ffmpegPath: ffmpegPath,
-      onProgress: (p) => onProgress?.call(p * 0.12),
-    );
+    // —— 1) 解码到 48 kHz / 16 bit / 立体声 WAV（落磁盘，不占内存）——
+    final exe = ffmpegPath ?? await resolveFfmpeg();
+    String? decoded;
+    String source = inputPath;
+    if (exe != null) {
+      decoded = '$inputPath.viper48k.wav';
+      await _decodeTo48kWav(
+        exe,
+        inputPath,
+        decoded,
+        onProgress: (p) => onProgress?.call(p * 0.10),
+        isCancelled: isCancelled,
+      );
+      source = decoded;
+    } else {
+      // 没有引擎时只允许直接读 WAV（桌面 / CI 常见，测试用短 WAV）。
+      if (!inputPath.toLowerCase().endsWith('.wav')) {
+        throw StateError(
+            '未找到 ffmpeg 引擎，无法解码音频。请在设置/工具箱里指定 ffmpeg 路径，'
+            '或改用 WAV 输入。');
+      }
+    }
     if (isCancelled?.call() == true) throw const ViperCancelled();
-    onProgress?.call(0.12);
+    onProgress?.call(0.10);
 
-    final audio = await _runInIsolate(
-      pcm,
-      rate: rate,
-      tapeEnhance: tapeEnhance,
-      onProgress: (p) => onProgress?.call(0.12 + p * 0.83),
-    );
-    if (isCancelled?.call() == true) throw const ViperCancelled();
-
-    final bytes = ViperWav.encode24(audio);
-    await File(outputPath).writeAsBytes(bytes, flush: true);
-    onProgress?.call(1.0);
-    sw.stop();
-    return ViperUpscaleResult(
-      wavPath: outputPath,
-      sampleRate: audio.sampleRate,
-      bitDepth: 24,
-      channels: audio.channels,
-      frames: audio.frames,
-      bytes: bytes.length,
-      elapsed: sw.elapsed,
-    );
+    try {
+      // —— 2) 在独立 isolate 里流式升频并落盘 ——
+      // 先写临时文件，成功后再原子改名到目标路径：避免中途取消/崩溃留下
+      // 半成品被当成有效缓存命中（播放链路会直接读缓存文件）。
+      final tmpOut = '$outputPath.part';
+      try {
+        final res = await _runStreamInIsolate(
+          source,
+          tmpOut,
+          rate: rate,
+          tapeEnhance: tapeEnhance,
+          onProgress: (p) => onProgress?.call(0.10 + p * 0.88),
+          isCancelled: isCancelled,
+        );
+        if (isCancelled?.call() == true) throw const ViperCancelled();
+        final outFile = File(outputPath);
+        if (await outFile.exists()) await outFile.delete();
+        await File(tmpOut).rename(outputPath);
+        onProgress?.call(1.0);
+        sw.stop();
+        return ViperUpscaleResult(
+          wavPath: outputPath,
+          sampleRate: res.sampleRate,
+          bitDepth: 24,
+          channels: 2,
+          frames: res.frames,
+          bytes: res.bytes,
+          elapsed: sw.elapsed,
+        );
+      } finally {
+        try {
+          final f = File(tmpOut);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+    } finally {
+      if (decoded != null) {
+        try {
+          final f = File(decoded);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+    }
   }
 
   /// 在线直链：先下载到临时文件，再走 [upscaleFile]。
@@ -161,76 +212,96 @@ class ViperUpscaler {
     }
   }
 
-  /// 解码成 48 kHz / 16 bit / 2ch 的 [ViperAudio]。
-  static Future<ViperAudio> _decodeTo48k(
-    String inputPath, {
-    String? ffmpegPath,
-    void Function(double progress)? onProgress,
-  }) async {
-    final exe = ffmpegPath ?? await resolveFfmpeg();
-    onProgress?.call(0.15);
-
-    // 没有 ffmpeg 时，允许直接读 WAV（桌面/CI 常见，测试用短 WAV）。
-    if (exe == null) {
-      if (inputPath.toLowerCase().endsWith('.wav')) {
-        return ViperWav.readFile(inputPath);
-      }
-      throw StateError(
-          '未找到 ffmpeg 引擎，无法解码音频。请在设置/工具箱里指定 ffmpeg 路径，'
-          '或改用 WAV 输入。');
-    }
-
-    final tmp = '$inputPath.viper48k.pcm';
-    try {
-      final result = await Process.run(exe, <String>[
-        '-y', '-hide_banner', '-loglevel', 'error',
+  /// 构造 ffmpeg 解码参数：任意输入 → 48 kHz / 16 bit / 立体声 WAV。
+  ///
+  /// 关键点：**必须用 `-f wav`**。
+  ///
+  /// Android 内置的裁剪版 ffmpeg（`libffmpeg_exec.so`）在构建时显式限定了
+  /// 能力白名单（见 ffmpeg 构建脚本）：
+  /// - `MUXERS=wav,flac,ipod,mp4,asf,adts,ac3,eac3,mp3,ogg`
+  /// - `ENCODERS=pcm_s16le,pcm_s24le,pcm_s32le,flac,aac,wmav2,libmp3lame,libvorbis,ac3,eac3`
+  ///
+  /// 其中**没有 `s16le` muxer**。旧实现用 `-f s16le` 导出裸 PCM，真机上
+  /// 必然报 `Requested output format 's16le' is not known.`，于是每次升频
+  /// 都失败、静默降级回原始 320k（就是用户截图里看到的提示）。
+  /// `-f wav` + `-c:a pcm_s16le` 是这套白名单下唯一可行的 PCM 输出组合。
+  @visibleForTesting
+  static List<String> decodeArgs(String inputPath, String outputPath) =>
+      <String>[
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-nostdin',
+        '-y',
         '-i', inputPath,
-        '-vn', '-ac', '2', '-ar', '48000',
-        '-f', 's16le', '-acodec', 'pcm_s16le', tmp,
-      ]);
-      if (result.exitCode != 0) {
-        throw StateError('ffmpeg 解码失败 (${result.exitCode}): '
-            '${(result.stderr as String?)?.trim() ?? ''}');
-      }
-      onProgress?.call(0.8);
-      final raw = await File(tmp).readAsBytes();
-      final frames = raw.length ~/ 4; // 2ch × 16bit
-      final left = Float64List(frames);
-      final right = Float64List(frames);
-      final bd = ByteData.sublistView(raw);
-      for (var i = 0; i < frames; i++) {
-        left[i] = bd.getInt16(i * 4, Endian.little) / 32768.0;
-        right[i] = bd.getInt16(i * 4 + 2, Endian.little) / 32768.0;
-      }
-      return ViperAudio(48000, 2, <Float64List>[left, right]);
-    } finally {
-      try {
-        final f = File(tmp);
-        if (await f.exists()) await f.delete();
-      } catch (_) {}
+        '-vn', // 丢掉视频/封面流，只保留音频
+        '-map', '0:a:0',
+        '-ac', '2',
+        '-ar', '48000',
+        '-c:a', 'pcm_s16le',
+        '-f', 'wav', // 裁剪版 ffmpeg 支持的 muxer 里必须用 wav
+        outputPath,
+      ];
+
+  /// 用 ffmpeg 把任意输入解码成 48 kHz / 16 bit / 立体声 WAV。
+  static Future<void> _decodeTo48kWav(
+    String exe,
+    String inputPath,
+    String outputPath, {
+    void Function(double progress)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    onProgress?.call(0.05);
+    final proc = await Process.start(exe, decodeArgs(inputPath, outputPath));
+    final errBuf = StringBuffer();
+    // stderr 必须持续消费，否则管道写满会让 ffmpeg 卡死。
+    final errDone = proc.stderr.transform(const Utf8Decoder()).forEach((s) {
+      errBuf.write(s);
+    });
+    final code = await proc.exitCode;
+    await errDone;
+    if (isCancelled?.call() == true) throw const ViperCancelled();
+    if (code != 0) {
+      final err = errBuf.toString().trim();
+      throw StateError('ffmpeg 解码失败 ($code): '
+          '${err.isEmpty ? '未知错误' : err}');
     }
+    onProgress?.call(1.0);
   }
 
-  /// 在独立 isolate 里跑 DSP，进度经 SendPort 回传。
-  static Future<ViperAudio> _runInIsolate(
-    ViperAudio pcm, {
+  /// 在独立 isolate 里跑流式升频，进度经 SendPort 回传。
+  ///
+  /// isolate 只接收**路径与参数**（几十字节），不传任何音频数据，
+  /// 因此不存在 isolate 消息深拷贝带来的内存翻倍。
+  static Future<_StreamResult> _runStreamInIsolate(
+    String sourceWav,
+    String outputPath, {
     required ViperUpscaleRate rate,
     required bool tapeEnhance,
     void Function(double progress)? onProgress,
+    bool Function()? isCancelled,
   }) async {
     final port = ReceivePort();
-    final iso = await Isolate.spawn<_IsolateMsg>(
-      _isolateEntry,
-      _IsolateMsg(port.sendPort,
-          _IsolateArgs(pcm, rate, tapeEnhance, onProgress != null)),
+    final iso = await Isolate.spawn<_StreamArgs>(
+      _streamIsolateEntry,
+      _StreamArgs(
+        port.sendPort,
+        sourceWav,
+        outputPath,
+        rate,
+        tapeEnhance,
+      ),
     );
-    ViperAudio? out;
+    _StreamResult? out;
     String? error;
     try {
       await for (final msg in port) {
         if (msg is double) {
+          // isolate 在算，UI 侧随时可以叫停（进度每 ~170ms 回传一次）。
+          if (isCancelled?.call() == true) {
+            throw const ViperCancelled();
+          }
           onProgress?.call(msg);
-        } else if (msg is ViperAudio) {
+        } else if (msg is _StreamResult) {
           out = msg;
           break;
         } else if (msg is String) {
@@ -248,33 +319,138 @@ class ViperUpscaler {
   }
 }
 
-class _IsolateArgs {
-  const _IsolateArgs(this.audio, this.rate, this.tapeEnhance, this.report);
+/// isolate 侧的升频产物摘要。
+class _StreamResult {
+  const _StreamResult(this.frames, this.bytes, this.sampleRate);
 
-  final ViperAudio audio;
-  final ViperUpscaleRate rate;
-  final bool tapeEnhance;
-  final bool report;
+  final int frames;
+  final int bytes;
+  final int sampleRate;
 }
 
-class _IsolateMsg {
-  const _IsolateMsg(this.port, this.args);
+/// isolate 入口参数（只含不可变的小对象）。
+class _StreamArgs {
+  const _StreamArgs(
+    this.port,
+    this.sourceWav,
+    this.outputPath,
+    this.rate,
+    this.tapeEnhance,
+  );
 
   final SendPort port;
-  final _IsolateArgs args;
+  final String sourceWav;
+  final String outputPath;
+  final ViperUpscaleRate rate;
+  final bool tapeEnhance;
 }
 
-void _isolateEntry(_IsolateMsg msg) {
+/// isolate 内执行体：分块读 PCM → 逐帧升频 → 分块写 24bit WAV。
+///
+/// 全程使用同步文件 IO（isolate 里没有事件循环压力），内存占用与音频
+/// 时长无关：输入按 [ViperPcmStreamReader] 的块读，输出按
+/// [ViperWav24Writer] 的块写，中间只有定长的 DSP 工作缓冲。
+void _streamIsolateEntry(_StreamArgs args) {
   try {
-    final audio = ViperSuperResolution(
-      rate: msg.args.rate,
-      tapeEnhance: msg.args.tapeEnhance,
-    ).process(
-      msg.args.audio,
-      onProgress: msg.args.report ? (p) => msg.port.send(p) : null,
-    );
-    msg.port.send(audio);
+    final reader = ViperPcmStreamReader.open(args.sourceWav);
+    ViperWav24Writer? writer;
+    try {
+      final header = reader.header;
+      final totalIn = reader.frames;
+
+      // 非 48 kHz / 非立体声的输入（只有「无 ffmpeg 且直接读 WAV」时才会
+      // 出现）走整段路径：先统一到 48 kHz 立体声再整段升频。
+      if (header.sampleRate != ViperStreamProcessor.baseRate ||
+          header.channels != 2) {
+        final res = _wholeFileFallback(args, reader, header);
+        args.port.send(res);
+        return;
+      }
+
+      final processor = ViperStreamProcessor(
+        rate: args.rate,
+        tapeEnhance: args.tapeEnhance,
+      );
+      writer = ViperWav24Writer.create(
+        args.outputPath,
+        sampleRate: args.rate.hz,
+        channels: 2,
+      );
+
+      // 每块 8192 帧（约 170 ms @48k），兼顾 IO 与进度回传频率。
+      const chunk = 8192;
+      final interleaved = Float64List(chunk * 2);
+      final left = Float64List(chunk);
+      final right = Float64List(chunk);
+      var read = 0;
+
+      void sink(Float64List buf, int frames) {
+        writer!.write(buf, frames);
+      }
+
+      while (true) {
+        final n = reader.read(interleaved, chunk);
+        if (n <= 0) break;
+        // 交错 → 分离左右声道。
+        for (var i = 0; i < n; i++) {
+          left[i] = interleaved[i * 2];
+          right[i] = interleaved[i * 2 + 1];
+        }
+        processor.pushStereo(left, right, n, sink);
+        read += n;
+        args.port.send(totalIn > 0 ? read / totalIn : 1.0);
+      }
+      processor.flush(sink);
+
+      final outFrames = read * processor.ratio;
+      writer.finish(outFrames);
+      writer.close();
+      writer = null;
+      args.port.send(_StreamResult(outFrames, outFrames * 2 * 3 + 44,
+          args.rate.hz));
+    } finally {
+      reader.close();
+      try {
+        writer?.close();
+      } catch (_) {}
+    }
   } catch (e) {
-    msg.port.send('$e');
+    args.port.send('$e');
   }
+}
+
+/// 无 ffmpeg 且源 WAV 不是 48 kHz / 立体声时的整段兜底路径。
+///
+/// 触发条件极窄（桌面 / CI 直读 WAV），此处允许整段处理；
+/// 生产路径（Android）永远走上面的流式分支。
+_StreamResult _wholeFileFallback(
+  _StreamArgs args,
+  ViperPcmStreamReader reader,
+  ViperWavHeader header,
+) {
+  final frames = reader.frames;
+  final ch = header.channels;
+  final left = Float64List(frames);
+  final right = Float64List(frames);
+  final scratch = Float64List(8192 * ch);
+  var got = 0;
+  while (got < frames) {
+    final n = reader.read(scratch, 8192);
+    if (n <= 0) break;
+    for (var i = 0; i < n; i++) {
+      final l = scratch[i * ch];
+      left[got + i] = l;
+      right[got + i] = ch == 1 ? l : scratch[i * ch + 1];
+    }
+    got += n;
+  }
+  final audio = ViperAudio(header.sampleRate, 2,
+      <Float64List>[left.sublist(0, got), right.sublist(0, got)]);
+  final out = ViperSuperResolution(
+    rate: args.rate,
+    tapeEnhance: args.tapeEnhance,
+  ).process(audio);
+  final bytes = ViperWav.encode24(out);
+  File(args.outputPath).writeAsBytesSync(bytes, flush: true);
+  return _StreamResult(out.frames, bytes.length, args.rate.hz);
 }

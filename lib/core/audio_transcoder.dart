@@ -418,6 +418,10 @@ class FfmpegLocator {
   }
 
   /// 返回可用的 ffmpeg 路径；找不到返回 null。
+  ///
+  /// 注意：**手动指定 / 环境变量路径失效时直接返回 null**，不再静默回退到
+  /// 内置引擎或 PATH——用户显式指定了路径却悄悄换一个引擎执行，产出结果
+  /// 与预期不符，比直接报错更难排查。
   Future<String?> resolve() async {
     // 1) 手动指定 / 环境变量
     final manual = overridePath ?? environment['BAIJI_FFMPEG'];

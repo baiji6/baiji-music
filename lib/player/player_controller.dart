@@ -1120,7 +1120,9 @@ class PlayerController {
     } catch (e) {
       AppLog.w('PlayerController', '蝰蛇母带本地升频失败: $e');
       if (!_noticeStream.isClosed) {
-        _noticeStream.add('本地升频失败，已降级播放原始 320k 音质');
+        // 给出可行动的原因，而不是笼统的「失败」。
+        final reason = _viperFailureHint(e);
+        _noticeStream.add('本地升频失败（$reason），已降级播放原始 320k 音质');
       }
       // 清掉可能写了一半的产物，避免下次命中损坏缓存。
       try {
@@ -1134,6 +1136,21 @@ class PlayerController {
         if (await f.exists()) await f.delete();
       } catch (_) {}
     }
+  }
+
+  /// 把升频异常翻译成用户能看懂、能行动的一句话。
+  String _viperFailureHint(Object e) {
+    final msg = e.toString();
+    if (msg.contains('未找到 ffmpeg')) return '未找到解码引擎';
+    if (msg.contains('ffmpeg 解码失败')) return '音频解码失败';
+    if (msg.contains('s16le')) return '解码引擎不支持该输出格式';
+    if (msg.contains('Requested output format')) return '解码引擎格式不支持';
+    if (msg.contains('OutOfMemory') || msg.contains('内存')) return '内存不足';
+    if (msg.contains('已取消')) return '已取消';
+    if (msg.contains('FileSystemException') || msg.contains('写入')) {
+      return '缓存写入失败';
+    }
+    return '引擎异常';
   }
 
   /// 单次取流，异常统一吞掉（降级链需要继续往下走）。
