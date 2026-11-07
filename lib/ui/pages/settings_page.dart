@@ -56,6 +56,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Quality _qqQuality = Quality.playbackDefault;
   NeteaseQuality _neQuality = NeteaseQuality.playbackDefault;
   KuwoQuality _kuwoQuality = KuwoQuality.playbackDefault;
+  KugouQuality _kugouQuality = KugouQuality.playbackDefault;
   bool _checkingUpdate = false;
   bool _captureEnabled = false;
   String _captureProxy = '';
@@ -74,6 +75,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _showQQQualitySheet = false;
   bool _showNeteaseQualitySheet = false;
   bool _showKuwoQualitySheet = false;
+  bool _showKugouQualitySheet = false;
   bool _showCacheLimitSheet = false;
   bool _showBackupDialog = false;
   bool _showBackupImportConfirm = false;
@@ -124,6 +126,7 @@ class _SettingsPageState extends State<SettingsPage> {
       _qqQuality = player.currentQuality;
       _neQuality = player.currentNeteaseQuality;
       _kuwoQuality = player.currentKuwoQuality;
+      _kugouQuality = player.currentKugouQuality;
       _captureEnabled = CaptureTrust.enabled;
       _captureProxy = CaptureTrust.proxy;
       _lyricMode = DownloadExtras.lyricMode;
@@ -258,6 +261,17 @@ class _SettingsPageState extends State<SettingsPage> {
     PlayerController.instance.saveKuwoQuality(q);
     setState(() => _kuwoQuality = q);
     _showSnack('酷我音质已设为 ${q.label}');
+  }
+
+  /// v2.5.2：酷狗默认音质（此前「播放与音质」区只有 QQ/网易云/酷我）。
+  void _selectKugouQuality(KugouQuality q) {
+    setState(() => _showKugouQualitySheet = false);
+    PlayerController.instance.saveKugouQuality(q);
+    setState(() => _kugouQuality = q);
+    final extra = q.isLocalUpscale
+        ? '（本地升频，首次播放需转换，结果会缓存）'
+        : '';
+    _showSnack('酷狗音质已设为 ${q.label}$extra');
   }
 
   Future<void> _resetDownloadDir() async {
@@ -577,6 +591,16 @@ class _SettingsPageState extends State<SettingsPage> {
                         color: AppColors.violet, size: 22),
                     onClick: () =>
                         setState(() => _showKuwoQualitySheet = true),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  // v2.5.2：酷狗此前无法设置默认音质，补齐。
+                  MiuixArrowPreference(
+                    title: '酷狗音乐播放音质',
+                    summary: _kugouQuality.label,
+                    startAction: Icon(Icons.graphic_eq_rounded,
+                        color: AppColors.accentAlt, size: 22),
+                    onClick: () =>
+                        setState(() => _showKugouQualitySheet = true),
                   ),
                 ],
               ),
@@ -1389,6 +1413,21 @@ MiuixArrowPreference(
             current: _kuwoQuality,
             label: (q) => q.label,
             onSelect: _selectKuwoQuality,
+          ),
+        ),
+        // 酷狗音质（v2.5.2）：本地升频档在名字后标注 AI升频，避免误导。
+        MiuixOverlayBottomSheet(
+          show: _showKugouQualitySheet,
+          title: '酷狗音乐播放音质',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showKugouQualitySheet = false),
+          content: _QualitySheet<KugouQuality>(
+            options: KugouQuality.playbackOptions,
+            current: _kugouQuality,
+            label: (q) =>
+                q.aiTag.isEmpty ? q.label : '${q.label} · ${q.aiTag}',
+            onSelect: _selectKugouQuality,
           ),
         ),
         // 内存缓存上限

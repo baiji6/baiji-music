@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
+
+import 'package:dio/dio.dart';
 
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/kv_store.dart';
@@ -11,6 +14,9 @@ import 'package:baiji_music/nac/nac_decoder.dart';
 import 'package:baiji_music/network/kuwo/kuwo_link.dart';
 import 'package:baiji_music/network/music_api.dart';
 import 'package:baiji_music/ra360/ra360_decoder.dart';
+import 'package:baiji_music/viper/viper_super_resolution.dart'
+    show ViperUpscaleRate;
+import 'package:baiji_music/viper/viper_upscaler.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
@@ -837,6 +843,17 @@ class PlayerController {
       if (r.isNotEmpty) {
         _applyActual(r);
         _reportPlay(song, r);
+        // 蝰蛇母带（v2.5.2）：服务端只下发 320k 源文件，192kHz/24bit
+        // 由 App 本地重建，走与 DTS:X / 360RA / NAC 同型的 WAV 缓存管线。
+        // 升频可能耗时一分钟，期间若用户切歌要作废本次结果。
+        if (r.kugou?.isLocalUpscale == true) {
+          final gen = _resolveGen;
+          final wav = await _viperUpscale(song, r.url);
+          if (gen != _resolveGen) return _resolveSuperseded;
+          if (wav != null) return wav;
+          // 失败时诚实降级：播原始 320k 文件，不假装是母带。
+          return r.url;
+        }
         return r.url;
       }
       _clearActual();
@@ -1051,6 +1068,72 @@ class PlayerController {
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
+  }
+
+  /// 蝰蛇母带本地升频管线（v2.5.2）。
+  ///
+  /// 反编译官方 APK 的 `libsuperR.so` 可知：蝰蛇母带并不从服务端取
+  /// 192k 文件，而是拿 320k 源文件在端侧重建出 96k/192k 24bit。
+  /// 本 App 用纯 Dart 的 STFT + 带宽扩展引擎（见
+  /// `lib/viper/viper_super_resolution.dart`）复刻同一骨架，把结果写成
+  /// 24-bit WAV 缓存后交给 media_kit 播放。
+  ///
+  /// 返回本地 WAV 的 `file://` URI；失败返回 null，由调用方降级回
+  /// 原始 320k 链接（并明确提示，不冒充母带）。
+  Future<String?> _viperUpscale(Song song, String sourceUrl) async {
+    const rate = ViperUpscaleRate.khz192;
+    final key = '${song.mid}|viper_tape';
+    final wavPath = await ViperUpscaler.wavPathFor(key, rate);
+    if (await ViperUpscaler.hasCachedWav(key, rate)) {
+      AppLog.i('PlayerController', '蝰蛇母带升频缓存命中（key=$key）');
+      return Uri.file(wavPath).toString();
+    }
+
+    final tmp = '$wavPath.src';
+    try {
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add(
+            '蝰蛇母带本地升频中（320k → 192kHz/24bit），首次约需 1 分钟…');
+      }
+      // 先把 320k 源文件落到本地：Android 内置的是裁剪版 ffmpeg，
+      // 不能保证带 http 协议，且 CDN 需要 UA，用 Dio 下载最稳。
+      await Dio().download(
+        sourceUrl,
+        tmp,
+        options: Options(headers: const <String, String>{
+          'User-Agent':
+              'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+        }),
+      );
+      final res = await ViperUpscaler.upscaleFile(
+        inputPath: tmp,
+        outputPath: wavPath,
+        rate: rate,
+      );
+      AppLog.i('PlayerController',
+          '蝰蛇母带升频完成: ${res.sampleRate}Hz/24bit ${res.frames}帧 '
+          '${res.bytes}字节 用时 ${res.elapsed}');
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('蝰蛇母带升频完成 · ${rate.label}（本地重建）');
+      }
+      return Uri.file(wavPath).toString();
+    } catch (e) {
+      AppLog.w('PlayerController', '蝰蛇母带本地升频失败: $e');
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('本地升频失败，已降级播放原始 320k 音质');
+      }
+      // 清掉可能写了一半的产物，避免下次命中损坏缓存。
+      try {
+        final f = File(wavPath);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+      return null;
+    } finally {
+      try {
+        final f = File(tmp);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
   }
 
   /// 单次取流，异常统一吞掉（降级链需要继续往下走）。

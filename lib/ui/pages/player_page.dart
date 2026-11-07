@@ -614,6 +614,9 @@ class _PlayerPageState extends State<PlayerPage> {
                       pqCodes, KugouQuality.playbackOptions, (q) => q.id),
                   current: _player.effectiveKugouQuality,
                   label: (q) => q.label,
+                  // v2.5.2：官方弹层同样给升频档打「AI升频」标记，
+                  // 这里如实展示，避免把本地重建说成服务端母带文件。
+                  subtitle: (q) => q.aiTag,
                   onSelect: (q) {
                     setState(() => _showPlayQualitySheet = false);
                     _pickKugouQuality(q);
