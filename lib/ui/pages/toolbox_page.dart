@@ -15,6 +15,7 @@ import 'decrypt_page.dart';
 import 'kuwo_direct_page.dart';
 import 'log_page.dart';
 import 'transcode_page.dart';
+import 'viper_upscale_page.dart';
 
 class ToolboxPage extends StatelessWidget {
   const ToolboxPage({super.key});
@@ -41,6 +42,18 @@ class ToolboxPage extends StatelessWidget {
                       '采样率与码率；支持 DTS:X、360RA、NAC、AV3A 等特殊音质'
                       '（这四种只能输出 WAV）。',
                   page: const TranscodePage(),
+                ),
+                MiuixHorizontalDivider(
+                    thickness: 1, color: AppColors.strokeGlass),
+                _ToolRow(
+                  icon: Icons.auto_awesome_rounded,
+                  color: AppColors.accentAlt,
+                  title: '本地升频 · 蝰蛇母带',
+                  tag: '96 kHz · 192 kHz · 24 bit WAV',
+                  description: '把本地音频离线升频成 96k/192k 24bit WAV：STFT + '
+                      '频域带宽扩展重建被压缩掉的高频，纯 Dart 实现、全平台可用。'
+                      '播放页选「蝰蛇母带」时会自动走同一引擎并缓存。',
+                  page: const ViperUpscalePage(),
                 ),
                 MiuixHorizontalDivider(
                     thickness: 1, color: AppColors.strokeGlass),
