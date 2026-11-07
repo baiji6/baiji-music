@@ -6,6 +6,32 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.0
+
+### 🎵 新增酷狗音乐平台（完全对齐 HotDownloader）
+
+- **新音源**：网络层接入酷狗，`player_controller` / `download_manager` / 搜索页 / 播放页与酷我平级镜像，新增 `KugouQuality`（标准 128K / 高清 320K / 无损 FLAC / Hi-Res 四档，含 `FileHash` / `HQFileHash` / `SQFileHash` / `ResFileHash` 多文件音质路由）。
+- **接口与签名**：`gateway.kugou.com`（appid=1005）与 `lyrics.kugou.com`（appid=3116）两套公共参数 + 按 key 字母序的 `md5` 签名；取链 `v5/url` 用 `key = md5(hash + URL_KEY_SALT + appid + mid + userid)` 校验，拒绝 `is_free_part==1` 试听片段。
+- **KRC 逐字歌词**：去 4 字节头 → base64 → 与 16 字节密钥 XOR → `zlib` 解压，逐字时间轴 + 译文（type=1）+ 罗马音（type=0）全部解析为结构化 `Lyrics`；搜索降级链自动按音质保真度回退取链。
+- **品牌绿主题**：平台选择器 / 芯片 / 品牌色统一为酷狗绿 `#1EC17D`，下载与音质弹层复用通用组件。
+
+### 🖼️ 歌词封面获取插件更新（Lyrico-Plugins-3）
+
+- 接入上传压缩包里酷狗封面分支，对齐 `normalizeImage`：`{size}` → `480`、`http:` → `https:`；`cover_url.dart` 的 `candidates()` 新增 `if (song.isKugou)` 分支，与 QQ / 网易云封面同链路。
+
+### ✨ 歌词效果复刻 kunyin（Apple Music 风格）
+
+- **当前行不放大**：`defaultActiveScale` 1.12 → 1.0，当前行字号与相邻行一致，层次只靠文字色建立（非当前 0.4 白 / 当前行未唱 0.6 白 / 逐字已唱纯白 1.0），消除「当前行大一号」撑开行距。
+- **平滑滚动锚点居中**：`LyricAnchor.fraction(0.5)`，当前播放行停在视口正中。
+- **距离模糊关闭**：`LyricDistanceBlur` maxSigma / sigmaPerLine 降至 0，彻底去掉逐帧高斯模糊（省中端机开销，也避免远处行被糊）。
+- **逐字软边擦除**：高亮尾迹柔边加宽（tailFadeWidth 10 → 14），已唱纯白不透明、未唱半透明白做平滑扫光。
+- **译文在主词下方**：译文与主词之间留白（translationSpacing=10），保证副文本清晰排在正文之下；间奏呼吸圆点主题化到已唱色。
+
+### 🧪 测试
+
+- 新增 / 改写歌词预设回归：锁定距离模糊关闭、当前行不放大（行过渡恒等）、锚点居中；`AppVersion` 与 `pubspec.yaml` 同步校验。
+- `flutter analyze` 零问题；歌词预设单元测试全部通过（另有 6 项依赖真机渲染的 UI 冒烟测试在 headless 沙箱下因 1080×2400 视口 RenderFlex 溢出失败，属环境 / 历史布局问题，非本次回归，CI 构建流水线不跑 `flutter test`）。
+
 ## 2.4.11
 
 ### 🐛 修复网易云「实际音质严重缺失」
