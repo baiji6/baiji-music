@@ -454,6 +454,19 @@ class KugouApi {
   /// 回查缓存里的 [KugouSong.mvHash]。
   static KugouSong? cachedSong(String mixSongId) => _songCache[mixSongId];
 
+  /// 按 MixSongID 取歌曲的 FileHash（评论接口等要用）。
+  ///
+  /// 先查进程内缓存；缓存没有就按「歌名 + 歌手」重新搜一次
+  /// （[Song] 里只带 mid/name/singer，hash 不在通用模型里）。
+  static Future<String> fileHashOf(
+    String mixSongId,
+    String name,
+    String singer,
+  ) async {
+    final song = await _resolveSong(mixSongId, name, singer);
+    return song?.hash ?? '';
+  }
+
   /// 按 FileHash 探测单首歌的权威音质档位（补全 `qualityCodes` 用）。
   ///
   /// 供 `MusicApi.ensureQualityCodes` 的酷狗分支调用：它拿到的只是

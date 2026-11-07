@@ -15,6 +15,9 @@ import '../../network/netease_comment_api.dart';
 import '../../network/qq_comment_api.dart';
 import '../../network/kuwo/kuwo_auth.dart';
 import '../../network/kuwo/kuwo_comment_api.dart';
+import '../../network/kugou/kugou_api.dart';
+import '../../network/kugou/kugou_auth.dart';
+import '../../network/kugou/kugou_comment_api.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
@@ -63,13 +66,21 @@ class _SongCommentPageState extends State<SongCommentPage> {
   /// 酷我富读每页条数（App 私有主列表，start/count offset 分页）。
   static const int _kuwoPageSize = 20;
 
+  /// 酷狗最新评论页码（从 1 起，首页已拉过）。
+  int _kugouPage = 1;
+
+  /// 酷狗歌曲的 FileHash（评论接口按 hash 定位歌曲）。
+  String _kugouHash = '';
+
   bool get _isLocal => widget.song.source == Source.local;
 
   /// 酷我评论：未登录只读（登录后才能发表/回复/点赞）。
   ///
   /// v2.4.2 起酷我写接口已打通（App 私有 `f=ar` 协议，真机验证，
   /// 见 kuwo_comment_api.dart 文件头），不再「仅支持浏览」。
-  bool get _readOnly => widget.song.isKuwo && !KuwoAuth.isLoggedIn;
+  bool get _readOnly =>
+      (widget.song.isKuwo && !KuwoAuth.isLoggedIn) ||
+      (widget.song.isKugou && !KugouAuth.isLoggedIn);
 
   bool get _loggedIn =>
       AppServices.instance.isLoggedIn(widget.song.source);
@@ -95,11 +106,13 @@ class _SongCommentPageState extends State<SongCommentPage> {
     _scroll.addListener(_onScroll);
     // 登录态变化（登录页返回 / 会话续期失败）时刷新只读判定
     KuwoAuth.addListener(_onAuthChanged);
+    KugouAuth.addListener(_onAuthChanged);
   }
 
   @override
   void dispose() {
     KuwoAuth.removeListener(_onAuthChanged);
+    KugouAuth.removeListener(_onAuthChanged);
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _inputController.dispose();
@@ -118,6 +131,19 @@ class _SongCommentPageState extends State<SongCommentPage> {
   }
 
   // ================= 数据 =================
+
+  /// 取酷狗歌曲的 FileHash（评论接口按 hash 定位歌曲）。
+  ///
+  /// 通用 [Song] 里只有 MixSongID（放在 [Song.mid]），hash 不在模型里，
+  /// 需要从酷狗搜索缓存回查（[KugouApi.fileHashOf]）。
+  Future<String> _kugouHashOf(Song song) async {
+    final hash = await KugouApi.fileHashOf(song.mid, song.name, song.singer);
+    if (hash.isEmpty) {
+      throw Exception('该酷狗歌曲缺少 FileHash，无法加载评论');
+    }
+    _kugouHash = hash;
+    return hash;
+  }
 
   Future<void> _load() async {
     setState(() {
@@ -179,6 +205,26 @@ class _SongCommentPageState extends State<SongCommentPage> {
             // 总数以最新桶为准（comments_counts 是歌曲评论总数）
             total: latestPage.total > 0 ? latestPage.total : hotPage.total,
             hasMore: latestPage.hasMore || hotPage.hasMore,
+          );
+          _loading = false;
+        });
+      } else if (song.isKugou) {
+        // 酷狗：FileHash → album_audio/audio 拿 res_id → 读评论。
+        // 最热与最新各拉一页（两个 rank 接口，与酷我同款双桶）。
+        final hash = await _kugouHashOf(song);
+        final results = await Future.wait([
+          KugouCommentApi.getComments(hash, sort: KugouCommentSort.topliked),
+          KugouCommentApi.getComments(hash, sort: KugouCommentSort.newest),
+        ]);
+        if (!mounted) return;
+        _kugouPage = 1;
+        setState(() {
+          _data = CommentPage(
+            hot: results[0].latest,
+            latest: results[1].latest,
+            total:
+                results[1].total > 0 ? results[1].total : results[0].total,
+            hasMore: results[1].hasMore || results[0].hasMore,
           );
           _loading = false;
         });
@@ -250,6 +296,24 @@ class _SongCommentPageState extends State<SongCommentPage> {
           );
           _kuwoPage += 1;
         });
+      } else if (song.isKugou) {
+        final page = await KugouCommentApi.getComments(
+          _kugouHash.isEmpty ? await _kugouHashOf(song) : _kugouHash,
+          sort: KugouCommentSort.newest,
+          page: _kugouPage,
+        );
+        if (!mounted) return;
+        // 空页止损：服务端总数偶尔偏大，拉到空页就停。
+        final gained = page.latest.length;
+        setState(() {
+          _data = CommentPage(
+            hot: _data.hot,
+            latest: [..._data.latest, ...page.latest],
+            total: page.total > 0 ? page.total : _data.total,
+            hasMore: page.hasMore && gained > 0,
+          );
+          _kugouPage += 1;
+        });
       } else {
         final page =
             await QqCommentApi.getNewComments(_qqBizId, page: _qqPage);
@@ -295,6 +359,12 @@ class _SongCommentPageState extends State<SongCommentPage> {
           commentId: c.id,
           like: !c.liked,
         );
+      } else if (song.isKugou) {
+        // 酷狗点赞走 like.service（与评论 service 不同域），暂未接入，
+        // 先回滚乐观更新并提示，避免界面显示假状态。
+        _replaceComment(optimistic, c);
+        showAppSnack('酷狗暂不支持点赞');
+        return;
       } else {
         await QqCommentApi.praiseComment(c.id, like: !c.liked);
       }
@@ -334,6 +404,13 @@ class _SongCommentPageState extends State<SongCommentPage> {
           content: content,
           // 酷我楼中楼：一级回复时 reply 与 pcid 同为父评论 id
           replyId: reply?.id,
+          parentId: reply?.id,
+        );
+      } else if (song.isKugou) {
+        // 酷狗：回复时 tid = 父评论 id（酷狗的 special_child_id 是歌曲级 id）
+        await KugouCommentApi.postComment(
+          _kugouHash.isEmpty ? await _kugouHashOf(song) : _kugouHash,
+          content,
           parentId: reply?.id,
         );
       } else {
@@ -584,9 +661,11 @@ class _SongCommentPageState extends State<SongCommentPage> {
         readOnly: _readOnly,
         fallbackNickname: widget.song.isKuwo
             ? '酷我音乐用户'
-            : widget.song.isNetease
-                ? '网易云音乐用户'
-                : 'QQ音乐用户',
+            : widget.song.isKugou
+                ? '酷狗音乐用户'
+                : widget.song.isNetease
+                    ? '网易云音乐用户'
+                    : 'QQ音乐用户',
         onLike: () => _onLike(c),
         onReply: () => _onReply(c),
       );
