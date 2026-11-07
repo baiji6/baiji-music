@@ -12,8 +12,13 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 
-/// gateway.kugou.com 系列接口盐值（HotDownloader）。
-const String kugouGatewaySalt = 'OIlwieks28dk2k092lski2UIkp';
+/// gateway.kugou.com 系列接口盐值（HotDownloader `client.rs` 的 `SALT`）。
+///
+/// 注意 `...092l**ks**i2UIkp`，不是 `...092l**sk**i2UIkp`。v2.5.0 曾把
+/// `ks` 误抄成 `sk`，导致搜索/取链一律返回 `error_code 20006 err signature`
+/// （HTTP 200 但 data.lists 为空），表现就是「酷狗无法搜索」。签名算法本身
+/// 与上游一致，错的只有这一个字符顺序，已对照上游源码逐字节校正。
+const String kugouGatewaySalt = 'OIlwieks28dk2k092lksi2UIkp';
 
 /// lyrics.kugou.com 歌词接口盐值（Lyrico kugou 插件）。
 const String kugouLyricSalt = 'LnT6xpN3khm36zse0QzvmgTZ3waWdRSA';

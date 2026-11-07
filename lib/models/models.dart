@@ -162,7 +162,12 @@ class KugouQuality {
   /// 搜索响应里该音质对应的 hash 字段名。
   final String hashKey;
 
-  /// 取链接口 `quality` 参数值。
+  /// 取链接口 `/v5/url` 的 `quality` 参数值。
+  ///
+  /// 与 [id] **不是一回事**：`id` 是 HotDownloader 的 filename 后缀
+  /// （`128kmp3` / `320kmp3` / `flac` / `hires`，用于本地持久化约定），
+  /// 而取链只认 `128` / `320` / `flac` / `high`。v2.5.0 曾把两者混用，
+  /// 传 `128kmp3` 会被服务端判为 `error_code 20010`（参数非法）。
   final String qualityTag;
 
   const KugouQuality(this.id, this.label, this.format, this.bitrate, this.ext,
@@ -170,11 +175,11 @@ class KugouQuality {
 
   /// 标准 128K（匿名即可取，最稳）。
   static const k128 =
-      KugouQuality('128kmp3', '标准 128K', 'mp3', 128, '.mp3', 'FileHash', '128kmp3');
+      KugouQuality('128kmp3', '标准 128K', 'mp3', 128, '.mp3', 'FileHash', '128');
 
   /// 高清 320K。
   static const k320 =
-      KugouQuality('320kmp3', '高清 320K', 'mp3', 320, '.mp3', 'HQFileHash', '320kmp3');
+      KugouQuality('320kmp3', '高清 320K', 'mp3', 320, '.mp3', 'HQFileHash', '320');
 
   /// 无损 FLAC。
   static const flac =
