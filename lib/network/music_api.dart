@@ -149,6 +149,9 @@ class MusicApi {
   ///
   /// 酷狗用 `MixSongID`（album_audio_id）做主键，塞进 [Song.mid]；
   /// 各音质 hash 由 [KugouApi] 在播放/取链时按 [qualityCodes] 反查。
+  ///
+  /// v2.5.4：带上 `mvId`（酷狗的 `MvHash`，32 位 hex），
+  /// 播放页的 MV 按钮才能直接拉到播放源。
   static Song kugouSongToSong(KugouSong s) => Song(
         mid: s.albumAudioId,
         songId: int.tryParse(s.albumAudioId) ?? 0,
@@ -159,6 +162,7 @@ class MusicApi {
         duration: s.durationSeconds * 1000,
         cover: s.pic,
         source: Source.kugou,
+        mvId: s.mvHash,
         qualityCodes: s.qualities.map((q) => q.id).toSet(),
       );
 
@@ -195,9 +199,17 @@ class MusicApi {
           codes = info.qualities.map((q) => q.id).toSet();
         }
       } else if (song.isKugou) {
-        final list = await KugouApi.search(song.name, num: 1);
-        if (list.isNotEmpty) {
-          codes = list.first.qualities.map((q) => q.id).toSet();
+        // v2.5.4：优先用进程内缓存（搜索时已用权威档位接口探测过，
+        // 结果最准）；缓存没有再按歌名重搜（旧逻辑可能匹配到同名
+        // 不同版本的歌）。
+        final cached = KugouApi.cachedSong(song.mid);
+        if (cached != null && cached.qualities.isNotEmpty) {
+          codes = cached.qualities.map((q) => q.id).toSet();
+        } else {
+          final list = await KugouApi.search(song.name, num: 1);
+          if (list.isNotEmpty) {
+            codes = list.first.qualities.map((q) => q.id).toSet();
+          }
         }
       } else {
         final track = await AppServices.instance.qq.song.getDetail(song.mid);

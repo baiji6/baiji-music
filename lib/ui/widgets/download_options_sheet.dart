@@ -3,6 +3,7 @@ import 'package:flutter_miuix/miuix.dart';
 
 import '../../download/download_extras.dart';
 import '../../theme/app_theme.dart';
+import 'app_snackbar.dart';
 
 /// 下载选项弹层内容：**歌词 + 音质**二合一。
 ///
@@ -24,12 +25,23 @@ class DownloadOptionsSheet<T> extends StatefulWidget {
     required this.onConfirm,
     required this.onLyricOnly,
     this.subtitle,
+    this.disabled,
+    this.disabledHint,
   });
 
   final List<T> options;
   final T current;
   final String Function(T) label;
   final String Function(T)? subtitle;
+
+  /// 判断某个档位是否**当前不可用**（v2.5.4）。
+  ///
+  /// 用于酷狗：蝰蛇/杜比/360RA 等高规格档需要登录才能取到链，未登录时
+  /// 置灰展示而不是隐藏——隐藏会让用户以为「这软件不支持」。
+  final bool Function(T)? disabled;
+
+  /// 置灰档位的提示文案（点击时弹出，如「登录酷狗音乐账号后可用」）。
+  final String? disabledHint;
 
   /// 初始选中的歌词粒度（通常传 [DownloadExtras.lyricMode]）。
   final LyricDownloadMode lyricMode;
@@ -79,6 +91,8 @@ class _DownloadOptionsSheetState<T> extends State<DownloadOptionsSheet<T>> {
               _QualityRow<T>(
                 value: q,
                 selected: q == widget.current,
+                disabled: widget.disabled?.call(q) ?? false,
+                disabledHint: widget.disabledHint,
                 label: widget.label(q),
                 subtitle: widget.subtitle?.call(q) ?? '',
                 onTap: () => widget.onConfirm(q, _lyric),
@@ -190,6 +204,10 @@ class _LyricOptionRow extends StatelessWidget {
 }
 
 /// 音质行：点一下即确认下载（带上当前选中的歌词粒度）。
+///
+/// v2.5.4：支持**置灰**状态（需要登录才能取到的高规格档）。置灰行仍可
+/// 点击，但只弹提示、不触发下载——比直接隐藏更能让用户知道「有这档，
+/// 只是要登录」。
 class _QualityRow<T> extends StatelessWidget {
   const _QualityRow({
     required this.value,
@@ -197,23 +215,39 @@ class _QualityRow<T> extends StatelessWidget {
     required this.label,
     required this.subtitle,
     required this.onTap,
+    this.disabled = false,
+    this.disabledHint,
   });
 
   final T value;
   final bool selected;
+  final bool disabled;
+  final String? disabledHint;
   final String label;
   final String subtitle;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final titleColor = disabled
+        ? AppColors.textTertiary
+        : (selected ? AppColors.accent : AppColors.textPrimary);
     return MiuixPressable(
-      onPressed: onTap,
+      onPressed: () {
+        if (disabled) {
+          final hint = disabledHint;
+          if (hint != null && hint.isNotEmpty) {
+            showAppSnack(hint);
+          }
+          return;
+        }
+        onTap();
+      },
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: selected
+          color: selected && !disabled
               ? AppColors.accent.withValues(alpha: 0.12)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
@@ -221,9 +255,15 @@ class _QualityRow<T> extends StatelessWidget {
         child: Row(
           children: [
             Icon(
-              selected ? Icons.check_circle_rounded : Icons.audiotrack_rounded,
+              disabled
+                  ? Icons.lock_outline_rounded
+                  : (selected
+                      ? Icons.check_circle_rounded
+                      : Icons.audiotrack_rounded),
               size: 18,
-              color: selected ? AppColors.accent : AppColors.textTertiary,
+              color: disabled
+                  ? AppColors.textTertiary
+                  : (selected ? AppColors.accent : AppColors.textTertiary),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -236,9 +276,8 @@ class _QualityRow<T> extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight:
-                          selected ? FontWeight.w700 : FontWeight.w500,
-                      color:
-                          selected ? AppColors.accent : AppColors.textPrimary,
+                          selected && !disabled ? FontWeight.w700 : FontWeight.w500,
+                      color: titleColor,
                     ),
                   ),
                   if (subtitle.isNotEmpty)

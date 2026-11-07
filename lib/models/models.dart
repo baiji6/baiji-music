@@ -189,13 +189,26 @@ class KugouQuality {
   /// 该档是否需要登录 / 会员才能取到（未登录时服务端返回空 URL）。
   final bool requiresLogin;
 
+  /// 直连 hash 字段名（v2.5.4）。
+  ///
+  /// 服务端权威档位接口 `goodsmstore/v1/get_res_privilege` 会直接下发
+  /// 每档的 hash（如 360RA 的 `360ra_l3`、蝰蛇 HiFi 的 `viper_hifi`），
+  /// 这些 hash **不在** 搜索响应的 `FileHash/HQFileHash/...` 字段里。
+  /// 本字段记录「该档的 hash 来自探测结果」这一事实，由
+  /// `KugouSong.qualityOptions` 反查得到；空串表示走 [hashKey] 的常规路径。
+  ///
+  /// 与 [hashKey] 的区别：[hashKey] 是「从歌曲元数据里取 hash 的字段名」，
+  /// 本字段是「hash 直接来自探测结果」的标记。
+  final bool hasDirectHash;
+
   const KugouQuality(this.id, this.label, this.format, this.bitrate, this.ext,
       this.hashKey, this.qualityTag,
       {this.isLocalUpscale = false,
       this.fetchQualityTag = '',
       this.fetchHashKey = '',
       this.aiTag = '',
-      this.requiresLogin = false});
+      this.requiresLogin = false,
+      this.hasDirectHash = false});
 
   /// 标准 128K（匿名即可取，最稳）。
   static const k128 =
@@ -253,26 +266,82 @@ class KugouQuality {
   ///
   /// 服务端代号实测为 `360ra_l1` / `360ra_l2` / `360ra_l3`（不是 `360ra`
   /// / `mha1` / `sony360ra`，这些均 20010）。这里取最高的 l3。
+  ///
+  /// **hash 来源**：360RA 的文件 hash **不在** 搜索响应的任何 hash 字段里，
+  /// 只由权威档位接口 `goodsmstore/v1/get_res_privilege` 直接下发，
+  /// 因此 [hasDirectHash] 为 true（见 `KugouSong.qualityOptions`）。
   static const ra360 = KugouQuality(
       '360ra', '360RA 空间音频', 'mp4', 2500, '.mp4', 'FileHash', '360ra_l3',
+      requiresLogin: true, hasDirectHash: true);
+
+  // ---------- v2.5.4 新增档位 ----------
+  // 这三档在 v2.5.2 的注释里被列为「合法 quality 代号」，但**代码里从来没
+  // 建过对应枚举**（grep `viper_hifi` 只命中注释）。v2.5.4 接上权威档位
+  // 接口后实测确认：服务端确实会下发它们（实测 30 首里有 20 首带
+  // `viper_hifi`，部分带 `dolby2_448k` / `dolby2_1500k`）。
+
+  /// 蝰蛇 HiFi（官方「超品」音质）。
+  ///
+  /// 服务端代号 `viper_hifi`，hash 同样只由权威档位接口下发。
+  static const viperHifi = KugouQuality(
+      'viper_hifi', '蝰蛇 HiFi', 'flac', 5500, '.flac', 'SQFileHash',
+      'viper_hifi',
+      requiresLogin: true,
+      hasDirectHash: true);
+
+  /// 杜比全景声 448k（低码率档，部分设备可播）。
+  static const dolby448 = KugouQuality(
+      'dolby2_448k', '杜比全景声 448k', 'mp4', 448, '.mp4', 'HashMultiTrack',
+      'dolby2_448k',
+      requiresLogin: true,
+      hasDirectHash: true);
+
+  /// 杜比全景声 1500k（高码率档）。
+  static const dolby1500 = KugouQuality(
+      'dolby2_1500k', '杜比全景声 1500k', 'mp4', 1500, '.mp4', 'HashMultiTrack',
+      'dolby2_1500k',
+      requiresLogin: true,
+      hasDirectHash: true);
+
+  /// 酷狗超品（SuperFileHash 对应档）。
+  static const superAudio = KugouQuality(
+      'super', '酷狗超品', 'flac', 6000, '.flac', 'SuperFileHash', 'super',
       requiresLogin: true);
 
   /// 下载可选音质（高 → 低）。
   ///
-  /// 刻意**不含本地升频档与需登录档**：下载是「把服务端文件原样落盘」，
-  /// 用 320k 冒充 192k 母带不诚实；离线升频请用工具箱里的
-  /// 「本地升频」工具，它会明确输出真实规格的 24-bit WAV。
-  static const downloadOptions = [hires, flac, k320, k128];
+  /// v2.5.2 刻意**不含**本地升频档与需登录档，导致下载弹层只有 4 档
+  /// （用户反馈「音质不全」）。v2.5.4 改为**列出服务端真实存在的全部档位**：
+  /// - 本地升频档（[viperTape]）仍**排除**——下载是「把服务端文件原样落盘」，
+  ///   用 320k 冒充 192k 母带不诚实；离线升频请用工具箱的「本地升频」工具。
+  /// - 需登录的高规格档（蝰蛇/杜比/360RA）**保留**，由 UI 按登录态置灰并
+  ///   提示「登录酷狗音乐账号后可用」。
+  static const downloadOptions = [
+    viperHifi,
+    viperAtmos,
+    dolby,
+    ra360,
+    hires,
+    dolby1500,
+    flac,
+    dolby448,
+    k320,
+    k128,
+  ];
 
   /// 播放可选音质（高 → 低），含本地升频档与服务端高规格档。
   static const playbackOptions = [
     viperTape,
+    superAudio,
+    viperHifi,
     viperAtmos,
     viperClear,
     dolby,
     ra360,
     hires,
+    dolby1500,
     flac,
+    dolby448,
     k320,
     k128,
   ];

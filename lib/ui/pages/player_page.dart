@@ -13,6 +13,7 @@ import 'package:baiji_music/metadata/audio_spec.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/lyric_api.dart';
 import 'package:baiji_music/network/music_api.dart';
+import 'package:baiji_music/network/kugou/kugou_auth.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/core/album_saver.dart';
@@ -543,6 +544,9 @@ class _PlayerPageState extends State<PlayerPage> {
                   label: (q) => q.label,
                   subtitle: (q) => '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}',
                   lyricMode: DownloadExtras.lyricMode,
+                  // v2.5.4：高规格档未登录时置灰（不隐藏）。
+                  disabled: (q) => q.requiresLogin && !KugouAuth.isLoggedIn,
+                  disabledHint: '登录酷狗音乐账号后可用',
                   onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
                   onLyricOnly: _onLyricOnlyPicked,
                 )

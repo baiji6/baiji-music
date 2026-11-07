@@ -12,6 +12,7 @@ import '../../download/download_manager.dart';
 import '../../download/download_task.dart';
 import '../../models/models.dart';
 import '../../network/hot_search_api.dart';
+import '../../network/kugou/kugou_auth.dart';
 import '../../network/music_api.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
@@ -539,6 +540,9 @@ class _SearchHomeState extends State<SearchHome> {
               subtitle: (q) =>
                   '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}',
               lyricMode: DownloadExtras.lyricMode,
+              // v2.5.4：蝰蛇/杜比/360RA 等高规格档未登录时置灰（不隐藏）。
+              disabled: (q) => q.requiresLogin && !KugouAuth.isLoggedIn,
+              disabledHint: '登录酷狗音乐账号后可用',
               onConfirm: _onDownloadPicked,
               onLyricOnly: (mode) {
                 final s = _pendingDownloadSong;
