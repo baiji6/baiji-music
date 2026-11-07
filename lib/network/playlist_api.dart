@@ -18,6 +18,7 @@ import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/hot_search_api.dart'
     show HotPlaylist, getJsonWithRetry;
 import 'package:baiji_music/network/kuwo/kuwo_auth.dart';
+import 'package:baiji_music/network/kugou/kugou_playlist_api.dart';
 import 'package:baiji_music/network/netease/netease_client.dart';
 import 'package:baiji_music/network/music_api.dart';
 
@@ -230,6 +231,39 @@ abstract final class PlaylistApi {
     }
   }
 
+  /// 酷狗歌单详情（v2.5.4）。
+  ///
+  /// 端点 `http://mobilecdn.kugou.com/api/v3/special/song`，
+  /// 分页拉 `data.info[]`，每条带 `hash` / `320hash` / `sqhash` /
+  /// `album_audio_id`，正好是酷狗取链要的三件套。
+  static Future<PlaylistDetail?> kugou(String specialId,
+      {String fallbackName = '', String fallbackCover = ''}) async {
+    try {
+      const pageSize = 100;
+      final songs = <Song>[];
+      for (var page = 1; page <= 10; page++) {
+        final res = await KugouPlaylistApi.playlistSongs(specialId,
+            page: page, pageSize: pageSize);
+        if (res.songs.isEmpty) break;
+        for (final s in res.songs) {
+          songs.add(KugouPlaylistApi.toSong(s));
+        }
+        if (res.songs.length < pageSize) break;
+      }
+      if (songs.isEmpty) return null;
+      return PlaylistDetail(
+        id: specialId,
+        name: fallbackName.isEmpty ? '酷狗歌单' : fallbackName,
+        cover: fallbackCover,
+        creator: '',
+        songs: songs,
+      );
+    } catch (e) {
+      AppLog.w('PlaylistApi', '酷狗歌单详情失败 id=$specialId: $e');
+      return null;
+    }
+  }
+
   /// 纯逻辑：把全量 id 与分批拿到的 [Song] 合并成有序列表（便于单测）。
   ///
   /// [ids] 为歌单真实顺序（来自 v6 的 trackIds），[fetched] 为各批次
@@ -252,6 +286,9 @@ abstract final class PlaylistApi {
     if (source == Source.kuwo) {
       return kuwo(id, fallbackName: fallbackName, fallbackCover: fallbackCover);
     }
+    if (source == Source.kugou) {
+      return kugou(id, fallbackName: fallbackName, fallbackCover: fallbackCover);
+    }
     return null;
   }
 
@@ -259,7 +296,8 @@ abstract final class PlaylistApi {
   static bool canOpen(String source) =>
       source == Source.qq ||
       source == Source.netease ||
-      source == Source.kuwo;
+      source == Source.kuwo ||
+      source == Source.kugou;
 
   // ================= 我的歌单（v2.4.2 #145） =================
   //
@@ -276,6 +314,7 @@ abstract final class PlaylistApi {
       if (source == Source.qq) return await _myQq();
       if (source == Source.netease) return await _myNetease();
       if (source == Source.kuwo) return await _myKuwo();
+      if (source == Source.kugou) return await _myKugou();
     } catch (e) {
       AppLog.w('PlaylistApi', '我的歌单拉取失败 source=$source: $e');
     }
@@ -417,6 +456,25 @@ abstract final class PlaylistApi {
       if (list.length < 100) break;
     }
     return out;
+  }
+
+  /// 酷狗「我的歌单」（v2.5.4）。
+  ///
+  /// 走 `gateway.kugou.com/v7/get_all_list`（签名盐是歌词盐），
+  /// 需要登录态；未登录 / token 失效时返回空列表。
+  static Future<List<HotPlaylist>> _myKugou() async {
+    final lists = await KugouPlaylistApi.myPlaylists();
+    return [
+      for (final p in lists)
+        HotPlaylist(
+          id: p.id,
+          name: p.name,
+          cover: p.cover,
+          creator: p.creator,
+          playCount: p.playCount.isEmpty ? null : p.playCount,
+          trackCount: p.trackCount,
+        ),
+    ];
   }
 
   static String _https(String url) =>

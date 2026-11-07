@@ -8,8 +8,8 @@ import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
-import '../widgets/platform_chips.dart';
 import '../widgets/platform_picker.dart';
+import 'kugou_daily_page.dart';
 import 'playlist_detail_page.dart';
 
 /// 发现页：欢迎 Header + 快捷入口 + 最近播放（接本地历史）。
@@ -76,6 +76,13 @@ class _DiscoverHomeState extends State<DiscoverHome> {
         name: p.name,
         cover: p.cover,
       ),
+    ));
+  }
+
+  /// 打开酷狗每日推荐页。
+  void _openDaily() {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => const KugouDailyPage(),
     ));
   }
 
@@ -185,10 +192,9 @@ class _DiscoverHomeState extends State<DiscoverHome> {
               SectionHeader(
                 title: '推荐歌单',
                 subtitle: '${PlatformPicker.infoOf(_plSource).label}精选',
-                trailing: PlatformChips(
+                trailing: PlatformPicker(
                   current: _plSource,
                   onChanged: _switchPlSource,
-                  compact: true,
                 ),
               ),
               SizedBox(
@@ -231,6 +237,74 @@ class _DiscoverHomeState extends State<DiscoverHome> {
                           ),
               ),
               const SizedBox(height: 28),
+
+              // 酷狗每日推荐（v2.5.4）：仅在「推荐歌单」平台切到酷狗时显示。
+              if (_plSource == Source.kugou) ...[
+                SectionHeader(
+                  title: '每日推荐',
+                  subtitle: '酷狗每天更新的一批歌',
+                  trailing: MiuixPressable(
+                    onPressed: _openDaily,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 2),
+                      child: Row(
+                        children: [
+                          Text(
+                            '去听',
+                            style: TextStyle(
+                                fontSize: 12, color: AppColors.accent),
+                          ),
+                          Icon(Icons.chevron_right_rounded,
+                              color: AppColors.accent, size: 16),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                GlassCard(
+                  padding: const EdgeInsets.all(16),
+                  onTap: _openDaily,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                              colors: AppColors.accentGradient),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(Icons.auto_awesome_rounded,
+                            color: Colors.white, size: 26),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '酷狗每日推荐',
+                              style: TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '每天一批好歌，一键播放',
+                              style: TextStyle(
+                                  fontSize: 12, color: AppColors.textTertiary),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.play_circle_fill_rounded,
+                          color: AppColors.accent, size: 32),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 28),
+              ],
 
               // 最近播放（真实历史）
               SectionHeader(

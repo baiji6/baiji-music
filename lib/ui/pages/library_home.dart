@@ -9,7 +9,6 @@ import '../../models/models.dart';
 import '../../network/hot_search_api.dart';
 import '../../network/music_api.dart';
 import '../../network/playlist_api.dart';
-import '../widgets/platform_chips.dart';
 import '../widgets/platform_picker.dart';
 import 'playlist_detail_page.dart';
 import '../../theme/app_theme.dart';
@@ -258,10 +257,9 @@ class _LibraryHomeState extends State<LibraryHome> {
                   SectionHeader(
                     title: '我的歌单',
                     subtitle: PlatformPicker.infoOf(_mySource).label,
-                    trailing: PlatformChips(
+                    trailing: PlatformPicker(
                       current: _mySource,
                       onChanged: _switchMySource,
-                      compact: true,
                     ),
                   ),
                   Builder(builder: (context) {

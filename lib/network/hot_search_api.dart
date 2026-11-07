@@ -168,6 +168,21 @@ class HotPlaylist {
         playCount: (j['playCount'] ?? j['listennum'])?.toString(),
         trackCount: (j['trackCount'] as num?)?.toInt(),
       );
+
+  /// 酷狗歌单：`specialid` / `specialname` / `img` / `nickname` /
+  /// `total_play_count` / `song_count`。
+  ///
+  /// v2.5.4 新增。此前酷狗走 default 分支静默返回 QQ 数据，
+  /// 表现为「切到酷狗还是 QQ 的歌单」。
+  factory HotPlaylist.fromKugou(Map<String, dynamic> j) => HotPlaylist(
+        id: (j['specialid'] ?? j['listid'] ?? '').toString(),
+        name: (j['specialname'] ?? j['list_name'] ?? j['name'] ?? '').toString(),
+        cover: _httpsCover(
+            (j['img'] ?? j['sizable_cover'] ?? j['imgurl'] ?? '').toString()),
+        creator: (j['nickname'] ?? '').toString(),
+        playCount: (j['total_play_count'] ?? j['play_count'])?.toString(),
+        trackCount: (j['song_count'] as num?)?.toInt(),
+      );
 }
 
 // ───────────────────────────── QQ音乐 ─────────────────────────────
@@ -334,15 +349,75 @@ class KuwoHot {
   }
 }
 
+// ───────────────────────────── 酷狗音乐 ─────────────────────────────
+
+/// 酷狗的推荐歌单 / 热搜。
+///
+/// v2.5.4 新增。之前 `hotPlaylistsOf` 的 switch 里没有酷狗分支，
+/// 酷狗会落到 `default` 静默返回 QQ 数据——用户看到的现象是
+/// 「平台切到酷狗，歌单还是 QQ 的」。
+class KugouHot {
+  static const Map<String, String> headers = {
+    'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/106.0.0.0 Safari/537.36',
+    'Accept': '*/*',
+  };
+
+  /// 推荐歌单（`www2.kugou.kugou.com/yueku/v9/special/getSpecial`）。
+  ///
+  /// [sortId]：3 热藏 / 5 推荐 / 6 最热 / 7 最新 / 8 飙升。
+  static Future<List<HotPlaylist>> hotPlaylists({
+    int limit = 30,
+    String sortId = '5',
+  }) async {
+    final url = Uri.parse(
+            'http://www2.kugou.kugou.com/yueku/v9/special/getSpecial')
+        .replace(queryParameters: {
+      'is_ajax': '1',
+      'cdn': 'cdn',
+      't': sortId,
+      'c': '',
+      'p': '1',
+      'pagesize': '$limit',
+    }).toString();
+    final data = await getJsonWithRetry(url, headers: headers);
+    final list = (data['special_db'] ?? const []) as List<dynamic>;
+    return list
+        .whereType<Map>()
+        .map((e) => HotPlaylist.fromKugou(Map<String, dynamic>.from(e)))
+        .where((e) => e.id.isNotEmpty)
+        .toList();
+  }
+
+  /// 热搜词：酷狗没有稳定的公开热搜接口，退回用推荐歌单名当关键词。
+  ///
+  /// 保留这个方法是为了让 `hotKeywordsOf('kugou')` 有明确行为，
+  /// 而不是默默返回 QQ 的热搜。
+  static Future<List<HotKeyword>> hotSearch({int limit = 20}) async {
+    try {
+      final lists = await hotPlaylists(limit: limit);
+      return [
+        for (final p in lists)
+          HotKeyword(p.name, p.id),
+      ].take(limit).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+}
+
 /// 统一入口：按音源标识取热搜词。
 ///
-/// [source] 为 `qq` / `netease` / `kuwo`。
+/// [source] 为 `qq` / `netease` / `kuwo` / `kugou`。
 Future<List<HotKeyword>> hotKeywordsOf(String source, {int limit = 20}) async {
   switch (source) {
     case 'netease':
       return NeteaseHot.hotSearch(limit: limit);
     case 'kuwo':
       return KuwoHot.hotSearch(limit: limit);
+    case 'kugou':
+      return KugouHot.hotSearch(limit: limit);
     default:
       return QqHot.hotSearch(limit: limit);
   }
@@ -355,6 +430,9 @@ Future<List<HotPlaylist>> hotPlaylistsOf(String source, {int limit = 30}) async 
       return NeteaseHot.hotPlaylists(limit: limit);
     case 'kuwo':
       return KuwoHot.hotPlaylists(limit: limit);
+    case 'kugou':
+      // v2.5.4：补上酷狗分支。此前酷狗落到 default 静默返回 QQ 数据。
+      return KugouHot.hotPlaylists(limit: limit);
     default:
       return QqHot.hotPlaylists(limit: limit);
   }
