@@ -1084,9 +1084,18 @@ class PlayerController {
     const rate = ViperUpscaleRate.khz192;
     final key = '${song.mid}|viper_tape';
     final wavPath = await ViperUpscaler.wavPathFor(key, rate);
-    if (await ViperUpscaler.hasCachedWav(key, rate)) {
+    if (await ViperUpscaler.hasValidCachedWav(key, rate)) {
       AppLog.i('PlayerController', '蝰蛇母带升频缓存命中（key=$key）');
       return Uri.file(wavPath).toString();
+    }
+    // 存在但损坏的缓存（上次写盘被中断 / 存储写满）：删掉重来，
+    // 否则每次都会命中坏文件，播放出无声或畸形音频。
+    final stale = File(wavPath);
+    if (await stale.exists()) {
+      try {
+        await stale.delete();
+        AppLog.w('PlayerController', '清理损坏的升频缓存: $wavPath');
+      } catch (_) {}
     }
 
     final tmp = '$wavPath.src';

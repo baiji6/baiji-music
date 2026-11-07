@@ -16,12 +16,66 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:baiji_music/core/cache_manager.dart';
+import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/viper/viper_super_resolution.dart';
 import 'package:baiji_music/viper/viper_upscaler.dart';
 import 'package:baiji_music/viper/viper_wav.dart';
 
+/// 判断 WAV 文件是否具备完整的 RIFF/WAVE 头（与
+/// [ViperUpscaler.hasValidCachedWav] 同一判据）。
+Future<bool> _isValidWavFile(File f) async {
+  if (!await f.exists()) return false;
+  if (await f.length() < 44) return false;
+  final raf = await f.open();
+  try {
+    final head = await raf.read(12);
+    if (head.length < 12) return false;
+    String tag(int o) => String.fromCharCodes(head.sublist(o, o + 4));
+    return tag(0) == 'RIFF' && tag(8) == 'WAVE';
+  } finally {
+    await raf.close();
+  }
+}
+
+/// 造一个最小但结构完整的 RIFF/WAVE 头。
+Uint8List _riffWaveHeader() {
+  final b = Uint8List(64);
+  final bd = ByteData.sublistView(b);
+  void tag(int o, String s) {
+    for (var i = 0; i < 4; i++) {
+      b[o + i] = s.codeUnitAt(i);
+    }
+  }
+
+  tag(0, 'RIFF');
+  bd.setUint32(4, 36, Endian.little);
+  tag(8, 'WAVE');
+  tag(12, 'fmt ');
+  bd.setUint32(16, 16, Endian.little);
+  bd.setUint16(20, 1, Endian.little);
+  bd.setUint16(22, 2, Endian.little);
+  bd.setUint32(24, 48000, Endian.little);
+  bd.setUint32(28, 48000 * 4, Endian.little);
+  bd.setUint16(32, 4, Endian.little);
+  bd.setUint16(34, 16, Endian.little);
+  tag(36, 'data');
+  bd.setUint32(40, 20, Endian.little);
+  return b;
+}
+
 void main() {
+  // 升频缓存目录走 CacheManager → KvStore（用户可自定义缓存根目录），
+  // 真实运行时由 main() 在启动时初始化 KvStore.ensureInit()。
+  // 这里给一份 mock，让配额淘汰走真实路径而不是被 catch 吞掉。
+  setUpAll(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    await KvStore.ensureInit();
+  });
+
   group('ViperStreamProcessor（流式引擎）', () {
     Float64List tone(int frames, double freq, {double amp = 0.6}) {
       final x = Float64List(frames);
@@ -393,6 +447,112 @@ void main() {
         ),
         throwsA(isA<StateError>()),
       );
+    });
+  });
+
+  group('缓存配额与完整性', () {
+    test('超出配额时按最旧优先淘汰，且保留刚产出的文件', () async {
+      final root = Directory.systemTemp.createTempSync('viper_q');
+      final quotaBackup = ViperUpscaler.cacheQuotaBytes;
+      addTearDown(() {
+        CacheManager.debugSetRuntimeRoot(null);
+        ViperUpscaler.cacheQuotaBytes = quotaBackup;
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      // 把缓存根指向临时目录，viper 子目录随之落在临时空间里。
+      CacheManager.debugSetRuntimeRoot(root.path);
+      final vdir = await ViperUpscaler.cacheDir();
+      // 配额压到 700 KB：5 个 300 KB 的文件总量 1.5 MB，必然超配额。
+      ViperUpscaler.cacheQuotaBytes = 700 * 1024;
+
+      Future<void> write(String name, int bytes, DateTime mtime) async {
+        final f = File('$vdir${Platform.pathSeparator}$name');
+        await f.writeAsBytes(List<int>.filled(bytes, 0), flush: true);
+        await f.setLastModified(mtime);
+      }
+
+      final now = DateTime.now();
+      for (var i = 0; i < 5; i++) {
+        await write('old_$i.wav', 300 * 1024,
+            now.subtract(Duration(minutes: 30 - i)));
+      }
+      final keep = '$vdir${Platform.pathSeparator}newest.wav';
+      await write('newest.wav', 300 * 1024, now);
+
+      final freed = await ViperUpscaler.enforceCacheQuota(keepPath: keep);
+
+      // 释放量必须够把总量压回 700 KB 以内：1.5 MB → ≤700 KB，
+      // 即至少删掉 3 个 300 KB 的文件（900 KB）。
+      expect(freed, greaterThanOrEqualTo(900 * 1024));
+      // keepPath 绝不能被删。
+      expect(File(keep).existsSync(), isTrue);
+      // 最旧的两个一定没了，最新的还在。
+      expect(
+        File('$vdir${Platform.pathSeparator}old_0.wav').existsSync(),
+        isFalse,
+      );
+      expect(
+        File('$vdir${Platform.pathSeparator}old_1.wav').existsSync(),
+        isFalse,
+      );
+      // 剩下的文件总量已回到配额内。
+      var remain = 0;
+      for (final f in Directory(vdir).listSync().whereType<File>()) {
+        remain += await f.length();
+      }
+      expect(remain, lessThanOrEqualTo(ViperUpscaler.cacheQuotaBytes));
+    });
+
+    test('临时文件（.part/.src）同样计入配额并被优先淘汰', () async {
+      final root = Directory.systemTemp.createTempSync('viper_q3');
+      final quotaBackup = ViperUpscaler.cacheQuotaBytes;
+      addTearDown(() {
+        CacheManager.debugSetRuntimeRoot(null);
+        ViperUpscaler.cacheQuotaBytes = quotaBackup;
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      CacheManager.debugSetRuntimeRoot(root.path);
+      final vdir = await ViperUpscaler.cacheDir();
+      ViperUpscaler.cacheQuotaBytes = 100 * 1024;
+
+      final now = DateTime.now();
+      // 最旧的是个残留的 .src（上次下载没清掉）。
+      final src = File('$vdir${Platform.pathSeparator}leftover.src');
+      await src.writeAsBytes(List<int>.filled(200 * 1024, 0), flush: true);
+      await src.setLastModified(now.subtract(const Duration(hours: 3)));
+      // 较新的是个 .part（上次写盘被中断）。
+      final part = File('$vdir${Platform.pathSeparator}half.part');
+      await part.writeAsBytes(List<int>.filled(200 * 1024, 0), flush: true);
+      await part.setLastModified(now.subtract(const Duration(hours: 1)));
+
+      final freed = await ViperUpscaler.enforceCacheQuota();
+      expect(freed, greaterThanOrEqualTo(200 * 1024));
+      expect(src.existsSync(), isFalse);
+      expect(part.existsSync(), isFalse);
+    });
+
+    test('完整性校验能识别截断/损坏的缓存文件', () async {
+      final dir = Directory.systemTemp.createTempSync('viper_v');
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      // 0 字节文件 —— 视为损坏。
+      final bad = File('${dir.path}/bad.wav')..writeAsBytesSync(const <int>[]);
+      expect(await _isValidWavFile(bad), isFalse);
+
+      // 头不完整 —— 视为损坏。
+      final short = File('${dir.path}/short.wav')
+        ..writeAsBytesSync(List<int>.filled(10, 0));
+      expect(await _isValidWavFile(short), isFalse);
+
+      // 魔数不对 —— 视为损坏。
+      final wrong = File('${dir.path}/wrong.wav')
+        ..writeAsBytesSync(List<int>.filled(64, 0x41));
+      expect(await _isValidWavFile(wrong), isFalse);
+
+      // 正常 RIFF/WAVE 头 —— 视为有效。
+      final good = File('${dir.path}/good.wav')
+        ..writeAsBytesSync(_riffWaveHeader());
+      expect(await _isValidWavFile(good), isTrue);
     });
   });
 }

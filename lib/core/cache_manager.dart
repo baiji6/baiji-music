@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/painting.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -121,6 +122,16 @@ class CacheManager {
   }
 
   static String? _runtimeRoot;
+
+  /// 测试用：把缓存根目录临时指向指定目录。
+  ///
+  /// 单测里 `getApplicationCacheDirectory()`（path_provider）在无平台实现
+  /// 的环境下会抛 `MissingPluginException`，没法验证「缓存目录被写满」
+  /// 这类逻辑。传 null 恢复默认行为。
+  @visibleForTesting
+  static void debugSetRuntimeRoot(String? path) {
+    _runtimeRoot = path;
+  }
 
   /// 用户自定义的缓存目录；为空表示用系统默认。
   static String get customRoot =>

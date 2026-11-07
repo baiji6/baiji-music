@@ -17,6 +17,7 @@
 ///    内存占用与歌曲长度无关（常数级）。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -26,6 +27,7 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 
+import '../core/app_logger.dart' show AppLog;
 import '../core/audio_transcoder.dart' show FfmpegLocator;
 import '../core/cache_manager.dart' show CacheManager;
 import 'viper_super_resolution.dart';
@@ -97,6 +99,116 @@ class ViperUpscaler {
   static Future<bool> hasCachedWav(String key, ViperUpscaleRate rate) async =>
       File(await wavPathFor(key, rate)).existsSync();
 
+  /// 缓存是否存在且**完整可用**。
+  ///
+  /// 单看「文件存在」不够：进程被系统杀掉 / 存储写满 / 用户手动清理时，
+  /// 可能留下 0 字节或截断的 `.wav`。这种文件一旦被当成有效缓存命中，
+  /// 播放器会拿到损坏音频却毫无提示。
+  ///
+  /// 判据：文件存在、长度不小于一个最小 WAV 头（44 字节），且头部
+  /// 的 RIFF/WAVE 魔数正确。
+  static Future<bool> hasValidCachedWav(String key, ViperUpscaleRate rate) async {
+    final f = File(await wavPathFor(key, rate));
+    try {
+      if (!await f.exists()) return false;
+      if (await f.length() < 44) return false;
+      final raf = await f.open();
+      try {
+        final head = await raf.read(12);
+        if (head.length < 12) return false;
+        String tag(int o) => String.fromCharCodes(head.sublist(o, o + 4));
+        return tag(0) == 'RIFF' && tag(8) == 'WAVE';
+      } finally {
+        await raf.close();
+      }
+    } catch (err) {
+      AppLog.w('ViperUpscaler', '缓存校验失败: $err');
+      return false;
+    }
+  }
+
+  /// 升频缓存目录的容量上限（字节）。
+  ///
+  /// 192 kHz / 24 bit / 立体声的产物很大：一首 4 分钟的歌约 **264 MB**。
+  /// 用户连续升频几首就会把手机存储吃满，后续升频写盘失败、缓存命中也
+  /// 因为没有空间而无法落盘——最终表现还是「本地升频失败」。
+  ///
+  /// 因此在每次产出新缓存后按「最旧优先」淘汰，把目录压回上限内。
+  /// 默认 2 GB：够放 7~8 首歌，又不至于把手机撑满。
+  static int cacheQuotaBytes = 2 * 1024 * 1024 * 1024;
+
+  /// 按「最旧优先」淘汰升频缓存，直到目录体积回到 [cacheQuotaBytes] 以内。
+  ///
+  /// - 只删**已完成的产物**（`.wav`）与**残留的临时文件**（`.part` / `.src`），
+  ///   不会碰正在写入的文件（`.part` 在写完前不会被改名）。
+  /// - [keepPath] 是刚产出的文件，保证它不被淘汰（否则刚算完就删了）。
+  /// - 删不掉的条目（占用中 / 权限不足）直接跳过，不影响其它文件。
+  /// - 返回释放的字节数。
+  static Future<int> enforceCacheQuota({String? keepPath}) async {
+    final quota = cacheQuotaBytes;
+    try {
+      final dir = Directory(await cacheDir());
+      if (!await dir.exists()) return 0;
+
+      // 收集候选：产物与临时文件都算，占空间。
+      final entries = <File>[];
+      // keepPath 不删，但**必须计入总量**——否则「保留下来的那个文件」
+      // 本身就能把目录顶出配额，淘汰结束后目录依然超限。
+      var total = 0;
+      await for (final e in dir.list(followLinks: false)) {
+        if (e is! File) continue;
+        final p = e.path;
+        final isProduct = p.endsWith('.wav') ||
+            p.endsWith('.part') ||
+            p.endsWith('.src');
+        if (!isProduct) continue;
+        total += await e.length();
+        if (p == keepPath) continue;
+        entries.add(e);
+      }
+      if (entries.isEmpty && total <= quota) return 0;
+
+      // 先算总占用。
+      final sizes = <File, int>{};
+      for (final f in entries) {
+        sizes[f] = await f.length();
+      }
+      if (total <= quota) return 0;
+
+      // 最旧优先（按最后修改时间）。
+      entries.sort((a, b) =>
+          a.statSync().modified.compareTo(b.statSync().modified));
+
+      var freed = 0;
+      // 剩余占用单独记账：不要既递减 total 又累加 freed 再拿两者相减，
+      // 那会把已释放的量扣两次，导致提前 break、淘汰不彻底
+      // （目录仍然超配额 → 后续升频照样写盘失败）。
+      var remaining = total;
+      for (final f in entries) {
+        if (remaining <= quota) break;
+        final len = sizes[f] ?? 0;
+        try {
+          await f.delete();
+          freed += len;
+          remaining -= len;
+        } catch (err) {
+          // 占用中删不掉：跳过，继续淘汰下一个。
+          AppLog.w('ViperUpscaler', '淘汰缓存失败 ${f.path}: $err');
+        }
+      }
+      if (freed > 0) {
+        AppLog.i('ViperUpscaler',
+            '升频缓存超出上限，已淘汰最旧文件释放 ${(freed / 1048576).toStringAsFixed(1)} MB');
+      }
+      return freed;
+    } catch (err) {
+      // 拿不到缓存目录（极端情况）或遍历失败：不阻断升频主流程，
+      // 只是这轮不做淘汰。用户仍可在设置里手动「清理缓存」。
+      AppLog.w('ViperUpscaler', '缓存配额淘汰未执行: $err');
+      return 0;
+    }
+  }
+
   /// 把本地文件升频，写到 [outputPath]（父目录需存在）。
   static Future<ViperUpscaleResult> upscaleFile({
     required String inputPath,
@@ -155,6 +267,8 @@ class ViperUpscaler {
         await File(tmpOut).rename(outputPath);
         onProgress?.call(1.0);
         sw.stop();
+        // 产物可达数百 MB，产出后立刻把缓存目录压回配额内（最旧优先淘汰）。
+        unawaited(enforceCacheQuota(keepPath: outputPath));
         return ViperUpscaleResult(
           wavPath: outputPath,
           sampleRate: res.sampleRate,
