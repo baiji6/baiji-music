@@ -52,6 +52,7 @@ class _PlayerPageState extends State<PlayerPage> {
   Quality? _actualQq;
   NeteaseQuality? _actualNe;
   KuwoQuality? _actualKuwo;
+  KugouQuality? _actualKugou;
   bool _playing = false;
   bool _fav = false;
 
@@ -86,6 +87,7 @@ class _PlayerPageState extends State<PlayerPage> {
   StreamSubscription<Quality?>? _qualitySub;
   StreamSubscription<NeteaseQuality?>? _neQualitySub;
   StreamSubscription<KuwoQuality?>? _kuwoQualitySub;
+  StreamSubscription<KugouQuality?>? _kugouQualitySub;
   StreamSubscription<bool>? _playSub;
   StreamSubscription<double>? _rateSub;
 
@@ -103,6 +105,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _actualQq = _player.actualQqQuality;
     _actualNe = _player.actualNeteaseQuality;
     _actualKuwo = _player.actualKuwoQuality;
+    _actualKugou = _player.actualKugouQuality;
     _playing = _player.isPlaying;
     _rate = _player.rate;
     _syncFavorite();
@@ -122,6 +125,7 @@ class _PlayerPageState extends State<PlayerPage> {
         _actualQq = null;
         _actualNe = null;
         _actualKuwo = null;
+        _actualKugou = null;
       });
       _syncFavorite();
       _loadLyrics();
@@ -145,6 +149,12 @@ class _PlayerPageState extends State<PlayerPage> {
       setState(() => _actualKuwo = q);
     });
 
+    // 自动降级时同步"实际音质"角标（酷狗）
+    _kugouQualitySub = _player.onKugouQualityChanged.listen((q) {
+      if (!mounted) return;
+      setState(() => _actualKugou = q);
+    });
+
     _playSub = _player.onPlayStateChanged.listen((playing) {
       if (!mounted) return;
       setState(() => _playing = playing);
@@ -162,6 +172,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _qualitySub?.cancel();
     _neQualitySub?.cancel();
     _kuwoQualitySub?.cancel();
+    _kugouQualitySub?.cancel();
     _playSub?.cancel();
     _rateSub?.cancel();
     _taskSub?.cancel();
@@ -285,12 +296,19 @@ class _PlayerPageState extends State<PlayerPage> {
     _refreshQuality();
   }
 
+  Future<void> _pickKugouQuality(KugouQuality q) async {
+    _showSnack('正在切换到 ${q.label}…');
+    await _player.switchKugouQuality(q);
+    _refreshQuality();
+  }
+
   void _refreshQuality() {
     if (!mounted) return;
     setState(() {
       _actualQq = _player.actualQqQuality;
       _actualNe = _player.actualNeteaseQuality;
       _actualKuwo = _player.actualKuwoQuality;
+      _actualKugou = _player.actualKugouQuality;
       _playing = _player.isPlaying;
     });
   }
@@ -336,6 +354,10 @@ class _PlayerPageState extends State<PlayerPage> {
       await dm.saveKuwoQuality(q);
       await _runDownload(s, qq: dm.qqQuality, ne: dm.neQuality,
           kuwo: q, lyric: lyric);
+    } else if (s.isKugou) {
+      final q = picked as KugouQuality;
+      await dm.saveKugouQuality(q);
+      await _runDownload(s, qq: dm.qqQuality, ne: dm.neQuality, lyric: lyric);
     } else if (s.isNetease) {
       final q = picked as NeteaseQuality;
       await dm.saveNeQuality(q);
@@ -501,27 +523,42 @@ class _PlayerPageState extends State<PlayerPage> {
         // 下载选项：歌词粒度（默认逐字，无逐字回退逐行）+ 音质（按平台）
         MiuixOverlayBottomSheet(
           show: _showDownloadQualitySheet,
-          title: song != null && song.isNetease
-              ? '下载 · 网易云音乐'
-              : (song != null && song.isKuwo ? '下载 · 酷我音乐' : '下载 · QQ 音乐'),
+          title: song != null && song.isKugou
+              ? '下载 · 酷狗音乐'
+              : (song != null && song.isNetease
+                  ? '下载 · 网易云音乐'
+                  : (song != null && song.isKuwo
+                      ? '下载 · 酷我音乐'
+                      : '下载 · QQ 音乐')),
           backgroundColor: AppColors.bg2,
           onDismissRequest: () => setState(() {
             _showDownloadQualitySheet = false;
             _pendingDownloadSong = null;
           }),
-          content: song != null && song.isKuwo
-              ? DownloadOptionsSheet<KuwoQuality>(
+          content: song != null && song.isKugou
+              ? DownloadOptionsSheet<KugouQuality>(
                   options: filterQualityOptions(
-                      dlCodes, KuwoQuality.downloadOptions, (q) => q.id),
-                  current: DownloadManager.instance.kuwoQuality,
+                      dlCodes, KugouQuality.downloadOptions, (q) => q.id),
+                  current: DownloadManager.instance.kugouQuality,
                   label: (q) => q.label,
                   subtitle: (q) => '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}',
                   lyricMode: DownloadExtras.lyricMode,
                   onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
                   onLyricOnly: _onLyricOnlyPicked,
                 )
-              : song != null && song.isNetease
-              ? DownloadOptionsSheet<NeteaseQuality>(
+              : song != null && song.isKuwo
+                  ? DownloadOptionsSheet<KuwoQuality>(
+                      options: filterQualityOptions(
+                          dlCodes, KuwoQuality.downloadOptions, (q) => q.id),
+                      current: DownloadManager.instance.kuwoQuality,
+                      label: (q) => q.label,
+                      subtitle: (q) => '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}',
+                      lyricMode: DownloadExtras.lyricMode,
+                      onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
+                      onLyricOnly: _onLyricOnlyPicked,
+                    )
+                  : song != null && song.isNetease
+                      ? DownloadOptionsSheet<NeteaseQuality>(
                   options: filterQualityOptions(
                     dlCodes,
                     NeteaseQuality.downloadOptions,
@@ -562,26 +599,39 @@ class _PlayerPageState extends State<PlayerPage> {
         // 播放音质切换（按平台）
         MiuixOverlayBottomSheet(
           show: _showPlayQualitySheet,
-          title: song != null && song.isNetease
-              ? '网易云音乐 · 播放音质'
-              : (song != null && song.isKuwo
-                  ? '酷我音乐 · 播放音质'
-                  : 'QQ 音乐 · 播放音质'),
+          title: song != null && song.isKugou
+              ? '酷狗音乐 · 播放音质'
+              : (song != null && song.isNetease
+                  ? '网易云音乐 · 播放音质'
+                  : (song != null && song.isKuwo
+                      ? '酷我音乐 · 播放音质'
+                      : 'QQ 音乐 · 播放音质')),
           backgroundColor: AppColors.bg2,
           onDismissRequest: () => setState(() => _showPlayQualitySheet = false),
-          content: song != null && song.isKuwo
-              ? _QualitySheet<KuwoQuality>(
+          content: song != null && song.isKugou
+              ? _QualitySheet<KugouQuality>(
                   options: filterQualityOptions(
-                      pqCodes, KuwoQuality.playbackOptions, (q) => q.id),
-                  current: _player.effectiveKuwoQuality,
+                      pqCodes, KugouQuality.playbackOptions, (q) => q.id),
+                  current: _player.effectiveKugouQuality,
                   label: (q) => q.label,
                   onSelect: (q) {
                     setState(() => _showPlayQualitySheet = false);
-                    _pickKuwoQuality(q);
+                    _pickKugouQuality(q);
                   },
                 )
-              : song != null && song.isNetease
-              ? _QualitySheet<NeteaseQuality>(
+              : song != null && song.isKuwo
+                  ? _QualitySheet<KuwoQuality>(
+                      options: filterQualityOptions(
+                          pqCodes, KuwoQuality.playbackOptions, (q) => q.id),
+                      current: _player.effectiveKuwoQuality,
+                      label: (q) => q.label,
+                      onSelect: (q) {
+                        setState(() => _showPlayQualitySheet = false);
+                        _pickKuwoQuality(q);
+                      },
+                    )
+                  : song != null && song.isNetease
+                      ? _QualitySheet<NeteaseQuality>(
                   options: filterQualityOptions(
                     pqCodes,
                     NeteaseQuality.playbackOptions,
@@ -729,6 +779,7 @@ class _PlayerPageState extends State<PlayerPage> {
             actualQq: _actualQq,
             actualNe: _actualNe,
             actualKuwo: _actualKuwo,
+            actualKugou: _actualKugou,
             onOpenSheet: () {
               setState(() => _showPlayQualitySheet = true);
               final s = _song;
@@ -1106,13 +1157,19 @@ class _SourceChip extends StatelessWidget {
   /// 酷我品牌蓝（与 `platform_picker.dart` 的平台色一致）。
   static const Color _kuwoBrand = Color(0xFF3B82F6);
 
+  /// 酷狗品牌绿（与 `platform_picker.dart` 的平台色一致，v2.5.0）。
+  static const Color _kugouBrand = Color(0xFF1EC17D);
+
   @override
   Widget build(BuildContext context) {
     // v2.4.0-fix2：原来是 `ne ? 网易云 : QQ 音乐`，酷我歌曲会落到
-    // QQ 分支，播放页显示「QQ 音乐」。这里三分支显式判定。
+    // QQ 分支，播放页显示「QQ 音乐」。这里四分支显式判定。
     final String label;
     final Color color;
-    if (song.isKuwo) {
+    if (song.isKugou) {
+      label = '酷狗音乐';
+      color = _kugouBrand;
+    } else if (song.isKuwo) {
       label = '酷我音乐';
       color = _kuwoBrand;
     } else if (song.isNetease) {
@@ -1555,6 +1612,7 @@ class _QualityButton extends StatelessWidget {
     required this.actualNe,
     required this.onOpenSheet,
     this.actualKuwo,
+    this.actualKugou,
   });
 
   final Song? song;
@@ -1563,6 +1621,9 @@ class _QualityButton extends StatelessWidget {
 
   /// 酷我实际音质（v2.4.0）。
   final KuwoQuality? actualKuwo;
+
+  /// 酷狗实际音质（v2.5.0）。
+  final KugouQuality? actualKugou;
 
   /// 点击胶囊：打开「播放音质」Miuix 弹层（由页面状态驱动显隐）。
   final VoidCallback onOpenSheet;
@@ -1575,6 +1636,7 @@ class _QualityButton extends StatelessWidget {
           label: '音质', downgraded: false, accent: AppPalette.dark.accent);
     }
     if (s.isKuwo) return _kuwoMenu();
+    if (s.isKugou) return _kugouMenu();
     return s.isNetease ? _neteaseMenu() : _qqMenu();
   }
 
@@ -1625,6 +1687,24 @@ class _QualityButton extends StatelessWidget {
         label: effective.label,
         downgraded: downgraded,
         accent: _SourceChip._kuwoBrand,
+      ),
+    );
+  }
+
+  Widget _kugouMenu() {
+    final player = PlayerController.instance;
+    final requested = player.currentKugouQuality;
+    final effective = actualKugou ?? requested;
+    final downgraded =
+        actualKugou != null && actualKugou!.id != requested.id;
+
+    return MiuixPressable(
+      onPressed: onOpenSheet,
+      borderRadius: BorderRadius.circular(19),
+      child: _pill(
+        label: effective.label,
+        downgraded: downgraded,
+        accent: _SourceChip._kugouBrand,
       ),
     );
   }

@@ -596,11 +596,15 @@ class SourceBadge extends StatelessWidget {
   /// 酷我品牌蓝（与 `platform_picker.dart` 一致）。
   static const Color kuwoBrand = Color(0xFF3B82F6);
 
+  /// 酷狗品牌绿（与 `platform_picker.dart` 一致，v2.5.0）。
+  static const Color kugouBrand = Color(0xFF1EC17D);
+
   final Song song;
 
   static Color colorOf(Song song) {
     if (song.isLocal) return AppColors.textTertiary;
     if (song.isKuwo) return kuwoBrand;
+    if (song.isKugou) return kugouBrand;
     if (song.isNetease) return AppColors.accentAlt;
     return AppColors.accent;
   }

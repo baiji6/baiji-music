@@ -18,6 +18,7 @@ import '../lyrics/lyric_parser.dart';
 import '../models/models.dart';
 import 'music_api.dart';
 import 'kuwo/kuwo_api.dart';
+import 'kugou/kugou_api.dart';
 import 'netease/netease_client.dart';
 import 'qq_music_client.dart';
 
@@ -35,6 +36,7 @@ class LyricApi {
       if (song.isLocal) return await local(song);
       if (song.isNetease) return await netease(song);
       if (song.isKuwo) return await kuwo(song);
+      if (song.isKugou) return await kugou(song);
       return await qq(song);
     } catch (e) {
       AppLog.w('LyricApi', '获取歌词失败: $e');
@@ -71,6 +73,18 @@ class LyricApi {
       return Lyrics.empty;
     }
     return LyricParser.parse(raw);
+  }
+
+  // ==================== 酷狗音乐 ====================
+
+  /// 酷狗歌词（v2.5.0 新增平台）。
+  ///
+  /// 酷狗返回 KRC 逐字歌词，[KugouApi.lyric] 已解密并解析成结构化 [Lyrics]
+  /// （含译文 / 罗马音），直接返回即可，无需再经 [LyricParser]。
+  static Future<Lyrics> kugou(Song song) async {
+    final l = await KugouApi.lyric(song.mid, song.name, song.singer);
+    if (l.isNotEmpty) return l;
+    return Lyrics.empty;
   }
 
   // ==================== QQ 音乐 ====================

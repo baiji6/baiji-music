@@ -1,7 +1,9 @@
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_api.dart';
+import 'package:baiji_music/network/kugou/kugou_api.dart';
 import '../decrypt/qmc.dart';
+import '../lyrics/lyric_model.dart';
 import '../decrypt/qmc_ekey.dart';
 import 'kuwo/qmc_stream.dart';
 import 'package:baiji_music/network/kuwo/kuwo_auth.dart';
@@ -41,6 +43,9 @@ class PlayUrlResult {
   /// 酷我实际音质（酷我歌曲才有，其余为 null）。
   final KuwoQuality? kuwo;
 
+  /// 酷狗实际音质（酷狗歌曲才有，其余为 null）。
+  final KugouQuality? kugou;
+
   /// 覆盖扩展名（网易云响应里的真实 `type`）；为空时按音质枚举推断。
   final String? _extOverride;
 
@@ -48,7 +53,7 @@ class PlayUrlResult {
   final String ekey;
 
   const PlayUrlResult._(this.url, this.qq, this.ne,
-      [this._extOverride, this.kuwo, this.ekey = '']);
+      [this._extOverride, this.kuwo, this.ekey = '', this.kugou]);
 
   static const empty = PlayUrlResult._('', null, null);
 
@@ -56,10 +61,10 @@ class PlayUrlResult {
   bool get isNotEmpty => url.isNotEmpty;
 
   /// 落盘扩展名。
-  String get ext => _extOverride ?? kuwo?.ext ?? ne?.ext ?? qq?.ext ?? '.mp3';
+  String get ext => _extOverride ?? kuwo?.ext ?? kugou?.ext ?? ne?.ext ?? qq?.ext ?? '.mp3';
 
   /// 音质标签；无则空串。
-  String get label => kuwo?.label ?? qq?.label ?? ne?.label ?? '';
+  String get label => kuwo?.label ?? kugou?.label ?? qq?.label ?? ne?.label ?? '';
 
   @override
   String toString() => 'PlayUrlResult($label)';
@@ -93,6 +98,9 @@ class MusicApi {
     if (source == Source.kuwo) {
       return searchKuwo(keyword, page: page, num: num);
     }
+    if (source == Source.kugou) {
+      return searchKugou(keyword, page: page, num: num);
+    }
     return AppServices.instance.qq.search.searchByType(keyword,
         page: page, num: num);
   }
@@ -111,6 +119,13 @@ class MusicApi {
     return list.map(kuwoSongToSong).toList();
   }
 
+  /// 酷狗搜索（v2.5.0 新增平台，抄 HotDownloader）。
+  static Future<List<Song>> searchKugou(String keyword,
+      {int page = 1, int num = 20}) async {
+    final list = await KugouApi.search(keyword, page: page, num: num);
+    return list.map(kugouSongToSong).toList();
+  }
+
   /// 酷我歌曲 → 通用 [Song]。
   ///
   /// 酷我用 `rid` 做主键，统一塞进 [Song.mid]（与 QQ 的 mid 位置一致，
@@ -125,6 +140,23 @@ class MusicApi {
         duration: s.durationSeconds * 1000,
         cover: s.pic,
         source: Source.kuwo,
+        qualityCodes: s.qualities.map((q) => q.id).toSet(),
+      );
+
+  /// 酷狗歌曲 → 通用 [Song]。
+  ///
+  /// 酷狗用 `MixSongID`（album_audio_id）做主键，塞进 [Song.mid]；
+  /// 各音质 hash 由 [KugouApi] 在播放/取链时按 [qualityCodes] 反查。
+  static Song kugouSongToSong(KugouSong s) => Song(
+        mid: s.albumAudioId,
+        songId: int.tryParse(s.albumAudioId) ?? 0,
+        name: s.name,
+        singer: s.singer,
+        album: s.album,
+        albumMid: '',
+        duration: s.durationSeconds * 1000,
+        cover: s.pic,
+        source: Source.kugou,
         qualityCodes: s.qualities.map((q) => q.id).toSet(),
       );
 
@@ -159,6 +191,11 @@ class MusicApi {
         final info = await KuwoApi.songInfo(song.mid);
         if (info != null) {
           codes = info.qualities.map((q) => q.id).toSet();
+        }
+      } else if (song.isKugou) {
+        final list = await KugouApi.search(song.name, num: 1);
+        if (list.isNotEmpty) {
+          codes = list.first.qualities.map((q) => q.id).toSet();
         }
       } else {
         final track = await AppServices.instance.qq.song.getDetail(song.mid);
@@ -202,7 +239,15 @@ class MusicApi {
   /// - 网易云：直接取响应里的 `level` 字段。
   static Future<PlayUrlResult> playUrlInfo(
     Song song, Quality qqQuality, NeteaseQuality neQuality,
-    {KuwoQuality? kuwoQuality}) async {
+    {KuwoQuality? kuwoQuality, KugouQuality? kugouQuality}) async {
+    if (song.isKugou) {
+      final r = await KugouApi.playUrlWithFallback(
+        song.mid, song.name, song.singer,
+        kugouQuality ?? KugouQuality.playbackDefault,
+      );
+      if (r.url.isEmpty) return PlayUrlResult.empty;
+      return PlayUrlResult._(r.url, null, null, null, null, '', r.quality);
+    }
     if (song.isKuwo) {
       final r = await KuwoApi.playUrlWithFallback(
         song.mid,
@@ -313,6 +358,10 @@ class MusicApi {
 
   /// 按来源取歌词。
   static Future<String> lyric(Song song) async {
+    if (song.isKugou) {
+      final l = await KugouApi.lyric(song.mid, song.name, song.singer);
+      return l.isEmpty ? '' : _kugouLyricsToRaw(l);
+    }
     if (song.isKuwo) {
       return KuwoApi.lyric(song.mid);
     }
@@ -320,5 +369,18 @@ class MusicApi {
       return AppServices.instance.netease.api.lyric(song.songId);
     }
     return AppServices.instance.qq.song.getLyrics(song.mid);
+  }
+
+  /// 酷狗 [Lyrics] → 原始 LRC 文本（供下载侧 [LyricParser] 统一解析）。
+  static String _kugouLyricsToRaw(Lyrics l) {
+    final buf = StringBuffer();
+    for (final line in l.lines) {
+      final t = line.startMs;
+      final mm = (t ~/ 60000).toString().padLeft(2, '0');
+      final ss = ((t ~/ 1000) % 60).toString().padLeft(2, '0');
+      final xx = ((t % 1000) ~/ 10).toString().padLeft(2, '0');
+      buf.write('[$mm:$ss.$xx]${line.text}\n');
+    }
+    return buf.toString();
   }
 }

@@ -23,6 +23,7 @@ class DownloadManager {
   static const String _keyQq = 'download_qq_quality';
   static const String _keyNe = 'download_ne_quality';
   static const String _keyKuwo = 'download_kuwo_quality';
+  static const String _keyKugou = 'download_kugou_quality';
 
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 15),
@@ -97,12 +98,20 @@ class DownloadManager {
   Future<void> saveKuwoQuality(KuwoQuality q) =>
       KvStore.instance.setString('$_prefs:$_keyKuwo', q.id);
 
+  /// 上次选择的酷狗下载音质（v2.5.0）；未选过则跟随播放器当前音质。
+  KugouQuality get kugouQuality => KugouQuality.fromId(
+          KvStore.instance.getString('$_prefs:$_keyKugou')) ??
+      PlayerController.instance.currentKugouQuality;
+
+  Future<void> saveKugouQuality(KugouQuality q) =>
+      KvStore.instance.setString('$_prefs:$_keyKugou', q.id);
+
   /// 尝试为指定歌曲获取可用直链；当前音质不可用时沿降级链自动往下试。
   ///
   /// 返回直链 + 服务端**实际**音质；全部失败返回 [PlayUrlResult.empty]。
   Future<PlayUrlResult> resolveUrl(
       Song song, Quality qqQuality, NeteaseQuality neQuality,
-      {KuwoQuality? kuwoQuality}) async {
+      {KuwoQuality? kuwoQuality, KugouQuality? kugouQuality}) async {
     if (song.isKuwo) {
       try {
         final r = await MusicApi.playUrlInfo(song, qqQuality, neQuality,
@@ -110,6 +119,16 @@ class DownloadManager {
         if (r.isNotEmpty) return r;
       } catch (e) {
         AppLog.w('DownloadManager', '酷我取直链失败: $e');
+      }
+      return PlayUrlResult.empty;
+    }
+    if (song.isKugou) {
+      try {
+        final r = await MusicApi.playUrlInfo(song, qqQuality, neQuality,
+            kugouQuality: kugouQuality ?? this.kugouQuality);
+        if (r.isNotEmpty) return r;
+      } catch (e) {
+        AppLog.w('DownloadManager', '酷狗取直链失败: $e');
       }
       return PlayUrlResult.empty;
     }
@@ -159,14 +178,15 @@ class DownloadManager {
     required Quality qqQuality,
     required NeteaseQuality neQuality,
     KuwoQuality? kuwoQuality,
+    KugouQuality? kugouQuality,
     void Function(int downloaded, int total)? onProgress,
     CancelToken? cancelToken,
     String? partPath,
     void Function(String partPath)? onPart,
   }) async {
     try {
-      final resolved =
-          await resolveUrl(song, qqQuality, neQuality, kuwoQuality: kuwoQuality);
+      final resolved = await resolveUrl(song, qqQuality, neQuality,
+          kuwoQuality: kuwoQuality, kugouQuality: kugouQuality);
       if (resolved.isEmpty) {
         AppLog.e('DownloadManager', '无可用直链: ${song.name}');
         return null;

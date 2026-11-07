@@ -29,6 +29,7 @@ class PlatformPicker extends StatelessWidget {
         (id: Source.qq, label: 'QQ 音乐', color: AppColors.accent),
         (id: Source.netease, label: '网易云', color: AppColors.accentAlt),
         (id: Source.kuwo, label: '酷我', color: const Color(0xFF3B82F6)),
+        (id: Source.kugou, label: '酷狗', color: const Color(0xFF1EC17D)),
       ];
 
   static ({String label, Color color}) infoOf(String source) {

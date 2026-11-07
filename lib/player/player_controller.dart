@@ -46,6 +46,7 @@ class PlayerController {
   static const String _defaultQualityKey = 'default_quality';
   static const String _neteaseQualityKey = 'default_netease_quality';
   static const String _kuwoQualityKey = 'default_kuwo_quality';
+  static const String _kugouQualityKey = 'default_kugou_quality';
   static const String _playModeKey = 'play_mode';
   static const String _rateKey = 'play_rate';
 
@@ -69,6 +70,9 @@ class PlayerController {
   /// 酷我当前音质（v2.4.0）。
   KuwoQuality currentKuwoQuality = KuwoQuality.playbackDefault;
 
+  /// 酷狗当前音质（v2.5.0）。
+  KugouQuality currentKugouQuality = KugouQuality.playbackDefault;
+
   // ===== 临时音质（v2.4.2 #141）=====
   //
   // 从**播放页**切音质只作用于当前这一首，不写偏好、不影响下一首；
@@ -83,6 +87,9 @@ class PlayerController {
   NeteaseQuality? _tempNeteaseQuality;
   KuwoQuality? _tempKuwoQuality;
 
+  /// 酷狗临时音质（v2.5.0）。
+  KugouQuality? _tempKugouQuality;
+
   /// 取流真正使用的 QQ 音质（临时覆盖优先于偏好）。
   Quality get effectiveQuality => _tempQuality ?? currentQuality;
 
@@ -94,11 +101,16 @@ class PlayerController {
   KuwoQuality get effectiveKuwoQuality =>
       _tempKuwoQuality ?? currentKuwoQuality;
 
+  /// 取流真正使用的酷狗音质。
+  KugouQuality get effectiveKugouQuality =>
+      _tempKugouQuality ?? currentKugouQuality;
+
   void _clearTempQuality() {
     _tempSong = null;
     _tempQuality = null;
     _tempNeteaseQuality = null;
     _tempKuwoQuality = null;
+    _tempKugouQuality = null;
   }
 
   /// 当前曲目实际生效的 QQ 音质（可能与请求音质不同：服务端降级或本地自动降级）。
@@ -115,6 +127,11 @@ class PlayerController {
   KuwoQuality? _actualKuwoQuality;
 
   KuwoQuality? get actualKuwoQuality => _actualKuwoQuality;
+
+  /// 当前曲目实际生效的酷狗音质（v2.5.0）。
+  KugouQuality? _actualKugouQuality;
+
+  KugouQuality? get actualKugouQuality => _actualKugouQuality;
 
   PlayMode _playMode = PlayMode.sequential;
   PlayMode get playMode => _playMode;
@@ -246,6 +263,11 @@ class PlayerController {
   final StreamController<KuwoQuality?> _kuwoQualityStream =
       StreamController.broadcast();
   Stream<KuwoQuality?> get onKuwoQualityChanged => _kuwoQualityStream.stream;
+
+  /// 酷狗音质实际生效值变化（v2.5.0）。
+  final StreamController<KugouQuality?> _kugouQualityStream =
+      StreamController.broadcast();
+  Stream<KugouQuality?> get onKugouQualityChanged => _kugouQualityStream.stream;
 
   /// 播放模式变化。
   final StreamController<PlayMode> _modeStream = StreamController.broadcast();
@@ -744,6 +766,7 @@ class PlayerController {
     _qualityStream.close();
     _neQualityStream.close();
     _kuwoQualityStream.close();
+    _kugouQualityStream.close();
     _modeStream.close();
   }
 
@@ -792,6 +815,25 @@ class PlayerController {
       }
       final r = await _fetch(song, effectiveQuality, effectiveNeteaseQuality,
           kuwo: q);
+      if (r.isNotEmpty) {
+        _applyActual(r);
+        _reportPlay(song, r);
+        return r.url;
+      }
+      _clearActual();
+      return '';
+    }
+
+    // 酷狗（v2.5.0）：音质降级链在 KugouApi 内部处理，这里只需要带当前
+    // 选中的酷狗音质即可。酷狗无 AC-4 / 不可解码档，无需 undecodableIds 过滤。
+    if (song.isKugou) {
+      var q = effectiveKugouQuality;
+      if (skipCurrent) {
+        // 酷狗没有不可解码档，无需沿降级链搜索；保留当前实际生效档即可。
+        q = _actualKugouQuality ?? q;
+      }
+      final r = await _fetch(song, effectiveQuality, effectiveNeteaseQuality,
+          kugou: q);
       if (r.isNotEmpty) {
         _applyActual(r);
         _reportPlay(song, r);
@@ -980,9 +1022,11 @@ class PlayerController {
     _actualQqQuality = Quality.dtsX;
     _actualNeQuality = null;
     _actualKuwoQuality = null;
+    _actualKugouQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
+    if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
   }
 
   /// 广播「实际生效音质 = 360RA [q]」（缓存直通路径没有取流结果可依）。
@@ -990,9 +1034,11 @@ class PlayerController {
     _actualQqQuality = q;
     _actualNeQuality = null;
     _actualKuwoQuality = null;
+    _actualKugouQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
+    if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
   }
 
   /// 广播「实际生效音质 = NAC（TL01）」（缓存直通路径没有取流结果可依）。
@@ -1000,16 +1046,19 @@ class PlayerController {
     _actualQqQuality = Quality.nac;
     _actualNeQuality = null;
     _actualKuwoQuality = null;
+    _actualKugouQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
+    if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
   }
 
   /// 单次取流，异常统一吞掉（降级链需要继续往下走）。
   Future<PlayUrlResult> _fetch(Song song, Quality qq, NeteaseQuality ne,
-      {KuwoQuality? kuwo}) async {
+      {KuwoQuality? kuwo, KugouQuality? kugou}) async {
     try {
-      return await MusicApi.playUrlInfo(song, qq, ne, kuwoQuality: kuwo);
+      return await MusicApi.playUrlInfo(song, qq, ne,
+          kuwoQuality: kuwo, kugouQuality: kugou);
     } catch (e) {
       AppLog.w('PlayerController', '取流异常: $e');
       return PlayUrlResult.empty;
@@ -1029,18 +1078,22 @@ class PlayerController {
     _actualQqQuality = r.qq;
     _actualNeQuality = r.ne;
     _actualKuwoQuality = r.kuwo;
+    _actualKugouQuality = r.kugou;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(_actualNeQuality);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(_actualKuwoQuality);
+    if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(_actualKugouQuality);
   }
 
   void _clearActual() {
     _actualQqQuality = null;
     _actualNeQuality = null;
     _actualKuwoQuality = null;
+    _actualKugouQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(null);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
+    if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
   }
 
   // ===== 播放页切音质（v2.4.2 #141：只作用于当前曲目，不写偏好）=====
@@ -1067,6 +1120,13 @@ class PlayerController {
   Future<void> switchKuwoQuality(KuwoQuality q) async {
     _tempSong = _currentSong;
     _tempKuwoQuality = q;
+    await _reResolve(q.label);
+  }
+
+  /// 播放页切换酷狗音质并重新取流（保留播放位置，v2.5.0）。
+  Future<void> switchKugouQuality(KugouQuality q) async {
+    _tempSong = _currentSong;
+    _tempKugouQuality = q;
     await _reResolve(q.label);
   }
 
@@ -1164,6 +1224,9 @@ class PlayerController {
     final savedKuwo = KvStore.instance.getString(_kuwoQualityKey);
     currentKuwoQuality =
         KuwoQuality.fromId(savedKuwo) ?? KuwoQuality.playbackDefault;
+    final savedKugou = KvStore.instance.getString(_kugouQualityKey);
+    currentKugouQuality =
+        KugouQuality.fromId(savedKugou) ?? KugouQuality.playbackDefault;
 
     final savedMode = KvStore.instance.getString(_playModeKey);
     if (savedMode != null) {
@@ -1202,6 +1265,13 @@ class PlayerController {
     currentKuwoQuality = quality;
     _tempKuwoQuality = null;
     KvStore.instance.setString(_kuwoQualityKey, quality.id);
+  }
+
+  /// 设置页保存酷狗默认音质偏好（v2.5.0）。
+  void saveKugouQuality(KugouQuality quality) {
+    currentKugouQuality = quality;
+    _tempKugouQuality = null;
+    KvStore.instance.setString(_kugouQualityKey, quality.id);
   }
 }
 

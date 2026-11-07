@@ -70,6 +70,7 @@ class PlatformChips extends StatelessWidget {
   static String _short(String id) {
     if (id == Source.netease) return '网易';
     if (id == Source.kuwo) return '酷我';
+    if (id == Source.kugou) return '酷狗';
     return 'QQ';
   }
 }

@@ -87,6 +87,8 @@ class _SearchHomeState extends State<SearchHome> {
         return '搜索网易云音乐曲库…';
       case Source.kuwo:
         return '搜索酷我音乐曲库…';
+      case Source.kugou:
+        return '搜索酷狗音乐曲库…';
       default:
         return '搜索 QQ 音乐曲库…';
     }
@@ -99,6 +101,8 @@ class _SearchHomeState extends State<SearchHome> {
         return '网易云音乐';
       case Source.kuwo:
         return '酷我音乐';
+      case Source.kugou:
+        return '酷狗音乐';
       default:
         return 'QQ 音乐';
     }
@@ -171,7 +175,7 @@ class _SearchHomeState extends State<SearchHome> {
         _loading = false;
       });
       AppLog.i('SearchHome',
-          '搜索「$k」(${_source == Source.qq ? 'QQ' : (_source == Source.netease ? '网易云' : '酷我')}) 第 1 页命中 ${results.length} 首');
+          '搜索「$k」(${_source == Source.qq ? 'QQ' : (_source == Source.netease ? '网易云' : (_source == Source.kugou ? '酷狗' : '酷我'))}) 第 1 页命中 ${results.length} 首');
       Telemetry.instance.search(_source, k, results.length);
     } catch (e) {
       if (!mounted || gen != _requestGen) return;
@@ -388,6 +392,12 @@ class _SearchHomeState extends State<SearchHome> {
       qq = dm.qqQuality;
       ne = dm.neQuality;
       kw = q;
+    } else if (song.isKugou) {
+      final q = picked as KugouQuality;
+      await dm.saveKugouQuality(q);
+      qq = dm.qqQuality;
+      ne = dm.neQuality;
+      kw = null;
     } else if (song.isNetease) {
       final q = picked as NeteaseQuality;
       await dm.saveNeQuality(q);
@@ -504,24 +514,27 @@ class _SearchHomeState extends State<SearchHome> {
     // 只展示这首歌实际拥有的音质；未知时回退全量（v2.4.9）。
     final codes = song?.qualityCodes ?? const <String>{};
     final kuwo = song != null && song.isKuwo;
+    final kugou = song != null && song.isKugou;
     final netease = song != null && song.isNetease;
     return MiuixOverlayBottomSheet(
       show: _showDownloadSheet && song != null,
-      title: kuwo
-          ? '下载 · 酷我音乐'
-          : netease
-              ? '下载 · 网易云音乐'
-              : '下载 · QQ 音乐',
+      title: kugou
+          ? '下载 · 酷狗音乐'
+          : kuwo
+              ? '下载 · 酷我音乐'
+              : netease
+                  ? '下载 · 网易云音乐'
+                  : '下载 · QQ 音乐',
       backgroundColor: AppColors.bg2,
       onDismissRequest: () => setState(() {
         _showDownloadSheet = false;
         _pendingDownloadSong = null;
       }),
-      content: kuwo
-          ? DownloadOptionsSheet<KuwoQuality>(
+      content: kugou
+          ? DownloadOptionsSheet<KugouQuality>(
               options: filterQualityOptions(
-                  codes, KuwoQuality.downloadOptions, (q) => q.id),
-              current: DownloadManager.instance.kuwoQuality,
+                  codes, KugouQuality.downloadOptions, (q) => q.id),
+              current: DownloadManager.instance.kugouQuality,
               label: (q) => q.label,
               subtitle: (q) =>
                   '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}',
@@ -536,7 +549,26 @@ class _SearchHomeState extends State<SearchHome> {
                 if (s != null) _downloadLyricOnly(s, mode);
               },
             )
-          : netease
+          : kuwo
+              ? DownloadOptionsSheet<KuwoQuality>(
+                  options: filterQualityOptions(
+                      codes, KuwoQuality.downloadOptions, (q) => q.id),
+                  current: DownloadManager.instance.kuwoQuality,
+                  label: (q) => q.label,
+                  subtitle: (q) =>
+                      '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}',
+                  lyricMode: DownloadExtras.lyricMode,
+                  onConfirm: _onDownloadPicked,
+                  onLyricOnly: (mode) {
+                    final s = _pendingDownloadSong;
+                    setState(() {
+                      _showDownloadSheet = false;
+                      _pendingDownloadSong = null;
+                    });
+                    if (s != null) _downloadLyricOnly(s, mode);
+                  },
+                )
+              : netease
               ? DownloadOptionsSheet<NeteaseQuality>(
                   options: filterQualityOptions(
                 codes,
