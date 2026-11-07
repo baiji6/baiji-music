@@ -301,4 +301,98 @@ void main() {
       expect(args.last, '/tmp/out.wav');
     });
   });
+
+  group('WAV 直读输入（无 ffmpeg 的桌面 / CI 路径）', () {
+    /// 造一个 16bit PCM WAV 文件。
+    Uint8List makeWav(int rate, int ch, int frames, double freq) {
+      final dataLen = frames * ch * 2;
+      final b = Uint8List(44 + dataLen);
+      final bd = ByteData.sublistView(b);
+      void tag(int o, String str) {
+        for (var i = 0; i < 4; i++) {
+          b[o + i] = str.codeUnitAt(i);
+        }
+      }
+
+      tag(0, 'RIFF');
+      bd.setUint32(4, 36 + dataLen, Endian.little);
+      tag(8, 'WAVE');
+      tag(12, 'fmt ');
+      bd.setUint32(16, 16, Endian.little);
+      bd.setUint16(20, 1, Endian.little);
+      bd.setUint16(22, ch, Endian.little);
+      bd.setUint32(24, rate, Endian.little);
+      bd.setUint32(28, rate * ch * 2, Endian.little);
+      bd.setUint16(32, ch * 2, Endian.little);
+      bd.setUint16(34, 16, Endian.little);
+      tag(36, 'data');
+      bd.setUint32(40, dataLen, Endian.little);
+      for (var i = 0; i < frames; i++) {
+        for (var c = 0; c < ch; c++) {
+          final v =
+              (0.6 * math.sin(2 * math.pi * freq * i / rate) * 32767).round();
+          bd.setInt16(44 + (i * ch + c) * 2, v, Endian.little);
+        }
+      }
+      return b;
+    }
+
+    test('48 kHz 立体声 WAV 直读可正常升频', () async {
+      final dir = Directory.systemTemp.createTempSync('viper_in');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final input = '${dir.path}/in48.wav';
+      File(input).writeAsBytesSync(makeWav(48000, 2, 4800, 440));
+      final out = '${dir.path}/out.wav';
+
+      final res = await ViperUpscaler.upscaleFile(
+        inputPath: input,
+        outputPath: out,
+        rate: ViperUpscaleRate.khz192,
+      );
+      expect(res.sampleRate, 192000);
+      expect(res.frames, 4800 * 4);
+      final back = ViperWav.readFile(out);
+      expect(back.sampleRate, 192000);
+      expect(back.channels, 2);
+    });
+
+    test('44.1 kHz 单声道 WAV 直读会重采样到 48 kHz 立体声', () async {
+      final dir = Directory.systemTemp.createTempSync('viper_in');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final input = '${dir.path}/in44.wav';
+      File(input).writeAsBytesSync(makeWav(44100, 1, 4410, 440));
+      final out = '${dir.path}/out.wav';
+
+      final res = await ViperUpscaler.upscaleFile(
+        inputPath: input,
+        outputPath: out,
+        rate: ViperUpscaleRate.khz192,
+      );
+      expect(res.sampleRate, 192000);
+      final back = ViperWav.readFile(out);
+      expect(back.channels, 2);
+      expect(back.peak() <= 1.0, isTrue);
+      for (final ch in back.data) {
+        for (final v in ch) {
+          expect(v.isFinite, isTrue);
+        }
+      }
+    });
+
+    test('非 WAV 输入且无引擎时给出明确错误（不静默失败）', () async {
+      final dir = Directory.systemTemp.createTempSync('viper_in');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final input = '${dir.path}/in.mp3';
+      File(input).writeAsBytesSync(makeWav(48000, 2, 100, 440));
+      // 显式指向不存在的引擎，确保走「无引擎」分支（不依赖沙箱 PATH）。
+      expect(
+        () => ViperUpscaler.upscaleFile(
+          inputPath: input,
+          outputPath: '${dir.path}/out.wav',
+          ffmpegPath: '/definitely/not/exists/ffmpeg',
+        ),
+        throwsA(isA<StateError>()),
+      );
+    });
+  });
 }

@@ -251,7 +251,14 @@ class ViperUpscaler {
     bool Function()? isCancelled,
   }) async {
     onProgress?.call(0.05);
-    final proc = await Process.start(exe, decodeArgs(inputPath, outputPath));
+    final Process proc;
+    try {
+      proc = await Process.start(exe, decodeArgs(inputPath, outputPath));
+    } on ProcessException catch (e) {
+      // 引擎文件不存在 / 不可执行 / 无权限：包装成可读错误，
+      // 否则用户只会看到 dart:io 的原始英文异常。
+      throw StateError('无法启动解码引擎（$exe）：${e.message}');
+    }
     final errBuf = StringBuffer();
     // stderr 必须持续消费，否则管道写满会让 ffmpeg 卡死。
     final errDone = proc.stderr.transform(const Utf8Decoder()).forEach((s) {
