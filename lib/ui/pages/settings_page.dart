@@ -24,6 +24,7 @@ import '../../download/download_extras.dart';
 import '../../download/download_manager.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
+import '../../network/kugou/kugou_auth.dart';
 import '../../network/kuwo/kuwo_auth.dart';
 import '../../player/player_controller.dart';
 import '../../theme/app_theme.dart';
@@ -31,6 +32,7 @@ import '../widgets/app_widgets.dart';
 import '../widgets/cover_image.dart';
 import '../widgets/info_dialog.dart';
 import '../widgets/lyric_style_sheet.dart';
+import 'kugou_login_page.dart';
 import 'kuwo_login_page.dart';
 import 'qq_login_page.dart';
 import 'netease_login_page.dart';
@@ -93,13 +95,15 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadSettings();
     // 开发者模式是进程级单例；这里兜底 load 一次（main 里也会 load，幂等）
     DevMode.instance.load();
-    // 酷我登录/退出后刷新账号区的登录态摘要
+    // 酷我 / 酷狗登录或退出后刷新账号区的登录态摘要
     KuwoAuth.addListener(_onKuwoAuthChanged);
+    KugouAuth.addListener(_onKuwoAuthChanged);
   }
 
   @override
   void dispose() {
     KuwoAuth.removeListener(_onKuwoAuthChanged);
+    KugouAuth.removeListener(_onKuwoAuthChanged);
     _proxyController.dispose();
     super.dispose();
   }
@@ -517,6 +521,26 @@ class _SettingsPageState extends State<SettingsPage> {
                     onClick: () => Navigator.push<void>(
                       context,
                       MaterialPageRoute(builder: (_) => const KuwoLoginPage()),
+                    ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '酷狗音乐',
+                    summary: KugouAuth.isLoggedIn
+                        ? '已登录: userid ${KugouAuth.session?.userid}'
+                        : '未登录 · 点击登录（解锁无损/Hi-Res）',
+                    startAction: Icon(
+                      KugouAuth.isLoggedIn
+                          ? Icons.verified_rounded
+                          : Icons.person_outline,
+                      color: KugouAuth.isLoggedIn
+                          ? const Color(0xFF1EC17D)
+                          : AppColors.textTertiary,
+                      size: 22,
+                    ),
+                    onClick: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(builder: (_) => const KugouLoginPage()),
                     ),
                   ),
                 ],

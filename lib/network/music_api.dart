@@ -2,6 +2,7 @@ import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_api.dart';
 import 'package:baiji_music/network/kugou/kugou_api.dart';
+import 'package:baiji_music/network/kugou/kugou_auth.dart';
 import '../decrypt/qmc.dart';
 import '../lyrics/lyric_model.dart';
 import '../decrypt/qmc_ekey.dart';
@@ -23,6 +24,7 @@ class AppServices {
 
   bool isLoggedIn(String source) {
     if (source == Source.kuwo) return KuwoAuth.isLoggedIn;
+    if (source == Source.kugou) return KugouAuth.isLoggedIn;
     return source == Source.netease ? netease.isLoggedIn() : qq.isLoggedIn();
   }
 }

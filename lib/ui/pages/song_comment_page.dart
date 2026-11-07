@@ -18,6 +18,7 @@ import '../../network/kuwo/kuwo_comment_api.dart';
 import '../../theme/app_theme.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/app_widgets.dart';
+import 'kugou_login_page.dart';
 import 'kuwo_login_page.dart';
 import 'netease_login_page.dart';
 import 'qq_login_page.dart';
@@ -404,9 +405,11 @@ class _SongCommentPageState extends State<SongCommentPage> {
     final popped = Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => widget.song.isKuwo
           ? const KuwoLoginPage()
-          : widget.song.isNetease
-              ? const NeteaseLoginPage()
-              : const QQLoginPage(),
+          : widget.song.isKugou
+              ? const KugouLoginPage()
+              : widget.song.isNetease
+                  ? const NeteaseLoginPage()
+                  : const QQLoginPage(),
     ));
     // 登录页返回后刷新一次，让输入栏即时切到可发送态
     popped.then((_) {

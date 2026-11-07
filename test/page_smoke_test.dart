@@ -22,6 +22,7 @@ import 'package:baiji_music/ui/pages/decrypt_page.dart';
 import 'package:baiji_music/ui/pages/discover_home.dart';
 import 'package:baiji_music/ui/pages/library_home.dart';
 import 'package:baiji_music/ui/pages/log_page.dart';
+import 'package:baiji_music/ui/pages/kugou_login_page.dart';
 import 'package:baiji_music/ui/pages/netease_login_page.dart';
 import 'package:baiji_music/ui/pages/player_page.dart';
 import 'package:baiji_music/ui/pages/qq_login_page.dart';
@@ -224,6 +225,15 @@ void main() {
       expect(find.text('扫码登录'), findsOneWidget);
       expect(find.text('用网易云音乐 App 扫码（App 内「我的」页面左上角扫一扫）'),
           findsOneWidget);
+    });
+
+    testWidgets('酷狗登录页（扫码 + 手动凭据）', (tester) async {
+      // 只 build 默认态（不点「获取二维码」），不发网络请求、不起轮询 Timer。
+      final e = await pumpAndCatch(tester, const KugouLoginPage());
+      expect(e, isNull, reason: '酷狗登录页 build 抛异常: $e');
+      expect(find.text('扫码登录'), findsOneWidget);
+      expect(find.text('手动凭据'), findsOneWidget);
+      expect(find.text('获取二维码'), findsOneWidget);
     });
 
     // 评论页（#102）：未登录可浏览（测试环境下网络被拦截 → 走错误态），

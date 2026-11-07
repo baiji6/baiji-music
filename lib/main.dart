@@ -22,6 +22,7 @@ import 'core/telemetry.dart';
 import 'core/theme_controller.dart';
 import 'core/ui_settings.dart';
 import 'core/update_checker.dart';
+import 'network/kugou/kugou_auth.dart';
 import 'network/kuwo/kuwo_auth.dart';
 import 'player/player_controller.dart';
 import 'theme/app_theme.dart';
@@ -38,8 +39,10 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await KvStore.ensureInit();
-  // 酷我会话：设置页账号区 / 评论页登录态都依赖它，启动时先从本地恢复
+  // 酷我 / 酷狗会话：设置页账号区与取链登录态都依赖它们，启动时先恢复
   await KuwoAuth.restore();
+  // 酷狗登录态决定 /v5/url 能否解锁无损/Hi-Res，必须在首帧前恢复
+  await KugouAuth.restore();
   // 抓包支持：必须在任何 HttpClient 创建之前安装（release 构建同样生效）
   await CaptureTrust.load();
   HttpOverrides.global = CaptureHttpOverrides();
