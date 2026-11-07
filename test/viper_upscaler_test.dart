@@ -531,6 +531,33 @@ void main() {
       expect(part.existsSync(), isFalse);
     });
 
+    test('正在写入的临时文件不被淘汰（避免打断并发升频）', () async {
+      final root = Directory.systemTemp.createTempSync('viper_q4');
+      final quotaBackup = ViperUpscaler.cacheQuotaBytes;
+      addTearDown(() {
+        CacheManager.debugSetRuntimeRoot(null);
+        ViperUpscaler.cacheQuotaBytes = quotaBackup;
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      CacheManager.debugSetRuntimeRoot(root.path);
+      final vdir = await ViperUpscaler.cacheDir();
+      ViperUpscaler.cacheQuotaBytes = 50 * 1024;
+
+      // 一个「刚刚写过」的 .part：视为正在写入，不该被删。
+      final hot = File('$vdir${Platform.pathSeparator}hot.part');
+      await hot.writeAsBytes(List<int>.filled(400 * 1024, 0), flush: true);
+      // 一个很久以前的 .part：残留垃圾，该被清理。
+      final cold = File('$vdir${Platform.pathSeparator}cold.part');
+      await cold.writeAsBytes(List<int>.filled(400 * 1024, 0), flush: true);
+      await cold.setLastModified(
+          DateTime.now().subtract(const Duration(days: 2)));
+
+      await ViperUpscaler.enforceCacheQuota();
+
+      expect(hot.existsSync(), isTrue, reason: '正在写入的临时文件不能被删');
+      expect(cold.existsSync(), isFalse, reason: '陈旧残留应被清理');
+    });
+
     test('完整性校验能识别截断/损坏的缓存文件', () async {
       final dir = Directory.systemTemp.createTempSync('viper_v');
       addTearDown(() => dir.deleteSync(recursive: true));

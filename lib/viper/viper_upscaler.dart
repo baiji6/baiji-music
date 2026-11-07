@@ -137,6 +137,10 @@ class ViperUpscaler {
   /// 默认 2 GB：够放 7~8 首歌，又不至于把手机撑满。
   static int cacheQuotaBytes = 2 * 1024 * 1024 * 1024;
 
+  /// 「最近修改过」的宽限期：这段时间内的 `.part` / `.src` 视为正在写入，
+  /// 不参与淘汰（避免打断并发的升频任务）。
+  static const Duration _inProgressGrace = Duration(minutes: 30);
+
   /// 按「最旧优先」淘汰升频缓存，直到目录体积回到 [cacheQuotaBytes] 以内。
   ///
   /// - 只删**已完成的产物**（`.wav`）与**残留的临时文件**（`.part` / `.src`），
@@ -155,6 +159,10 @@ class ViperUpscaler {
       // keepPath 不删，但**必须计入总量**——否则「保留下来的那个文件」
       // 本身就能把目录顶出配额，淘汰结束后目录依然超限。
       var total = 0;
+      // 最近修改过的文件视为「正在进行中」，不参与淘汰：
+      // 工具箱离线升频与播放链路可能同时在跑，删掉别人正在写的
+      // .part 会直接把那次升频打断。
+      final now = DateTime.now();
       await for (final e in dir.list(followLinks: false)) {
         if (e is! File) continue;
         final p = e.path;
@@ -162,8 +170,14 @@ class ViperUpscaler {
             p.endsWith('.part') ||
             p.endsWith('.src');
         if (!isProduct) continue;
-        total += await e.length();
+        final len = await e.length();
+        total += len;
         if (p == keepPath) continue;
+        // 正在写入的临时文件：跳过（仍计入总量）。
+        if (!p.endsWith('.wav') &&
+            now.difference(e.statSync().modified) < _inProgressGrace) {
+          continue;
+        }
         entries.add(e);
       }
       if (entries.isEmpty && total <= quota) return 0;
