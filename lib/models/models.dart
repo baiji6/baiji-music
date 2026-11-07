@@ -170,8 +170,32 @@ class KugouQuality {
   /// 传 `128kmp3` 会被服务端判为 `error_code 20010`（参数非法）。
   final String qualityTag;
 
+  /// 是否为**本地升频档**（v2.5.2）。
+  ///
+  /// 官方客户端的「蝰蛇母带 / 至臻母带」带「AI升频」标记：服务端只下发
+  /// 320k 源文件，App 用本地超分引擎重建为 192kHz/24bit。见
+  /// `lib/viper/viper_super_resolution.dart` 顶部对 `libsuperR.so` 的说明。
+  final bool isLocalUpscale;
+
+  /// 实际取链用的 `quality`；本地升频档覆盖成 320（默认同 [qualityTag]）。
+  final String fetchQualityTag;
+
+  /// 实际取链用的 hash 字段名（默认同 [hashKey]）。
+  final String fetchHashKey;
+
+  /// UI 附加标签（如「AI升频」），空串表示不显示。
+  final String aiTag;
+
+  /// 该档是否需要登录 / 会员才能取到（未登录时服务端返回空 URL）。
+  final bool requiresLogin;
+
   const KugouQuality(this.id, this.label, this.format, this.bitrate, this.ext,
-      this.hashKey, this.qualityTag);
+      this.hashKey, this.qualityTag,
+      {this.isLocalUpscale = false,
+      this.fetchQualityTag = '',
+      this.fetchHashKey = '',
+      this.aiTag = '',
+      this.requiresLogin = false});
 
   /// 标准 128K（匿名即可取，最稳）。
   static const k128 =
@@ -189,17 +213,76 @@ class KugouQuality {
   static const hires =
       KugouQuality('hires', 'Hi-Res', 'flac', 1999, '.flac', 'ResFileHash', 'high');
 
-  /// 下载/播放可选音质（高 → 低）。
+  // ---------- v2.5.2 新增档位 ----------
+  // 合法 quality 代号由官方 64 位 APK 反编译 + `/v5/url` 实测确认：
+  // viper_clear / viper_atmos / viper_tape / viper_hifi / super /
+  // dolby / dolby2_448k / dolby2_1500k / 360ra_l1 / 360ra_l2 / 360ra_l3。
+  // 传错（如 master_tape / hires / 360ra）会直接 error_code 20010。
+
+  /// 蝰蛇母带（官方弹层「蝰蛇超清 · 至臻母带」，带「AI升频」）。
+  ///
+  /// **本地升频档**：取链按 `quality=320` + `HQFileHash` 拿 320k 源文件，
+  /// 再由 [ViperUpscaler] 本地重建为 192kHz/24bit WAV 播放，不请求
+  /// `viper_tape` 的服务端文件（未登录/无版权时服务端只返回空 URL）。
+  static const viperTape = KugouQuality(
+      'viper_tape', '蝰蛇母带', 'wav', 9216, '.wav', 'HQFileHash', 'viper_tape',
+      isLocalUpscale: true,
+      fetchQualityTag: '320',
+      fetchHashKey: 'HQFileHash',
+      aiTag: 'AI升频 192kHz/24bit');
+
+  /// 蝰蛇全景声（官方弹层「蝰蛇全景声 · 至臻音质」）。
+  static const viperAtmos = KugouQuality(
+      'viper_atmos', '蝰蛇全景声', 'flac', 5000, '.flac', 'HashMultiTrack',
+      'viper_atmos',
+      requiresLogin: true);
+
+  /// 蝰蛇超清（官方弹层带「AI升频」标记）。
+  static const viperClear = KugouQuality(
+      'viper_clear', '蝰蛇超清', 'flac', 4000, '.flac', 'SQFileHash',
+      'viper_clear',
+      aiTag: 'AI升频',
+      requiresLogin: true);
+
+  /// 杜比全景声。
+  static const dolby = KugouQuality(
+      'dolby', '杜比全景声', 'mp4', 3000, '.mp4', 'HashMultiTrack', 'dolby',
+      requiresLogin: true);
+
+  /// 索尼 360RA（MPEG-H / MHA1）。
+  ///
+  /// 服务端代号实测为 `360ra_l1` / `360ra_l2` / `360ra_l3`（不是 `360ra`
+  /// / `mha1` / `sony360ra`，这些均 20010）。这里取最高的 l3。
+  static const ra360 = KugouQuality(
+      '360ra', '360RA 空间音频', 'mp4', 2500, '.mp4', 'FileHash', '360ra_l3',
+      requiresLogin: true);
+
+  /// 下载可选音质（高 → 低）。
+  ///
+  /// 刻意**不含本地升频档与需登录档**：下载是「把服务端文件原样落盘」，
+  /// 用 320k 冒充 192k 母带不诚实；离线升频请用工具箱里的
+  /// 「本地升频」工具，它会明确输出真实规格的 24-bit WAV。
   static const downloadOptions = [hires, flac, k320, k128];
+
+  /// 播放可选音质（高 → 低），含本地升频档与服务端高规格档。
+  static const playbackOptions = [
+    viperTape,
+    viperAtmos,
+    viperClear,
+    dolby,
+    ra360,
+    hires,
+    flac,
+    k320,
+    k128,
+  ];
 
   /// 播放默认音质（128k 最稳，无需登录）。
   static const playbackDefault = k128;
 
-  static const playbackOptions = downloadOptions;
-
   static KugouQuality? fromId(String? id) {
     if (id == null) return null;
-    for (final q in downloadOptions) {
+    for (final q in playbackOptions) {
       if (q.id == id) return q;
     }
     return null;
