@@ -16,6 +16,9 @@ class Source {
   /// 酷我音乐（v2.4.0 新增平台）。
   static const String kuwo = 'kuwo';
 
+  /// 酷狗音乐（v2.5.0 新增平台，抄 HotDownloader）。
+  static const String kugou = 'kugou';
+
   /// 本地文件（扫描本机磁盘得到，不走任何网络接口）。
   static const String local = 'local';
 }
@@ -130,6 +133,75 @@ class KuwoQuality {
 
   @override
   String toString() => 'KuwoQuality($id,$label)';
+}
+
+// ==================== 酷狗音质枚举 ====================
+
+/// 酷狗音乐音质枚举（v2.5.0 新增平台，抄 HotDownloader / Lyrico kugou 插件）。
+///
+/// 酷狗与酷我/QQ 不同：同一首歌的多个音质是**不同的文件**，靠各自的
+/// hash（FileHash / HQFileHash / SQFileHash / ResFileHash）区分，取链接口
+/// 按 `hash` 直接定位文件。因此每个档位除了展示信息，还记录它对应的
+/// hash 字段名 [hashKey] 与取链 `quality` 标识 [qualityTag]。
+class KugouQuality {
+  /// 音质 id（与取链/下载持久化约定一致，不可随意变更）。
+  final String id;
+
+  /// 展示名。
+  final String label;
+
+  /// 容器格式（mp3 / flac）。
+  final String format;
+
+  /// 比特率（kbps，仅用于展示排序，无损/Hi-Res 给近似值）。
+  final int bitrate;
+
+  /// 落盘扩展名。
+  final String ext;
+
+  /// 搜索响应里该音质对应的 hash 字段名。
+  final String hashKey;
+
+  /// 取链接口 `quality` 参数值。
+  final String qualityTag;
+
+  const KugouQuality(this.id, this.label, this.format, this.bitrate, this.ext,
+      this.hashKey, this.qualityTag);
+
+  /// 标准 128K（匿名即可取，最稳）。
+  static const k128 =
+      KugouQuality('128kmp3', '标准 128K', 'mp3', 128, '.mp3', 'FileHash', '128kmp3');
+
+  /// 高清 320K。
+  static const k320 =
+      KugouQuality('320kmp3', '高清 320K', 'mp3', 320, '.mp3', 'HQFileHash', '320kmp3');
+
+  /// 无损 FLAC。
+  static const flac =
+      KugouQuality('flac', '无损 FLAC', 'flac', 999, '.flac', 'SQFileHash', 'flac');
+
+  /// Hi-Res（quality 标识为 `high`）。
+  static const hires =
+      KugouQuality('hires', 'Hi-Res', 'flac', 1999, '.flac', 'ResFileHash', 'high');
+
+  /// 下载/播放可选音质（高 → 低）。
+  static const downloadOptions = [hires, flac, k320, k128];
+
+  /// 播放默认音质（128k 最稳，无需登录）。
+  static const playbackDefault = k128;
+
+  static const playbackOptions = downloadOptions;
+
+  static KugouQuality? fromId(String? id) {
+    if (id == null) return null;
+    for (final q in downloadOptions) {
+      if (q.id == id) return q;
+    }
+    return null;
+  }
+
+  @override
+  String toString() => 'KugouQuality($id,$label)';
 }
 
 // ==================== QQ 音质枚举 ====================
@@ -612,20 +684,25 @@ class Song {
   /// 是否酷我歌曲（v2.4.0）。
   bool get isKuwo => source == Source.kuwo;
 
-  /// 平台短名（列表角标用）：网易云 / 酷我 / QQ / 本地。
+  /// 是否酷狗歌曲（v2.5.0）。
+  bool get isKugou => source == Source.kugou;
+
+  /// 平台短名（列表角标用）：网易云 / 酷我 / 酷狗 / QQ / 本地。
   ///
   /// v2.4.0-fix2 之前各页面都写成 `isNetease ? '网易云' : 'QQ'`，
   /// 酷我歌曲会显示成「QQ」。统一走这个 getter。
   String get sourceShort {
     if (isLocal) return '本地';
+    if (isKugou) return '酷狗';
     if (isKuwo) return '酷我';
     if (isNetease) return '网易云';
     return 'QQ';
   }
 
-  /// 平台全名（弹层标题用）：网易云音乐 / 酷我音乐 / QQ 音乐。
+  /// 平台全名（弹层标题用）：网易云音乐 / 酷我音乐 / 酷狗音乐 / QQ 音乐。
   String get sourceFull {
     if (isLocal) return '本地音乐';
+    if (isKugou) return '酷狗音乐';
     if (isKuwo) return '酷我音乐';
     if (isNetease) return '网易云音乐';
     return 'QQ 音乐';

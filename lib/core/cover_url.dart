@@ -2,7 +2,7 @@ import '../models/models.dart';
 
 /// 封面 URL 解析：按「最大优先 + 降级链」给出候选列表。
 ///
-/// 两个音源的取图规则与实测上限：
+/// 三个音源的取图规则与实测上限（v2.5.0 新增酷狗，对齐 Lyrico-Plugins-3）：
 ///
 /// **QQ 音乐** — `https://y.qq.com/music/photo_new/T002R{size}x{size}M000{albumMid}.jpg`
 /// - 可用档位：150 / 300 / 500 / 800 / **1500**
@@ -15,6 +15,10 @@ import '../models/models.dart';
 /// - 超出原图分辨率时 CDN 会**自动截断**到原图上限（实测某专辑原图 1024，
 ///   请求 2000 / 3000 / 4000 均返回 1024×1024，且不会报错）
 /// - 因此默认取 3000（等价于「原图」），失败时降级 1000 → 500 → 300
+///
+/// **酷狗** — 搜索/详情返回的 `Image` 是带 `{size}` 占位与 `http:` 的地址，
+/// 按 Lyrico kugou 插件 `normalizeImage` 把 `{size}` 替成 480、协议升 `https`，
+/// 即最大可用图（酷狗 {size} 支持 480 这一档）。
 ///
 /// 降级不是猜的，而是由 [CoverImage] 在真实加载失败时逐级尝试，
 /// 所以既拿得到最大图，又不会出现空白封面。
@@ -47,7 +51,19 @@ class CoverUrl {
 
   /// 封面候选 URL，按「最大 → 最小」排列；无可用封面时返回空列表。
   static List<String> candidates(Song song) {
+    if (song.isKugou) return _kugou(song);
     return song.isNetease ? _netease(song) : _qq(song);
+  }
+
+  // ==================== 酷狗 ====================
+
+  static List<String> _kugou(Song song) {
+    final raw = song.cover;
+    if (raw.isEmpty) return const <String>[];
+    // 对齐 Lyrico kugou 插件 `normalizeImage`：
+    // `{size}` 占位替成 480，`http:` 协议升 `https:`（已是最大可用图）。
+    final url = raw.replaceAll('{size}', '480').replaceFirst('http:', 'https:');
+    return <String>[url];
   }
 
   // ==================== QQ 音乐 ====================
@@ -101,6 +117,10 @@ class CoverUrl {
   /// 无法识别来源时原样返回。
   static String maximize(String url) {
     if (url.isEmpty) return url;
+    // 酷狗：{size} 占位归一化（同 candidates），协议升 https
+    if (url.contains('{size}')) {
+      return url.replaceAll('{size}', '480').replaceFirst('http:', 'https:');
+    }
     if (_qqSizePattern.hasMatch(url)) {
       final q = qqSizes.first;
       return url.replaceFirstMapped(
