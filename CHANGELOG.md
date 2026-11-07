@@ -6,6 +6,33 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.2
+
+### 🔬 找到酷狗「蝰蛇母带」的升频算法，并加入软件
+
+- **反编译实证**：从官方 64 位 APK 解出 `lib/arm64-v8a/libsuperR.so`，导出符号还原出真实链路——`ISuperResolution::Create(samplerate, ModelType)` → `CSuperResolutionMTK` → `SuperResolutionEigen::createHannWindow / stft / istft / getBlockSize / getOverlapSize / specToAudioOverlap / process_audio_to_tensor` → `NeuronModel_* / NeuronExecution_compute`（`com.mediatek.compiled_network`，联发科 NPU）→ `nsSuperResolution::processS16(short* PCM)`。即 **16-bit PCM → Hann 窗 STFT → 频谱张量 → 端侧 DNN 超分 → ISTFT + overlap-add → 96k/192k 24bit**。与官方公开资料一致（2025 MDDC 酷狗 × 联发科「蝰蛇音质 AI 超分音频引擎」，128kbps 重建 16kHz 以上高频至 192kHz/24bit，NPU 推理）。官方弹层里「Hi-Res」「蝰蛇超清 · 至臻母带」都带「**AI升频**」标记，也印证 320k 源文件在本地重建。
+- **为什么不能直接搬**：模型权重不在 APK 内（`setModelPath` 运行时下发）、是绑定天玑 NPU 的编译网、SDK 为联发科私有，而本 App 是 Flutter 六端应用。因此按**相同骨架用公开算法同构复刻**，并在代码、UI 与文档中如实标注，绝不冒充官方模型。
+- **纯 Dart 升频引擎**（`lib/viper/`）：基 2 迭代 FFT；Hann 窗 STFT（N=2048，hop=1024）；因 `targetRate/48000 == nHigh/nLow`，两个域 bin 频率分辨率相同，低频 bins 原样搬移，24 kHz 以上 bins 用 **SBR / eSBR 频域带宽扩展**重建（子带倍频转置保持谐波结构、谱包络按 4.5 dB/oct 外推整形、确定性相位去相关、谱平坦度驱动的音调/噪声混合、瞬态抑制、32 kHz 起 taper）；叠加「声音焕新」式频响 tilt；一次 ISTFT（N=nLow×ratio）直接出 96k/192k PCM，输出 24-bit WAV（峰值归一 + TPDF 抖动）。**修正了一个真实 DSP 缺陷**：Hann² 在 50% overlap 下不满足常数叠加，改用「Hann 分析窗 + 矩形合成窗 + Σw 归一化」，避免约 33% 的周期性幅度调制。
+- **播放链路**：选「蝰蛇母带」时服务端只取 `quality=320` + `HQFileHash` 的 320k 源文件，App 本地重建为 192kHz/24bit WAV 后缓存播放（复用 DTS:X / 360RA / NAC 的 WAV 缓存管线，含切歌世代检查、失败诚实降级回 320k、进度提示）。转换在独立 isolate 中执行，不卡 UI；升频缓存纳入「清理缓存」范围。
+- **工具箱**：新增「本地升频 · 蝰蛇母带」页，可把本地任意音频离线升成 96k/192k 24bit WAV（选文件、目标规格、声音焕新开关、引擎状态、进度、输出规格/体积/耗时、复制路径与分享）。页面明确提示 192k WAV 约 1.15 MB/秒（4 分钟约 276 MB）。
+- **边界声明**：生成的 24 kHz 以上高频是依据低频信号重建的**感知近似**，不是原始录音中真实存在的信息；下载音质刻意**不含**本地升频档，避免把 320k 文件冒充母带。
+
+### 🎧 酷狗音质档位补全（列表仍只展示歌曲实际有的档位）
+
+- 官方 APK 反编译 + `/v5/url` 实测确认服务端合法 `quality` 代号：`viper_clear` / `viper_atmos` / `viper_tape` / `viper_hifi` / `super` / `dolby` / `dolby2_448k` / `dolby2_1500k` / **`360ra_l1` / `360ra_l2` / `360ra_l3`**（360RA 代号此前未知；`360ra` / `mha1` / `master_tape` 等均返回 `error_code 20010` 非法参数）。
+- 新增 5 档：**蝰蛇母带**（本地 AI 升频 192kHz/24bit）、**蝰蛇超清**、**蝰蛇全景声**、**杜比全景声**、**360RA 空间音频**。
+- 「只展示歌曲实际有的」按明确信号推导：基础四档看各自 hash；本地升频 / 蝰蛇超清看 320k / FLAC 源文件；蝰蛇全景声与杜比看 `trans_param.hash_multitrack`（真有多轨内容）；360RA 看服务端 MHA1 / 360 显式标记，**未可靠破译 `qualitymap.bits` 完整位语义前宁缺勿滥、绝不常驻**。播放与设置弹层给升频档标注「AI升频」。
+
+### 🔧 修复酷狗无法设置默认音质
+
+- 设置页「播放与音质」区此前只有 QQ / 网易云 / 酷我，补齐**酷狗音乐播放音质**项（含弹层、持久化、`currentKugouQuality` 联动），选择本地升频档时提示首次需转换。
+
+### 🧪 测试与验证
+
+- 新增 `viper_super_resolution_test.dart`（8 项：FFT 往返、Hann COLA、24bit WAV 往返、192k/96k 采样率与时长、低频主频保持、逐周期峰值稳定性回归、宽带信号高频重建能量、取消）、`kugou_quality_v252_test.dart`（8 项：新档位反查、本地升频取链参数、按歌实际能力推导、`trans_param` 双形态、hashFor）、`viper_upscale_page_test.dart`（2 项 build 冒烟）。
+- 沙箱端到端实测：2 秒 44.1k 音频 → 192000 Hz / 24 bit / 2ch WAV，ffprobe 校验通过，耗时 0.37 秒。
+- `flutter analyze` 零问题；全量测试 1038 项通过，另有 6 项 UI 冒烟/点击测试在 headless 沙箱 1080×2400 视口下因历史遗留 `RenderFlex` 溢出 25px 失败（已用干净树复现，非本次回归，CI 构建流水线不跑 `flutter test`）。
+
 ## 2.5.1
 
 ### 🐛 修复酷狗无法搜索（签名 salt 抄错）
