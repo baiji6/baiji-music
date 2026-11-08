@@ -94,7 +94,11 @@ abstract final class KugouCommentApi {
   static const String audioUrl =
       'https://gateway.kugou.com/v3/album_audio/audio';
 
-  /// 评论接口固定 mid（与酷狗官方客户端一致）。
+  /// 免登录读接口用的固定 mid（仅用于读评论 / 取 res_id，这些接口不校验
+  /// token 与 mid 的绑定关系，用固定值即可）。**写接口（发表评论）绝不能
+  /// 用这个值**——写接口要求 mid 与登录 token 绑定的设备 mid 一致，否则
+  /// 网关会把 token 判为无效 → err_code 10000「未登录」。写接口改用
+  /// `KugouAuth.device().mid`。
   static const String commentMid = '16249512204336365674023395779019';
 
   /// 评论接口固定 code。
@@ -299,9 +303,8 @@ abstract final class KugouCommentApi {
     String? parentId,
   }) async {
     final text = content.trim();
-    if (text.isEmpty) {
-      throw KugouCommentException('评论内容不能为空');
-    }
+    final err = validateCommentContent(text);
+    if (err != null) throw KugouCommentException(err);
     KugouSongCommentIds ids;
     if (resId != null && resId.isNotEmpty) {
       ids = KugouSongCommentIds(resId: resId, childrenId: '');
@@ -312,6 +315,9 @@ abstract final class KugouCommentApi {
     if (session == null || !session.isValid) {
       throw KugouCommentException('请先登录酷狗音乐账号后再发表评论');
     }
+    // 设备 mid 必须与登录 token 绑定的是同一个（KugouAuth.device().mid），
+    // 否则网关会把 token 判为无效 → err_code 10000「未登录」。
+    final dev = await KugouAuth.device();
     KugouCommentException? last;
     for (final platform in KugouCommentPlatform.values) {
       try {
@@ -324,6 +330,7 @@ abstract final class KugouCommentApi {
           parentId: parentId,
           userid: session.userid,
           token: session.token,
+          mid: dev.mid,
         );
         AppLog.i('KugouCommentApi',
             '酷狗评论已发表 platform=${platform.name} hash=$hash');
@@ -348,6 +355,7 @@ abstract final class KugouCommentApi {
     required String? parentId,
     required String userid,
     required String token,
+    required String mid,
   }) async {
     final clienttime = '${DateTime.now().millisecondsSinceEpoch ~/ 1000}';
     final body = buildPostBody(
@@ -356,10 +364,14 @@ abstract final class KugouCommentApi {
       hash: hash,
     );
     // key = md5(appid + salt + clientver + clienttime + mid + body)
-    final key = md5
-        .convert(utf8.encode('${platform.appid}${platform.salt}'
-            '${platform.clientver}$clienttime$commentMid$body'))
-        .toString();
+    // 这里的 mid 必须与登录 token 绑定的设备 mid 一致（KugouAuth.device().mid），
+    // 用固定常量会触发服务端把 token 判为无效 → err_code 10000「未登录」。
+    final key = buildWriteKey(
+      platform: platform,
+      clienttime: clienttime,
+      mid: mid,
+      body: body,
+    );
     final params = <String, String>{
       'code': commentCode,
       'childrenid': childrenId.isEmpty ? '0' : childrenId,
@@ -369,7 +381,7 @@ abstract final class KugouCommentApi {
       'clienttoken': '0',
       'appid': platform.appid,
       'clientver': platform.clientver,
-      'mid': commentMid,
+      'mid': mid,
       'clienttime': clienttime,
       'key': key,
       'uuid': '0',
@@ -382,12 +394,11 @@ abstract final class KugouCommentApi {
       if (parentId != null && parentId.isNotEmpty) 'tid': parentId,
     };
     // signature = md5(salt + sorted('k=v') + body + salt)
-    final joined = (params.keys.toList()..sort())
-        .map((k) => '$k=${params[k]}')
-        .join('');
-    final signature = md5
-        .convert(utf8.encode('${platform.salt}$joined$body${platform.salt}'))
-        .toString();
+    final signature = buildWriteSignature(
+      platform: platform,
+      params: params,
+      body: body,
+    );
     final q = (params.keys.toList()..sort())
         .map((k) =>
             '${Uri.encodeComponent(k)}=${Uri.encodeComponent(params[k] ?? '')}')
@@ -418,7 +429,68 @@ abstract final class KugouCommentApi {
       throw KugouCommentException('酷狗账号未登录或登录已失效$msg',
           isLoginRequired: true);
     }
+    // `60045` 是服务端对账号 / 设备级反垃圾（风控）的笼统拒绝码，与正文
+    // 内容无关——正常中文也会被拒。逆向倾听 5.6.14 确认：它对 60045 无任何
+    // 特殊处理（不弹验证、不重试），只把服务端 `message` 透传为「操作失败」。
+    // 官方酷狗 App 也只是在账号触发风控时弹滑块验证，验证通过后该码即消失。
+    // 客户端无法绕过，只能如实告知用户。
+    if (err == 60045) {
+      throw KugouCommentException(
+          '酷狗评论被服务端风控拦截（60045）：当前账号或设备触发了反垃圾策略'
+          '，请稍后重试，或换一个酷狗账号登录后发表'
+          '${msg.isNotEmpty ? '（$msg）' : ''}');
+    }
     throw KugouCommentException('酷狗评论发表失败（$err）$msg');
+  }
+
+  /// 客户端轻量预校验评论正文（纯函数，可单测）。
+  ///
+  /// 返回 `null` 表示通过；否则返回错误提示文案。这里只拦明显无效的输入
+  /// （空 / 纯数字 / 含空白），避免把无效请求发到服务端。注意这**不是**
+  /// 60045 的解法——60045 是服务端对账号 / 设备的风控，正常中文也会被拒，
+  /// 客户端无法绕过。
+  static String? validateCommentContent(String text) {
+    if (text.isEmpty) return '评论内容不能为空';
+    if (RegExp(r'^\d+$').hasMatch(text)) {
+      return '评论内容不能是纯数字，请换个字词再发';
+    }
+    if (text.contains(RegExp(r'\s'))) {
+      return '评论内容不能包含空格或换行';
+    }
+    return null;
+  }
+
+  /// 写接口第一层签名 key（纯函数，可单测）。
+  ///
+  /// `key = md5(appid + salt + clientver + clienttime + mid + body)`。
+  /// 注意 [mid] 必须与登录 token 绑定的设备 mid 一致
+  /// （`KugouAuth.device().mid`），传固定常量会让服务端把 token 判为无效
+  /// → `err_code 10000`「未登录」。
+  static String buildWriteKey({
+    required KugouCommentPlatform platform,
+    required String clienttime,
+    required String mid,
+    required String body,
+  }) =>
+      md5
+          .convert(utf8.encode('${platform.appid}${platform.salt}'
+              '${platform.clientver}$clienttime$mid$body'))
+          .toString();
+
+  /// 写接口第二层签名 signature（纯函数，可单测）。
+  ///
+  /// `signature = md5(salt + 排序('k=v' 拼接) + body + salt)`。
+  static String buildWriteSignature({
+    required KugouCommentPlatform platform,
+    required Map<String, String> params,
+    required String body,
+  }) {
+    final joined = (params.keys.toList()..sort())
+        .map((k) => '$k=${params[k]}')
+        .join('');
+    return md5
+        .convert(utf8.encode('${platform.salt}$joined$body${platform.salt}'))
+        .toString();
   }
 
   /// 构造发表评论的 body JSON（纯函数，可单测）。

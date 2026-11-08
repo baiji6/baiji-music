@@ -272,6 +272,25 @@ void main() {
     });
   });
 
+  group('KugouCommentApi.validateCommentContent', () {
+    test('正常中文通过', () {
+      expect(KugouCommentApi.validateCommentContent('好听'), isNull);
+    });
+    test('空内容被拒绝', () {
+      expect(KugouCommentApi.validateCommentContent(''), isNotNull);
+      expect(KugouCommentApi.validateCommentContent('   '), isNotNull);
+    });
+    test('纯数字被客户端预校验拦截（与 60045 风控无关）', () {
+      final r = KugouCommentApi.validateCommentContent('1');
+      expect(r, contains('纯数字'));
+      expect(KugouCommentApi.validateCommentContent('520'), contains('纯数字'));
+    });
+    test('含空白被拒绝', () {
+      expect(KugouCommentApi.validateCommentContent('你好 世界'), isNotNull);
+      expect(KugouCommentApi.validateCommentContent('a\nb'), isNotNull);
+    });
+  });
+
   group('酷狗评论签名约定', () {
     test('读接口签名 = md5(网关盐 + 排序 k=v 拼接 + 网关盐)', () {
       // 复刻服务端算法：按 key 字母序把 'k=v' 无分隔符拼起来。
@@ -297,13 +316,35 @@ void main() {
       const body =
           '{"data":{"content":"a","contentFormatted":"a",'
           '"album_audio_id":"32042828","hash":"h"}}';
-      final key = md5
-          .convert(utf8.encode('${platform.appid}${platform.salt}'
-              '${platform.clientver}$clienttime'
-              '${KugouCommentApi.commentMid}$body'))
-          .toString();
+      final key = KugouCommentApi.buildWriteKey(
+        platform: platform,
+        clienttime: clienttime,
+        mid: 'device-mid-abc',
+        body: body,
+      );
       expect(key.length, 32);
       expect(key, isNotEmpty);
+    });
+
+    test('写接口 key 必须使用传入的 mid（设备 mid），而非固定 commentMid', () {
+      const platform = KugouCommentPlatform.std;
+      const clienttime = '1762530000';
+      const body = '{"data":{}}';
+      // 用设备 mid 与用固定 commentMid 算出的 key 必须不同——
+      // 锁定回归：之前 10000「未登录」正是因为写接口错用了固定 commentMid。
+      final withDeviceMid = KugouCommentApi.buildWriteKey(
+        platform: platform,
+        clienttime: clienttime,
+        mid: 'abcdef0123456789abcdef0123456789',
+        body: body,
+      );
+      final withFixedMid = KugouCommentApi.buildWriteKey(
+        platform: platform,
+        clienttime: clienttime,
+        mid: KugouCommentApi.commentMid,
+        body: body,
+      );
+      expect(withDeviceMid, isNot(withFixedMid));
     });
 
     test('写接口 signature = md5(salt+排序 k=v+body+salt)', () {
