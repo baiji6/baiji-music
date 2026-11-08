@@ -6,6 +6,56 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.6
+
+### 📂 工具箱「本地升频 · 蝰蛇母带」支持自定义保存位置
+
+之前升频产物只能写到应用私有目录 `…/Documents/viper_upscale/`，用户无法
+选择输出位置。本版按转码页已有的成熟模式补齐：
+
+- 「输入与参数」里新增 **「保存位置」** 行，点击用系统目录选择器指定输出目录，
+  选择后做**写入预检**（建目录 + 写探针文件再删），避免升频到一半才发现不可写
+  （Android 11+ 写公共目录需「所有文件访问权限」）。
+- 选择结果用 `KvStore` **持久化**，重启 App 后自动恢复；自定义时显示
+  **「恢复默认保存位置」**，一键回落到应用私有目录。
+- 输出文件命名、去重（同名自动加序号）等逻辑不变。
+
+### 🐛 修复蝰蛇母带播放链路「本地升频失败（引擎异常）」
+
+用户真机反馈：播放页选「蝰蛇母带」时，先弹出「升频完成 · 192 kHz / 24 bit」，
+紧接着又弹「本地升频失败（引擎异常），已降级播放原始 320k」。日志里同一首歌
+（同一 hash）反复「完成 → 失败」交替，伴随：
+
+```
+蝰蛇母带升频完成: 192000Hz/24bit ... 280166444 字节
+缓存配额淘汰未执行: PathNotFoundException: Cannot retrieve length of file,
+  ... 5edd0fd94ef7e58bcf6f63b8cc0eabb1.wav.src
+蝰蛇母带本地升频失败: Bad state: 升频失败: PathNotFoundException:
+  Cannot open file, ... 5edd0fd94ef7e58bcf6f63b8cc0eabb1.wav.src.viper48k.wav
+```
+
+**两个根因**（均为并发触发同一首歌升频时暴露）：
+
+1. **中间文件路径写死**：解码产物 `inputPath.viper48k.wav` 与写盘半成品
+   `outputPath.part` 用固定名。同一首歌被并发触发两次升频时共用这些文件，
+   先完成的任务在 `finally` 里删掉，后启动的 isolate 就报
+   `Cannot open file ...viper48k.wav`。→ 每次 `upscaleFile` 用
+   `时间戳_自增序号` 生成唯一 token，各任务独占中间文件；后缀仍保留
+   `.viper48k.wav` / `.part` 以便被正确识别为瞬态文件。
+2. **缓存配额淘汰误删中间文件**：`enforceCacheQuota` 把 `*.viper48k.wav`
+   （以 `.wav` 结尾）当成「已完成产物」纳入淘汰，且不享受 30 分钟宽限期保护；
+   单文件 `length/stat` 撞上并发删除抛异常，还会让整轮淘汰抛
+   `PathNotFoundException` 中断（日志里的「淘汰未执行」）。→ 新增
+   `isTransientFile` 精确分类：**只有最终产物 `.wav` 参与配额淘汰**，瞬态文件
+   仅回收超过宽限期的残留；每个文件的 IO 各自容错，不再互相打断。
+
+### 🧪 测试与验证
+
+- 新增 `isTransientFile` 分类、并发中间文件不被淘汰、陈旧残留仍回收等
+  5 项 upscaler 单测；升频页新增「保存位置入口可见 / 默认不显示恢复项」1 项。
+- `flutter analyze --no-pub` → **No issues found**；全量测试 **1165 项通过**
+  （上一版 1159）。全部离线，用真实临时目录 + 注入缓存根驱动 `enforceCacheQuota`。
+
 ## 2.5.5
 
 ### 🐛 修复酷狗评论误报「未登录」（错误码 10000）
