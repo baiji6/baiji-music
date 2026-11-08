@@ -77,4 +77,19 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.textContaining('本地升频'), findsWidgets);
   });
+
+  testWidgets('升频页显示「保存位置」入口', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(_wrap(const ViperUpscalePage()));
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(tester.takeException(), isNull);
+    // 自定义保存位置入口存在。
+    expect(find.text('保存位置'), findsOneWidget);
+    // 默认未自定义时不应出现「恢复默认」入口。
+    expect(find.text('恢复默认保存位置'), findsNothing);
+  });
 }

@@ -84,6 +84,20 @@ class ViperUpscaler {
   /// 升频缓存目录名，与 `CacheManager.viperDirName` 一致（可被清理缓存清掉）。
   static const String dirName = 'viper';
 
+  /// 中间文件唯一化自增序号：同一微秒内并发的多次升频也能各自独占文件。
+  static int _tmpSeq = 0;
+
+  /// 升频过程产生的**瞬态文件**（解码中间 WAV、写盘半成品、下载源文件）。
+  ///
+  /// 这些文件绝不能因「缓存配额」被淘汰：并发升频时另一个 isolate 正在读，
+  /// 删掉会直接让那次升频报 `Cannot open file` → 引擎异常降级（v2.5.6 修复）。
+  /// 纯函数，供 `enforceCacheQuota` 与单测共用。
+  @visibleForTesting
+  static bool isTransientFile(String path) =>
+      path.endsWith('.src') ||
+      path.endsWith('.part') ||
+      path.endsWith('.viper48k.wav');
+
   /// 升频缓存目录（播放链路复用，命中即跳过重复计算）。
   ///
   /// 走 [CacheManager.subDir] 才能跟随用户自定义的缓存根目录。
@@ -143,71 +157,77 @@ class ViperUpscaler {
 
   /// 按「最旧优先」淘汰升频缓存，直到目录体积回到 [cacheQuotaBytes] 以内。
   ///
-  /// - 只删**已完成的产物**（`.wav`）与**残留的临时文件**（`.part` / `.src`），
-  ///   不会碰正在写入的文件（`.part` 在写完前不会被改名）。
-  /// - [keepPath] 是刚产出的文件，保证它不被淘汰（否则刚算完就删了）。
-  /// - 删不掉的条目（占用中 / 权限不足）直接跳过，不影响其它文件。
-  /// - 返回释放的字节数。
+  /// v2.5.6 关键修复：解码中间文件 `*.viper48k.wav` 与下载源 `*.src`、
+  /// 写盘半成品 `*.part` 都是**瞬态文件**，另一个 isolate 可能正在读/写。
+  /// 旧实现把它们和最终产物一起纳入淘汰，且 `*.viper48k.wav` 以 `.wav`
+  /// 结尾不享受宽限期保护 → 并发时被直接删掉，导致那次升频报
+  /// `Cannot open file`（用户看到「本地升频失败·引擎异常」）。现在：
+  /// - 只有**最终产物**（非瞬态的 `.wav`）参与配额淘汰；
+  /// - 瞬态文件仅在**超过宽限期的残留**时才清理，正在写入的一律不动；
+  /// - 单个文件的 `length/stat/delete` 各自容错，文件被并发删除不再让
+  ///   整轮淘汰抛异常中断（日志里的「缓存配额淘汰未执行」）。
+  /// - [keepPath] 是刚产出的文件，计入总量但绝不删除。
   static Future<int> enforceCacheQuota({String? keepPath}) async {
     final quota = cacheQuotaBytes;
     try {
       final dir = Directory(await cacheDir());
       if (!await dir.exists()) return 0;
 
-      // 收集候选：产物与临时文件都算，占空间。
-      final entries = <File>[];
+      // 候选：最终产物 .wav（可淘汰）+ 超过宽限期的残留瞬态文件（可清理）。
+      // (path, size, mtime) 三元组，避免后面再 statSync 撞到已删文件。
+      final candidates = <_QuotaEntry>[];
       // keepPath 不删，但**必须计入总量**——否则「保留下来的那个文件」
       // 本身就能把目录顶出配额，淘汰结束后目录依然超限。
       var total = 0;
-      // 最近修改过的文件视为「正在进行中」，不参与淘汰：
-      // 工具箱离线升频与播放链路可能同时在跑，删掉别人正在写的
-      // .part 会直接把那次升频打断。
       final now = DateTime.now();
       await for (final e in dir.list(followLinks: false)) {
         if (e is! File) continue;
         final p = e.path;
-        final isProduct = p.endsWith('.wav') ||
-            p.endsWith('.part') ||
-            p.endsWith('.src');
-        if (!isProduct) continue;
-        final len = await e.length();
-        total += len;
-        if (p == keepPath) continue;
-        // 正在写入的临时文件：跳过（仍计入总量）。
-        if (!p.endsWith('.wav') &&
-            now.difference(e.statSync().modified) < _inProgressGrace) {
+        final transient = isTransientFile(p);
+        final isFinalWav = p.endsWith('.wav') && !transient;
+        if (!transient && !isFinalWav) continue; // 与本缓存无关的文件
+
+        // 单文件容错：并发下文件可能刚好被另一个任务删掉，
+        // length/stat 抛异常时跳过这一条，不影响其它条目。
+        int len;
+        DateTime mtime;
+        try {
+          len = await e.length();
+          mtime = e.statSync().modified;
+        } catch (_) {
           continue;
         }
-        entries.add(e);
-      }
-      if (entries.isEmpty && total <= quota) return 0;
+        total += len;
+        if (p == keepPath) continue;
 
-      // 先算总占用。
-      final sizes = <File, int>{};
-      for (final f in entries) {
-        sizes[f] = await f.length();
+        if (transient) {
+          // 正在写入的瞬态文件：跳过（仍计入总量）；只回收明显是残留的。
+          if (now.difference(mtime) >= _inProgressGrace) {
+            candidates.add(_QuotaEntry(p, len, mtime));
+          }
+        } else {
+          // 最终产物：始终是可淘汰候选。
+          candidates.add(_QuotaEntry(p, len, mtime));
+        }
       }
-      if (total <= quota) return 0;
+      if (total <= quota || candidates.isEmpty) return 0;
 
-      // 最旧优先（按最后修改时间）。
-      entries.sort((a, b) =>
-          a.statSync().modified.compareTo(b.statSync().modified));
+      // 最旧优先（用已快照的 mtime，不再访问文件系统）。
+      candidates.sort((a, b) => a.mtime.compareTo(b.mtime));
 
       var freed = 0;
       // 剩余占用单独记账：不要既递减 total 又累加 freed 再拿两者相减，
-      // 那会把已释放的量扣两次，导致提前 break、淘汰不彻底
-      // （目录仍然超配额 → 后续升频照样写盘失败）。
+      // 那会把已释放的量扣两次，导致提前 break、淘汰不彻底。
       var remaining = total;
-      for (final f in entries) {
+      for (final c in candidates) {
         if (remaining <= quota) break;
-        final len = sizes[f] ?? 0;
         try {
-          await f.delete();
-          freed += len;
-          remaining -= len;
+          await File(c.path).delete();
+          freed += c.size;
+          remaining -= c.size;
         } catch (err) {
-          // 占用中删不掉：跳过，继续淘汰下一个。
-          AppLog.w('ViperUpscaler', '淘汰缓存失败 ${f.path}: $err');
+          // 占用中 / 已被并发删除：跳过，继续淘汰下一个。
+          AppLog.w('ViperUpscaler', '淘汰缓存失败 ${c.path}: $err');
         }
       }
       if (freed > 0) {
@@ -236,12 +256,18 @@ class ViperUpscaler {
     final sw = Stopwatch()..start();
     if (isCancelled?.call() == true) throw const ViperCancelled();
 
+    // 每次调用给中间文件加唯一 token：同一首歌被并发触发两次升频时，
+    // 两次各自独占 decoded/tmpOut，先完成者的 finally 不会删掉另一个
+    // isolate 正在读的文件（旧实现共享固定名，会报 Cannot open file）。
+    // 后缀保持 `.viper48k.wav` / `.part`，以便 isTransientFile 识别为瞬态文件。
+    final token = '${DateTime.now().microsecondsSinceEpoch}_${_tmpSeq++}';
+
     // —— 1) 解码到 48 kHz / 16 bit / 立体声 WAV（落磁盘，不占内存）——
     final exe = ffmpegPath ?? await resolveFfmpeg();
     String? decoded;
     String source = inputPath;
     if (exe != null) {
-      decoded = '$inputPath.viper48k.wav';
+      decoded = '$inputPath.$token.viper48k.wav';
       await _decodeTo48kWav(
         exe,
         inputPath,
@@ -265,7 +291,7 @@ class ViperUpscaler {
       // —— 2) 在独立 isolate 里流式升频并落盘 ——
       // 先写临时文件，成功后再原子改名到目标路径：避免中途取消/崩溃留下
       // 半成品被当成有效缓存命中（播放链路会直接读缓存文件）。
-      final tmpOut = '$outputPath.part';
+      final tmpOut = '$outputPath.$token.part';
       try {
         final res = await _runStreamInIsolate(
           source,
@@ -452,6 +478,18 @@ class ViperUpscaler {
     if (out == null) throw StateError('升频 isolate 未返回结果');
     return out;
   }
+}
+
+/// 缓存配额淘汰的候选条目（路径 / 体积 / 最后修改时间快照）。
+///
+/// 预先快照 size 与 mtime，避免排序/删除阶段再访问文件系统撞到
+/// 已被并发删除的文件。
+class _QuotaEntry {
+  const _QuotaEntry(this.path, this.size, this.mtime);
+
+  final String path;
+  final int size;
+  final DateTime mtime;
 }
 
 /// isolate 侧的升频产物摘要。

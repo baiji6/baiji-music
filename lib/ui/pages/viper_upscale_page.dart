@@ -14,10 +14,15 @@ import 'package:flutter_miuix/miuix.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/kv_store.dart';
 import '../../theme/app_theme.dart';
 import '../../viper/viper_super_resolution.dart';
 import '../../viper/viper_upscaler.dart';
 import '../widgets/app_widgets.dart';
+
+/// 自定义保存位置（KvStore 键）。为 null/空时回落到应用私有目录下的
+/// `viper_upscale` 子目录，与历史版本行为一致。
+const String _kOutputDir = 'viper_upscale_output_dir';
 
 class ViperUpscalePage extends StatefulWidget {
   const ViperUpscalePage({super.key});
@@ -29,6 +34,7 @@ class ViperUpscalePage extends StatefulWidget {
 class _ViperUpscalePageState extends State<ViperUpscalePage> {
   String _inputPath = '';
   String _outputDir = '';
+  String? _defaultDir;
   ViperUpscaleRate _rate = ViperUpscaleRate.khz192;
   bool _tapeEnhance = true;
   bool _busy = false;
@@ -47,10 +53,23 @@ class _ViperUpscalePageState extends State<ViperUpscalePage> {
 
   Future<void> _init() async {
     final exe = await ViperUpscaler.resolveFfmpeg();
-    Directory dir;
+    // 默认保存位置（应用私有目录下的 `viper_upscale`），用于判断当前是否自定义。
+    final defaultDir = await _defaultOutputDir();
+    // 优先用用户上一次选择的自定义保存位置；没有则回落到默认目录。
+    // KvStore 未初始化时不致命：仅回落默认目录。
+    String? saved;
     try {
-      final base = await getApplicationDocumentsDirectory();
-      dir = Directory('${base.path}${Platform.pathSeparator}viper_upscale');
+      saved = KvStore.instance.getString(_kOutputDir);
+    } catch (_) {
+      saved = null;
+    }
+    Directory dir;
+    if (saved != null && saved.isNotEmpty) {
+      dir = Directory(saved);
+    } else {
+      dir = Directory(defaultDir);
+    }
+    try {
       if (!await dir.exists()) await dir.create(recursive: true);
     } catch (_) {
       dir = Directory.systemTemp;
@@ -59,8 +78,86 @@ class _ViperUpscalePageState extends State<ViperUpscalePage> {
     setState(() {
       _ffmpegPath = exe;
       _outputDir = dir.path;
+      _defaultDir = defaultDir;
       _probing = false;
     });
+  }
+
+  /// 默认保存位置（应用私有目录下的 `viper_upscale`）。
+  Future<String> _defaultOutputDir() async {
+    try {
+      final base = await getApplicationDocumentsDirectory();
+      return '${base.path}${Platform.pathSeparator}viper_upscale';
+    } catch (_) {
+      return Directory.systemTemp.path;
+    }
+  }
+
+  /// 选择一个自定义保存目录并持久化。
+  ///
+  /// 选择后立即做写入预检（建目录 + 写一个探针文件再删掉），避免升频跑到
+  /// 一半才发现该目录不可写（Android 11+ 写公共目录需「所有文件访问权限」）。
+  Future<void> _pickOutputDir() async {
+    if (!mounted) return;
+    String? dir;
+    try {
+      dir = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择升频文件保存位置',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('选择目录失败：$e')),
+        );
+      }
+      return;
+    }
+    if (dir == null || dir.isEmpty) return;
+    // 写入预检。
+    try {
+      final d = Directory(dir);
+      if (!await d.exists()) await d.create(recursive: true);
+      final probe = File(
+          '${d.path}${Platform.pathSeparator}.baiji_write_test');
+      await probe.writeAsString('test', flush: true);
+      await probe.delete();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('所选目录不可写（Android 11+ 写公共目录需要'
+                '「所有文件访问权限」）：$dir'),
+          ),
+        );
+      }
+      return;
+    }
+    try {
+      await KvStore.instance.setString(_kOutputDir, dir);
+    } catch (_) {/* KvStore 未初始化时仍使用本次选择 */}
+    final chosen = dir;
+    if (!mounted) return;
+    setState(() => _outputDir = chosen);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('保存位置已设为：$chosen')),
+    );
+  }
+
+  /// 恢复默认保存位置（应用私有目录），并清除持久化选择。
+  Future<void> _resetOutputDir() async {
+    final def = await _defaultOutputDir();
+    try {
+      final d = Directory(def);
+      if (!await d.exists()) await d.create(recursive: true);
+    } catch (_) {}
+    try {
+      await KvStore.instance.remove(_kOutputDir);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _outputDir = def);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已恢复默认保存位置')),
+    );
   }
 
   Future<void> _pickFile() async {
@@ -215,6 +312,24 @@ class _ViperUpscalePageState extends State<ViperUpscalePage> {
                       color: AppColors.accent, size: 22),
                   onClick: _busy ? null : _pickFile,
                 ),
+                const MiuixHorizontalDivider(),
+                MiuixArrowPreference(
+                  title: '保存位置',
+                  summary: _outputDir,
+                  startAction: Icon(Icons.folder_outlined,
+                      color: AppColors.accentAlt, size: 22),
+                  onClick: _busy ? null : _pickOutputDir,
+                ),
+                if (_defaultDir != null && _outputDir != _defaultDir)
+                  const MiuixHorizontalDivider(),
+                if (_defaultDir != null && _outputDir != _defaultDir)
+                  MiuixArrowPreference(
+                    title: '恢复默认保存位置',
+                    summary: _defaultDir,
+                    startAction: Icon(Icons.restore_outlined,
+                        color: AppColors.textTertiary, size: 22),
+                    onClick: _busy ? null : _resetOutputDir,
+                  ),
                 const MiuixHorizontalDivider(),
                 Padding(
                   padding: const EdgeInsets.symmetric(

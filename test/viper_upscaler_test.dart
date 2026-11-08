@@ -582,4 +582,100 @@ void main() {
       expect(await _isValidWavFile(good), isTrue);
     });
   });
+
+  // ==================== v2.5.6：并发升频「引擎异常」回归 ====================
+  // 真机日志：升频完成 267MB 后，紧跟一条「本地升频失败(引擎异常)」，报
+  // `Cannot open file ...xxx.wav.src.viper48k.wav`。根因是解码中间文件
+  // `*.viper48k.wav` 以 .wav 结尾，被配额淘汰当成「已完成产物」删掉；
+  // 且并发升频共用固定中间文件名，先完成者的 finally 删了另一个正在读的文件。
+  group('v2.5.6 并发升频保护', () {
+    group('isTransientFile（瞬态文件分类）', () {
+      test('解码中间文件、写盘半成品、下载源都算瞬态', () {
+        expect(
+          ViperUpscaler.isTransientFile(
+              '/cache/viper/abc.wav.src.123_0.viper48k.wav'),
+          isTrue,
+          reason: '带唯一 token 的解码中间文件必须识别为瞬态');
+        expect(ViperUpscaler.isTransientFile('/cache/viper/abc.wav.9_2.part'),
+            isTrue);
+        expect(ViperUpscaler.isTransientFile('/cache/viper/abc.wav.src'),
+            isTrue);
+      });
+
+      test('最终产物（md5.wav）不是瞬态', () {
+        expect(
+          ViperUpscaler.isTransientFile(
+              '/cache/viper/5edd0fd94ef7e58bcf6f63b8cc0eabb1.wav'),
+          isFalse,
+          reason: '最终产物必须参与配额淘汰，否则缓存无限增长');
+        expect(ViperUpscaler.isTransientFile('/cache/viper/out.wav'), isFalse);
+      });
+
+      test('无关文件不是瞬态也不计入缓存', () {
+        expect(ViperUpscaler.isTransientFile('/cache/viper/readme.txt'), isFalse);
+        expect(ViperUpscaler.isTransientFile('/cache/viper/.baiji_cache'),
+            isFalse);
+      });
+    });
+
+    test('正在写入的解码中间文件 *.viper48k.wav 不被淘汰（引擎异常根因）',
+        () async {
+      final root = Directory.systemTemp.createTempSync('viper_concurrent');
+      final quotaBackup = ViperUpscaler.cacheQuotaBytes;
+      addTearDown(() {
+        CacheManager.debugSetRuntimeRoot(null);
+        ViperUpscaler.cacheQuotaBytes = quotaBackup;
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      CacheManager.debugSetRuntimeRoot(root.path);
+      final vdir = await ViperUpscaler.cacheDir();
+      // 配额压得很低，逼淘汰流程跑起来。
+      ViperUpscaler.cacheQuotaBytes = 50 * 1024;
+      final now = DateTime.now();
+
+      // 一个「刚解码出来、另一个 isolate 正在读」的中间文件（很大，
+      // 旧实现会因为它以 .wav 结尾、且不享受宽限期，直接淘汰掉）。
+      final decoded = File(
+          '$vdir${Platform.pathSeparator}abc.wav.src.111_0.viper48k.wav');
+      await decoded.writeAsBytes(
+          List<int>.filled(400 * 1024, 0),
+          flush: true);
+      // 一个很旧的最终产物：应该被淘汰来腾空间。
+      final old = File('$vdir${Platform.pathSeparator}old_final.wav');
+      await old.writeAsBytes(List<int>.filled(400 * 1024, 0), flush: true);
+      await old.setLastModified(now.subtract(const Duration(days: 2)));
+
+      await ViperUpscaler.enforceCacheQuota();
+
+      expect(decoded.existsSync(), isTrue,
+          reason: '正在写入的 *.viper48k.wav 不能被删，否则并发升频报引擎异常');
+      expect(old.existsSync(), isFalse,
+          reason: '陈旧的最终产物应被淘汰以压回配额');
+    });
+
+    test('陈旧的解码中间文件残留仍会被清理（不泄漏）', () async {
+      final root = Directory.systemTemp.createTempSync('viper_stale');
+      final quotaBackup = ViperUpscaler.cacheQuotaBytes;
+      addTearDown(() {
+        CacheManager.debugSetRuntimeRoot(null);
+        ViperUpscaler.cacheQuotaBytes = quotaBackup;
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      CacheManager.debugSetRuntimeRoot(root.path);
+      final vdir = await ViperUpscaler.cacheDir();
+      ViperUpscaler.cacheQuotaBytes = 50 * 1024;
+
+      final stale = File(
+          '$vdir${Platform.pathSeparator}abc.wav.src.222_0.viper48k.wav');
+      await stale.writeAsBytes(
+          List<int>.filled(400 * 1024, 0),
+          flush: true);
+      await stale.setLastModified(
+          DateTime.now().subtract(const Duration(days: 2)));
+
+      await ViperUpscaler.enforceCacheQuota();
+      expect(stale.existsSync(), isFalse,
+          reason: '超过宽限期的瞬态残留仍应回收');
+    });
+  });
 }
