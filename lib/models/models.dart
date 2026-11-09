@@ -19,6 +19,12 @@ class Source {
   /// 酷狗音乐（v2.5.0 新增平台，抄 HotDownloader）。
   static const String kugou = 'kugou';
 
+  /// 洛雪音源（v2.5.7）：用户自行导入的 JS 取流插件。
+  ///
+  /// 洛雪音源只提供 `musicUrl`（取流），不提供搜索/歌词；搜索仍走原生
+  /// 平台，歌曲被标记成 lx 后由洛雪插件取直链，未登录也能播放。
+  static const String lx = 'lx';
+
   /// 本地文件（扫描本机磁盘得到，不走任何网络接口）。
   static const String local = 'local';
 }
@@ -818,6 +824,12 @@ class Song {
   /// 避免弹层空白。v2.4.9 用于「没有该音质就隐藏」。
   final Set<String> qualityCodes;
 
+  /// 洛雪子源（kw/kg/tx/wy/mg/git），仅 [source] 为 [Source.lx] 时有意义。
+  ///
+  /// 决定用哪个子源向洛雪插件取直链；为空时由 `LxSubSource.fromApp`
+  /// 依据原生平台自动推断。
+  final String lxSource;
+
   const Song({
     required this.mid,
     required this.songId,
@@ -834,6 +846,7 @@ class Song {
     this.localMtime = 0,
     this.format = '',
     this.qualityCodes = const <String>{},
+    this.lxSource = '',
   });
 
   bool get isNetease => source == Source.netease;
@@ -844,21 +857,26 @@ class Song {
   /// 是否酷狗歌曲（v2.5.0）。
   bool get isKugou => source == Source.kugou;
 
-  /// 平台短名（列表角标用）：网易云 / 酷我 / 酷狗 / QQ / 本地。
+  /// 是否走洛雪音源取流（v2.5.7）。
+  bool get isLx => source == Source.lx;
+
+  /// 平台短名（列表角标用）：洛雪 / 网易云 / 酷我 / 酷狗 / QQ / 本地。
   ///
   /// v2.4.0-fix2 之前各页面都写成 `isNetease ? '网易云' : 'QQ'`，
   /// 酷我歌曲会显示成「QQ」。统一走这个 getter。
   String get sourceShort {
     if (isLocal) return '本地';
+    if (isLx) return '洛雪';
     if (isKugou) return '酷狗';
     if (isKuwo) return '酷我';
     if (isNetease) return '网易云';
     return 'QQ';
   }
 
-  /// 平台全名（弹层标题用）：网易云音乐 / 酷我音乐 / 酷狗音乐 / QQ 音乐。
+  /// 平台全名（弹层标题用）：洛雪音源 / 网易云音乐 / 酷我音乐 / 酷狗音乐 / QQ 音乐。
   String get sourceFull {
     if (isLocal) return '本地音乐';
+    if (isLx) return '洛雪音源';
     if (isKugou) return '酷狗音乐';
     if (isKuwo) return '酷我音乐';
     if (isNetease) return '网易云音乐';
@@ -980,6 +998,7 @@ class Song {
                 ?.map((e) => e.toString())
                 .toSet() ??
             const <String>{},
+        lxSource: map['lxSource'] as String? ?? '',
       );
 
   Map<String, dynamic> toJson() => {
@@ -998,6 +1017,7 @@ class Song {
         if (localPath.isNotEmpty) 'localMtime': localMtime,
         if (format.isNotEmpty) 'format': format,
         if (qualityCodes.isNotEmpty) 'qualityCodes': qualityCodes.toList(),
+        if (lxSource.isNotEmpty) 'lxSource': lxSource,
       };
 
   /// 拷贝并覆盖部分字段（本地歌曲刷新元数据时用）。
@@ -1017,6 +1037,7 @@ class Song {
     int? localMtime,
     String? format,
     Set<String>? qualityCodes,
+    String? lxSource,
   }) =>
       Song(
         mid: mid ?? this.mid,
@@ -1034,6 +1055,7 @@ class Song {
         localMtime: localMtime ?? this.localMtime,
         format: format ?? this.format,
         qualityCodes: qualityCodes ?? this.qualityCodes,
+        lxSource: lxSource ?? this.lxSource,
       );
 
   @override

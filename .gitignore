@@ -52,3 +52,8 @@ app.*.map.json
 /android/app/keystore/
 *.jks
 *.keystore
+
+# 洛雪音源测试夹具：用户提供的测试源仅用于本地/集成验证，
+# 按需求「发布时不上传到项目」，不入库、不随 App 资源包分发。
+# 缺失时相关单测会自动跳过（见 test/lx_runtime_test.dart）。
+/test/res/lx_sources/
