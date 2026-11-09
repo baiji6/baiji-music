@@ -57,6 +57,14 @@
 - Apple 端使用系统 JavaScriptCore 执行用户自行导入的脚本；App 不内置任何音源。
 - Android `minSdk` 沿用 `flutter.minSdkVersion`（≥ 21，满足 `flutter_js` 要求）。
 
+### 🛠 构建兼容
+
+- 修复 `flutter_js` 0.8.7 旧 KGP 插件在 AGP 9 下的 Android 构建失败：
+  插件声明 `kotlinOptions.jvmTarget=1.8`，而 AGP 把插件模块 Java target 抬到 11，
+  Kotlin 的 JVM-target 一致性校验直接判 `:flutter_js:compileReleaseKotlin` 失败。
+  现由 `android/gradle.properties` 把该校验降为 warning（本地 / CI 一致），
+  CI 打包时同时把插件目标对齐到 11，彻底消除不一致。
+
 ### 🧪 测试与质量
 
 - 新增 `lx_runtime_test` / `lx_music_api_test` / `lx_update_test` / `source_fallback_test`：

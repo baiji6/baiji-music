@@ -97,6 +97,14 @@ jobs:
           find ~/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
           find /home/runner/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
 
+          # v2.5.7：flutter_js 0.8.7 自身声明 kotlinOptions.jvmTarget=1.8，
+          # 与 AGP 9 抬到 11 的插件 Java target 冲突，KGP 会直接判
+          # :flutter_js:compileReleaseKotlin 失败。这里把插件目标对齐到 11
+          # （与 Java 一致），配合 gradle.properties 的 validation.mode=warning
+          # 双保险；本地无 CI sed 时靠 warning 也能正常出包。
+          find ~/.pub-cache /home/runner/.pub-cache -path "*flutter_js*/android/build.gradle" \
+            -exec sed -i 's/JavaVersion.VERSION_1_8.toString()/JavaVersion.VERSION_11.toString()/g' {} + 2>/dev/null || true
+
       # v2.4.5 首次 Android 失败的实测根因（CI 日志）：:gradle:compileKotlin
       # 解析 kotlinBuildToolsApiClasspath 时下载 kotlin-compiler-embeddable-2.2.21.jar
       # 被 GitHub Releases 返回 504 Gateway Time-out，Flutter 自带的 100ms 单次
