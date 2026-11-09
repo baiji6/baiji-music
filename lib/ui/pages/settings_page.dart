@@ -34,6 +34,7 @@ import '../widgets/info_dialog.dart';
 import '../widgets/lyric_style_sheet.dart';
 import 'kugou_login_page.dart';
 import 'kuwo_login_page.dart';
+import 'lx_source_manage_page.dart';
 import 'qq_login_page.dart';
 import 'netease_login_page.dart';
 
@@ -472,6 +473,26 @@ class _SettingsPageState extends State<SettingsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+            const SectionHeader(title: '音源', icon: Icons.extension_rounded),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                children: [
+                  MiuixArrowPreference(
+                    title: '洛雪音源管理',
+                    summary: '导入 / 检测更新 / 自动更新 JS 音源，未登录也能取流播放',
+                    startAction: const Icon(Icons.extension_rounded,
+                        color: Color(0xFF9B59B6), size: 22),
+                    onClick: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const LxSourceManagePage()),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
             const SectionHeader(title: '账号', icon: Icons.account_circle_outlined),
             GlassCard(
               padding: const EdgeInsets.symmetric(vertical: 4),

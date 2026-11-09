@@ -30,6 +30,8 @@ class PlatformPicker extends StatelessWidget {
         (id: Source.netease, label: '网易云', color: AppColors.accentAlt),
         (id: Source.kuwo, label: '酷我', color: const Color(0xFF3B82F6)),
         (id: Source.kugou, label: '酷狗', color: const Color(0xFF1EC17D)),
+        // 洛雪（v2.5.7）：用户自行导入的 JS 取流音源，未登录也能取流播放。
+        (id: Source.lx, label: '洛雪', color: const Color(0xFF9B59B6)),
       ];
 
   static ({String label, Color color}) infoOf(String source) {

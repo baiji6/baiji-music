@@ -13,6 +13,7 @@ import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/nac/nac_decoder.dart';
 import 'package:baiji_music/network/kuwo/kuwo_link.dart';
 import 'package:baiji_music/network/music_api.dart';
+import 'package:baiji_music/network/source_fallback.dart';
 import 'package:baiji_music/ra360/ra360_decoder.dart';
 import 'package:baiji_music/viper/viper_super_resolution.dart'
     show ViperUpscaleRate;
@@ -827,7 +828,7 @@ class PlayerController {
         return r.url;
       }
       _clearActual();
-      return '';
+      return await _tryFallback(song);
     }
 
     // 酷狗（v2.5.0）：音质降级链在 KugouApi 内部处理，这里只需要带当前
@@ -857,7 +858,20 @@ class PlayerController {
         return r.url;
       }
       _clearActual();
-      return '';
+      return await _tryFallback(song);
+    }
+
+    // 洛雪（v2.5.7）：插件内部已按自己声明的 qualitys 裁剪/降级，原生
+    // 6 档降级链对洛雪没有意义（且会重复请求网关），只取一次即可。
+    if (song.isLx) {
+      final r = await _fetch(song, effectiveQuality, effectiveNeteaseQuality);
+      if (r.isNotEmpty) {
+        _applyActual(r);
+        _reportPlay(song, r);
+        return r.url;
+      }
+      _clearActual();
+      return await _tryFallback(song);
     }
 
     // AC-4 兜底重取时以「实际生效档」为起点；正常取流以偏好为起点
@@ -1031,7 +1045,7 @@ class PlayerController {
     }
 
     _clearActual();
-    return '';
+    return await _tryFallback(song);
   }
 
   /// 广播「实际生效音质 = 臻品 DTS:X」（缓存直通路径没有取流结果可依）。
@@ -1172,6 +1186,33 @@ class PlayerController {
       AppLog.w('PlayerController', '取流异常: $e');
       return PlayUrlResult.empty;
     }
+  }
+
+  /// 整条原生降级链都失败后的「自动切换音源」（v2.5.7）。
+  ///
+  /// 未登录 / 无会员时原生接口常整链返空，这里改用已导入的洛雪 JS 音源
+  /// 补链；洛雪模式失败则回退原生 QQ。成功时通过 [_noticeStream] 提示
+  /// 「已从 X 源补充」。洛雪插件内部的失败切换由 `LxMusicApi.musicUrl`
+  /// 处理，这里只做跨音源的一层兜底。
+  Future<String> _tryFallback(Song song) async {
+    dynamic q;
+    if (song.isKuwo) {
+      q = effectiveKuwoQuality;
+    } else if (song.isKugou) {
+      q = effectiveKugouQuality;
+    } else if (song.isNetease) {
+      q = effectiveNeteaseQuality;
+    } else {
+      q = effectiveQuality;
+    }
+    final out = await SourceFallback.onFailure(song, q);
+    if (out == null || !out.ok) return '';
+    _applyActual(out.result);
+    _reportPlay(song, out.result);
+    if (!_noticeStream.isClosed) {
+      _noticeStream.add('已从 ${out.from} 补充音源');
+    }
+    return out.result.url;
   }
 
   /// 上报播放行为（GUID / 平台 / 歌曲 / 音质 / 播放链接，v2.4.0）。

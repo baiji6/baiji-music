@@ -22,6 +22,8 @@ import 'core/telemetry.dart';
 import 'core/theme_controller.dart';
 import 'core/ui_settings.dart';
 import 'core/update_checker.dart';
+import 'lx/lx_music_api.dart';
+import 'lx/lx_update_checker.dart';
 import 'network/kugou/kugou_auth.dart';
 import 'network/kuwo/kuwo_auth.dart';
 import 'player/player_controller.dart';
@@ -34,6 +36,34 @@ import 'ui/shell.dart';
 import 'ui/widgets/agreement_dialog.dart';
 import 'ui/widgets/app_snackbar.dart';
 import 'ui/widgets/app_widgets.dart' show changelogSheet;
+
+/// 洛雪音源（v2.5.7）：启动时预热 JS 运行时，并在开关开启时按 30 分钟
+/// 节流做一次静默「检测更新 + 自动更新」。全程 fire-and-forget，不阻塞首帧。
+///
+/// 预热还有一个重要作用：把 `LxMusicApi.loadedCount` 填好，使取流失败
+/// 的自动切源热路径不必再做文件系统 / path_provider 平台通道访问。
+Future<void> _prewarmLxSources() async {
+  try {
+    await LxMusicApi.instance.ensureLoaded();
+    final repo = LxMusicApi.instance.repo;
+    final last = await repo.lastCheckAt();
+    if (DateTime.now().millisecondsSinceEpoch - last < 30 * 60 * 1000) return;
+    final global = await repo.globalAutoUpdate();
+    final sources = await repo.all();
+    if (!global && !sources.any((s) => s.autoUpdate)) return;
+    final checker = LxUpdateChecker(
+      repo: repo,
+      onSourcesChanged: () => LxMusicApi.instance.reload(),
+    );
+    final outcomes = await checker.checkAll();
+    final applied = outcomes.where((o) => o.applied).length;
+    if (applied > 0) {
+      AppLog.i('App', '启动时自动更新了 $applied 个洛雪音源');
+    }
+  } catch (e) {
+    AppLog.w('App', '洛雪音源预热/静默检测失败: $e');
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,6 +94,8 @@ Future<void> main() async {
   Telemetry.instance.appStart(AppVersion.current);
   // 设备 GUID：App 启动时就生成好（设置页要展示、上报要用）
   unawaited(DeviceGuid.ensure());
+  // 洛雪音源（v2.5.7）：预热 JS 运行时 + 按开关静默检测/自动更新音源
+  unawaited(_prewarmLxSources());
   // 日志落盘 + 回读当天历史：v2.2.6 起日志不再"每次打开软件就清空"，
   // 闪退后打开日志页能看到崩之前发生了什么。
   await AppLog.instance.initFileSink();

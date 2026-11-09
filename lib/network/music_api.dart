@@ -1,4 +1,5 @@
 import 'package:baiji_music/core/app_logger.dart';
+import 'package:baiji_music/lx/lx_music_api.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_api.dart';
 import 'package:baiji_music/network/kugou/kugou_api.dart';
@@ -23,6 +24,9 @@ class AppServices {
   late final NeteaseClient netease = NeteaseClient();
 
   bool isLoggedIn(String source) {
+    // 洛雪音源由用户导入的 JS 插件取流，不依赖任何平台账号；
+    // 视为「可用」，避免 UI 把洛雪模式误显示成未登录。
+    if (source == Source.lx) return true;
     if (source == Source.kuwo) return KuwoAuth.isLoggedIn;
     if (source == Source.kugou) return KugouAuth.isLoggedIn;
     return source == Source.netease ? netease.isLoggedIn() : qq.isLoggedIn();
@@ -51,13 +55,26 @@ class PlayUrlResult {
   /// 覆盖扩展名（网易云响应里的真实 `type`）；为空时按音质枚举推断。
   final String? _extOverride;
 
-  /// QMCv2 ekey（QQ 加密档位才有；url 已是本地解密中继地址）。
+  /// QMCv2 ekey（QQ 加密档位 / 洛雪源返回的加密直链；url 已是本地解密中继地址）。
   final String ekey;
 
+  /// 洛雪音源实际请求的档位（如 flac / hires），用于 UI 提示「已降级」。
+  final String lxQuality;
+
   const PlayUrlResult._(this.url, this.qq, this.ne,
-      [this._extOverride, this.kuwo, this.ekey = '', this.kugou]);
+      [this._extOverride, this.kuwo, this.ekey = '', this.kugou, this.lxQuality = '']);
 
   static const empty = PlayUrlResult._('', null, null);
+
+  /// 洛雪音源取流结果：无对应平台音质枚举，单独带档位字符串与扩展名。
+  factory PlayUrlResult.lx(
+    String url, {
+    String ext = '',
+    String quality = '',
+    String ekey = '',
+  }) =>
+      PlayUrlResult._(url, null, null, ext.isEmpty ? null : ext, null, ekey,
+          null, quality);
 
   bool get isEmpty => url.isEmpty;
   bool get isNotEmpty => url.isNotEmpty;
@@ -66,7 +83,11 @@ class PlayUrlResult {
   String get ext => _extOverride ?? kuwo?.ext ?? kugou?.ext ?? ne?.ext ?? qq?.ext ?? '.mp3';
 
   /// 音质标签；无则空串。
-  String get label => kuwo?.label ?? kugou?.label ?? qq?.label ?? ne?.label ?? '';
+  String get label => kuwo?.label ??
+      kugou?.label ??
+      qq?.label ??
+      ne?.label ??
+      (lxQuality.isEmpty ? '' : '洛雪 $lxQuality');
 
   @override
   String toString() => 'PlayUrlResult($label)';
@@ -102,6 +123,16 @@ class MusicApi {
     }
     if (source == Source.kugou) {
       return searchKugou(keyword, page: page, num: num);
+    }
+    if (source == Source.lx) {
+      // 洛雪音源只提供 musicUrl（取流），不提供搜索：搜索仍走原生 QQ
+      // （免登录），结果改标为 lx 并带上默认子源，播放时由洛雪插件取链。
+      // 这正是「未登录平台账号也能用洛雪音源取流播放」的入口。
+      final list = await AppServices.instance.qq.search
+          .searchByType(keyword, page: page, num: num);
+      return list
+          .map((s) => s.copyWith(source: Source.lx, lxSource: LxSubSource.tx))
+          .toList();
     }
     return AppServices.instance.qq.search.searchByType(keyword,
         page: page, num: num);
@@ -179,7 +210,9 @@ class MusicApi {
   /// 歌曲级标记），成功后返回带 qualityCodes 的新 Song；失败静默返回原
   /// 对象，UI 仍回退全量，不会比现在更差。仅在打开音质弹层时调用。
   static Future<Song> ensureQualityCodes(Song song) async {
-    if (song.isLocal || song.qualityCodes.isNotEmpty) return song;
+    // 洛雪歌曲的档位由插件 `inited.sources[].qualitys` 声明，不属于任何
+    // 原生平台的音质标记体系，无需（也无法）查原生详情接口。
+    if (song.isLocal || song.isLx || song.qualityCodes.isNotEmpty) return song;
     final key = '${song.source}:${song.mid}';
     final cached = _qualityCache[key];
     if (cached != null && cached.isNotEmpty) {
@@ -254,6 +287,16 @@ class MusicApi {
   static Future<PlayUrlResult> playUrlInfo(
     Song song, Quality qqQuality, NeteaseQuality neQuality,
     {KuwoQuality? kuwoQuality, KugouQuality? kugouQuality}) async {
+    if (song.isLx) {
+      final r = await LxMusicApi.instance.musicUrlForSong(song, qqQuality);
+      if (!r.ok) return PlayUrlResult.empty;
+      // 部分洛雪源返回 mflac/mgg + ekey：复用 QQ/酷我同一条本地 QMC
+      // 流式解密中继；明文直链则原样返回。
+      final url = await LxMusicApi.resolveEncrypted(r.url, r.ekey, r.format);
+      AppLog.d('MusicApi', '洛雪源 ${r.pluginName} 取链成功（${r.quality}）');
+      return PlayUrlResult.lx(url,
+          ext: lxExt(r.format, r.url), quality: r.quality, ekey: r.ekey);
+    }
     if (song.isKugou) {
       final r = await KugouApi.playUrlWithFallback(
         song.mid, song.name, song.singer,
@@ -315,6 +358,19 @@ class MusicApi {
           'QQ 加密档位 ${actual.code} 走本地解密中继（ekey ${ekey.length} 字符）');
     }
     return PlayUrlResult._(playUrl, actual, null, null, null, ekey);
+  }
+
+  /// 洛雪源返回格式 → 落盘扩展名（带点）。`format` 可能是 mflac / mgg /
+  /// flac / mp3，也可能为空，此时从直链文件名兜底。
+  static String lxExt(String format, String url) {
+    final f = format.toLowerCase();
+    if (f.contains('flac')) return '.flac';
+    if (f.contains('mgg') || f.contains('ogg')) return '.ogg';
+    if (f.contains('mp3')) return '.mp3';
+    if (f.contains('m4a') || f.contains('aac')) return '.m4a';
+    final m = RegExp(r'\.([a-zA-Z0-9]+)(?:\?|$)').firstMatch(url);
+    final e = m?.group(1)?.toLowerCase();
+    return e != null ? '.$e' : '.mp3';
   }
 
   /// QQ 音质降级链：[from] 起向下最多 6 档，并保证末档兜底到 MP3 128。
