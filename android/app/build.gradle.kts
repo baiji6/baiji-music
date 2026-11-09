@@ -108,6 +108,8 @@ android {
 
     defaultConfig {
         applicationId = "com.baiji.baiji_music"
+        // v2.5.7：flutter_js（内置 QuickJS）要求 minSdk >= 21。当前 Flutter
+        // 的 flutter.minSdkVersion 已满足，不额外抬高以免无谓缩小机型覆盖。
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

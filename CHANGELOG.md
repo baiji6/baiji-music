@@ -6,6 +6,64 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.7-pre1
+
+> 预发布版（tag `v2.5.7-pre1`，GitHub Pre-release）。洛雪音源是**用户自行导入**的 JS 插件，
+> App 本体不内置、不分发任何音源脚本。
+
+### 🎵 完整支持洛雪音乐（LX Music）音源
+
+- **JS 运行时宿主**：新增 `flutter_js`（Android / Windows / Linux 走 QuickJS，Apple 走 JavaScriptCore），
+  以 Dart 忠实复刻洛雪插件契约 `globalThis.lx`：`on` / `send` / `request` / `EVENT_NAMES` /
+  `env` / `version`，并补齐 QuickJS 缺失的 `TextEncoder` / `TextDecoder` / `Buffer` polyfill
+  （含 UTF-8 多字节正确解码，避免中文歌名乱码）。
+- **异步请求桥**：`lx.request` 经消息通道交给 Dio 发请求，HTTP 完成后回写 JS 回调并冲刷
+  QuickJS 事件循环；全程不在 `evaluate` 内等待 JS Promise，规避运行时重入。
+- **同步加密桥**：`utils.crypto` 的 md5 / sha1 / sha256 / HMAC / AES(ECB/CBC + PKCS7) /
+  randomBytes 同步委托给 Dart `crypto` / `pointycastle`，用已知向量锁定正确性，
+  避免手写 JS 哈希出错或 QuickJS 不支持 BigInt 字面量。
+- **未登录也能取流播放**：搜索仍走原生平台，歌曲切到「洛雪」后由已导入插件取直链；
+  洛雪音质档位（`128k / 320k / flac / flac24bit / hires / atmos / atmos_plus / master`）
+  按插件 `inited.sources[].qualitys` 声明自动裁剪 / 降级。
+- **mflac / mgg + ekey 流式解密**：插件返回 ekey 时复用现有 `QmcRelayServer` 本地中继，
+  与 QQ / 酷我加密档同一条边下边播通道。
+
+### 🔁 取链失败自动切换音源
+
+- 原生平台整条降级链都取不到链（未登录 / 无会员 / 无版权）时，自动改用洛雪音源补链；
+  洛雪模式下插件全部失效时回退原生 QQ。播放页提示「已从 X 源补充」。
+- 洛雪插件内部某个取链失败会自动切到下一个声明支持该子源的插件。
+- 设置页可关闭「取链失败自动切换音源」。
+
+### 🧩 音源管理：检测更新 + 自动更新
+
+- **导入**：从本地 `.js` 文件（多选）或在线链接导入；URL 导入时该链接同时作为更新地址，
+  文件导入可读取脚本头 `@updateURL` 或手动填写。脚本存应用私有目录，元数据存 `sources.json`。
+- **检测更新**：抓取更新地址、解析新脚本 `@version`，用与 App 更新检查同规则的
+  `SourceVersion.compare` 比较（兼容 `v27` / `261107` / `2.3.6` / `-fixN` 等版本号）。
+- **自动更新**：全局开关 + 单源开关；检测到新版本即下载替换脚本、刷新版本号并重载 JS 运行时，
+  UI 角标显示「vX → vY」/「已自动更新到 vY」。App 启动后按 30 分钟节流静默检测一次。
+- 每个源可单独启用 / 停用、编辑更新地址、删除；导入时给出脚本安全提示。
+
+### 🔬 音源测试页
+
+对每个原生平台跑「搜索 + 取流」探针、对每个已启用插件声明的子源跑「取流」探针，
+展示耗时 / 成功失败 / 示例直链，失败原因如实显示，便于判断该换哪个音源。
+
+### 📦 发布合规
+
+- 用户提供的 4 个测试音源**不随工程 / App 分发**：夹具目录加入 `.gitignore`，
+  缺失时相关单测自动跳过，CI / 发布 checkout 的全量测试仍全绿。
+- Apple 端使用系统 JavaScriptCore 执行用户自行导入的脚本；App 不内置任何音源。
+- Android `minSdk` 沿用 `flutter.minSdkVersion`（≥ 21，满足 `flutter_js` 要求）。
+
+### 🧪 测试与质量
+
+- 新增 `lx_runtime_test` / `lx_music_api_test` / `lx_update_test` / `source_fallback_test`：
+  真实音源加载与 `inited` 声明、异步请求桥取链、加密已知向量、Buffer / UTF-8 polyfill、
+  版本比较、仓库 CRUD、检测 / 自动更新、插件间自动切换、双向兜底、ekey 中继。
+- `flutter analyze --no-pub`：No issues found；全量 `flutter test --no-pub`：**1201 项通过**。
+
 ## 2.5.6
 
 ### 📂 工具箱「本地升频 · 蝰蛇母带」支持自定义保存位置

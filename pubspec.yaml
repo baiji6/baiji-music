@@ -2,7 +2,7 @@ name: baiji_music
 description: "白姬音乐 - 跨平台音乐播放客户端（iOS / macOS / Windows / Linux / Android / HarmonyOS）"
 publish_to: 'none'
 
-version: 2.5.6+29
+version: 2.5.7-pre1+30
 
 environment:
   sdk: ^3.13.5
@@ -72,6 +72,9 @@ dependencies:
   # MV 播放页（v2.4.3）：Android 自动播放手势开关在平台包上，
   # 直接 import 其 API，按 lint 要求显式声明（版本随 webview_flutter）。
   webview_flutter_android: ^4.14.1
+  # 洛雪音源 JS 运行时宿主：Android/Win/Linux=QuickJS，Apple=JSCore，统一
+  # JavascriptRuntime API。用于加载并运行用户导入的洛雪音源插件（v2.5.7）。
+  flutter_js: ^0.8.0
 
 dependency_overrides:
   # AC-4 解码：官方 media_kit_libs_android_audio 1.3.8 的 ffmpeg 是白名单编译，
