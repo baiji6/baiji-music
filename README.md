@@ -8,6 +8,22 @@ UI 采用暗色玻璃拟态 + 霓虹渐变的现代化未来感设计，构建�
 
 ---
 
+## v2.5.7-pre3 更新速览（预发布）
+
+> 按 LX-X 环境完整支持所有洛雪音源；修复纯洛雪模式取流与音源测试；
+> **Android / Linux / Windows 升级到 QuickJS 2024-01-13**，解决 `molan.js`
+> 等现代语法音源无法加载的问题；iOS / macOS 保留系统 JavaScriptCore。
+> 洛雪音源仍由用户自行导入，不内置 / 不分发。
+
+| 能力 / 修复 | 说明 |
+| --- | --- |
+| ⚙️ **双引擎 JS 运行时** | `flutter_js 0.8.7` 内置 QuickJS 2020/2021 无法解析现代语法（`molan.js` → `SyntaxError`）。Android / Linux / Windows 换成 `quickjs_runtime` 的 QuickJS 2024-01-13（Native Assets 六端自编译）；Apple 保留系统 JSCore 以满足 App Store 3.3.2。新增 `LxJsEngine` 抽象层，宿主脚本零改动 |
+| 🧩 **对齐 LX-X 宿主契约** | 以 `user-api-preload.js` 为金标准：`env=mobile` / `version=2.0.0` / `currentScriptInfo.rawScript` / `send(inited)` 规范化 / 三参 `lx.request` + abort / 定时器 / `form` `formData` `binary` / `md5(encodeURIComponent)` / `aesEncrypt` / `rsaEncrypt` / `global` `process` `require` `atob` `fetch` 等 polyfill |
+| 🎯 **标准 `musicInfo` 主键** | 网易云 / 酷我用 `id`，QQ 音乐用 `mid`，酷狗用 `hash`。`Song` 新增 `hash` 并持久化酷狗真 `FileHash`（此前 `mid` 是 `albumAudioId`，导致 `ikun` / `baimusic` 取错主键） |
+| 🐛 **rawScript 同步 getter** | 空字符串会被 `jsonDecode('')` 打断脚本，改为合法 JSON；HTTP 桥补齐 `form` / `formData` / `binary` / `statusMessage`；加载失败经 `loadErrors` 可见化 |
+| 🔬 **音源测试页重做** | 只按插件声明生成探针、子源与平台强制匹配、样本搜索失败如实报错、结果用标准 `musicInfo`，去掉假 mid 与笛卡尔积 |
+| 🧪 **测试** | 新增 17 项双引擎契约测试；`flutter analyze` 零问题，全量 **1256 项**（8 项 Apple 引擎按环境跳过） |
+
 ## v2.5.7-pre2 更新速览（预发布）
 
 > 修复「用洛雪音源取流播放失败」；音源测试页改为**只测洛雪**并支持四维细分测试；

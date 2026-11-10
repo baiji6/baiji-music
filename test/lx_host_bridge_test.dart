@@ -120,4 +120,102 @@ void main() {
       expect(resp.headers['x-env'], 'test');
     });
   });
+
+  // v2.5.7-pre3：LX-X preload 的 request options 超集（form/formData/binary）
+  // 与响应 statusMessage。这些是标准音源常用的能力，缺失会静默取链失败。
+  group('LxDioHttpClient LX-X options（v2.5.7-pre3）', () {
+    test('encodeForm：Map → urlencoded；String 原样；特殊字符被编码', () {
+      expect(LxDioHttpClient.encodeForm({'a': '1', 'b': '2'}), 'a=1&b=2');
+      expect(LxDioHttpClient.encodeForm('raw=1&x=2'), 'raw=1&x=2');
+      expect(LxDioHttpClient.encodeForm({'n': null}), 'n=');
+      final enc = LxDioHttpClient.encodeForm({'q': '白 姬&x'});
+      expect(enc, isNot(contains(' ')), reason: '空格必须被编码');
+      expect(enc, isNot(contains('姬')), reason: '中文必须百分号编码');
+      expect(enc, contains('%26'), reason: '& 不得作为参数分隔符裸露');
+    });
+
+    test('form 选项：urlencoded 编码 + 自动补 content-type', () async {
+      late RequestOptions captured;
+      final dio = Dio();
+      dio.httpClientAdapter = _StubAdapter((options) async {
+        captured = options;
+        return ResponseBody.fromString('ok', 200);
+      });
+      await LxDioHttpClient(dio: dio).call(LxHttpRequest(
+        url: 'https://example/gateway',
+        opts: {
+          'method': 'POST',
+          'form': {'source': 'tx', 'id': '001'},
+        },
+      ));
+      expect(captured.data, 'source=tx&id=001');
+      final ct = captured.headers.entries
+          .firstWhere((e) => e.key.toLowerCase() == 'content-type')
+          .value;
+      expect(ct, 'application/x-www-form-urlencoded');
+    });
+
+    test('formData 选项：Map → FormData', () async {
+      late RequestOptions captured;
+      final dio = Dio();
+      dio.httpClientAdapter = _StubAdapter((options) async {
+        captured = options;
+        return ResponseBody.fromString('ok', 200);
+      });
+      await LxDioHttpClient(dio: dio).call(LxHttpRequest(
+        url: 'https://example/upload',
+        opts: {
+          'method': 'POST',
+          'formData': {'file': 'abc', 'k': 'v'},
+        },
+      ));
+      expect(captured.data, isA<FormData>());
+      final fd = captured.data as FormData;
+      expect(fd.fields.map((e) => e.key),
+          containsAll(<String>['file', 'k']));
+    });
+
+    test('binary 选项：响应按字节返回 base64，statusMessage / headers 回填',
+        () async {
+      final bytes = <int>[0, 1, 2, 253, 254, 255];
+      final dio = Dio();
+      dio.httpClientAdapter = _StubAdapter((options) async {
+        expect(options.responseType, ResponseType.bytes);
+        return ResponseBody.fromBytes(
+          bytes,
+          206,
+          statusMessage: 'Partial Content',
+          headers: {
+            'content-type': ['application/octet-stream'],
+            'x-multi': ['first', 'second'],
+          },
+        );
+      });
+      final resp = await LxDioHttpClient(dio: dio).call(LxHttpRequest(
+        url: 'https://example/audio',
+        opts: {'method': 'GET', 'binary': true},
+      ));
+      expect(resp.binary, isTrue);
+      expect(resp.body, base64Encode(bytes));
+      expect(resp.statusCode, 206);
+      expect(resp.statusMessage, 'Partial Content');
+      expect(resp.headers['content-type'], 'application/octet-stream');
+      expect(resp.headers['x-multi'], 'first',
+          reason: '多值 header 取第一个');
+    });
+
+    test('timeout 被 clamp 到 [1, 60000] ms', () async {
+      late RequestOptions captured;
+      final dio = Dio();
+      dio.httpClientAdapter = _StubAdapter((options) async {
+        captured = options;
+        return ResponseBody.fromString('ok', 200);
+      });
+      await LxDioHttpClient(dio: dio).call(LxHttpRequest(
+        url: 'https://example/t',
+        opts: {'method': 'GET', 'timeout': 999999},
+      ));
+      expect(captured.connectTimeout, const Duration(milliseconds: 60000));
+    });
+  });
 }

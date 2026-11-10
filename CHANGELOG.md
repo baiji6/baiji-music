@@ -6,6 +6,64 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.7-pre3
+
+> 预发布版（tag `v2.5.7-pre3`，GitHub Pre-release）。洛雪音源仍由**用户自行导入**，
+> App 本体不内置、不分发任何音源脚本。
+
+### ⚙️ JS 引擎升级：QuickJS 2024-01-13 + 双引擎
+
+- **根因**：`flutter_js 0.8.7` 内置的是 QuickJS 2020-11-08 / 2021-03-27，
+  `molan.js`（墨澜聚合音源）等使用现代语法的音源会直接
+  `SyntaxError: expecting ';'`，而 LX-X 用较新 QuickJS 且不做转译，能正常运行。
+- **Android / Linux / Windows** 改用 `quickjs_runtime 0.4.9` 自带的
+  **QuickJS 2024-01-13**（pure-Dart FFI + Native Assets 六端自编译；Windows 有
+  MSVC 兼容 shim、Android 有 16KB 页对齐、Apple 有 `@rpath`）。实测 `molan.js`
+  已能完整加载并声明 kw / kg / tx / wy / mg 五个子源与 128k ~ master 全部音质档位。
+- **iOS / macOS 保留系统 JavaScriptCore**（`flutter_js`），满足 App Store 3.3.2
+  「第三方脚本须由 WebKit / JavaScriptCore 解释执行」的要求。
+- 新增 `LxJsEngine` 抽象层与两个 adapter，`LxRuntime` 改为引擎无关。通过注册
+  同名全局 `sendMessage` host function，宿主引导脚本**零改动**即可在两套引擎上
+  运行；13 个通道、同步返回值、Promise / `lx_result` 闭环行为完全一致。
+
+### 🧩 按 LX-X 环境完整支持所有洛雪音源（修复纯洛雪取流）
+
+- 以 LX-X 的 `user-api-preload.js` 为金标准重写宿主契约：
+  `env=mobile` / `version=2.0.0` / `currentScriptInfo`（含 `rawScript`）/
+  `EVENT_NAMES` / `on` `send` 返回 Promise / `send(inited)` 规范化 `sources` /
+  `lx.request` 三参回调 `(err, resp, body)` 并返回 abort 函数 /
+  `setTimeout` `clearTimeout` `setInterval` / `form` `formData` `binary` /
+  `utils.crypto.md5(encodeURIComponent)` / `aesEncrypt` 双签名 /
+  `rsaEncrypt`（`RSA/ECB/NoPadding`）/ `global` `process` `require` `atob`
+  `btoa` `crypto` `performance` `fetch` 等全局 polyfill。
+- **标准 `musicInfo` 字段按平台区分**：网易云 / 酷我用 `id`，QQ 音乐用
+  `songmid` / `mid`，酷狗用 `hash`。此前酷狗 `Song.mid` 存的是 `albumAudioId`
+  而非 `FileHash`，导致 `ikun` / `baimusic` 等音源取错主键；现给 `Song` 增加
+  `hash` 字段，并在酷狗搜索映射时持久化真 `FileHash`。
+- 修复 `lx.currentScriptInfo.rawScript` 同步 getter：此前传给通道的空字符串会被
+  `jsonDecode('')` 打断脚本，改为合法 JSON。
+- HTTP 桥支持 `form` / `formData` / `binary` 响应、`statusMessage`、headers、
+  `timeout` clamp、`follow_max`，并显式编码 `Map` / `List` body。
+- **加载失败不再静默吞**：新增 `LxMusicApi.loadErrors`，音源测试页如实展示
+  「脚本加载失败 / 未声明 inited」。
+
+### 🔬 音源测试页重做
+
+- 只按插件 `inited.sources` 声明生成探针，且**子源与样本平台强制匹配**
+  （tx↔QQ、wy↔网易云、kw↔酷我、kg↔酷狗）；去掉「所有子源 × 所有平台」
+  笛卡尔积与固定假 mid 打真实网关的做法。
+- 样本搜索失败如实返回失败，不再用假 mid 冒充结果；结果改用
+  `LxMusicApi.musicInfoOf(song, sub)` 构造标准 `musicInfo`。
+
+### 🧪 测试与发布合规
+
+- 新增双引擎契约测试（17 项）：13 通道、同步返回值、`rawScript` 大字符串、
+  `lx_result` 闭环、定时器、错误判定、`molan.js` 端到端加载。
+- `flutter analyze` 零问题，全量 **1256 项**（其中 8 项 Apple 引擎在本机
+  无 flutter_js 原生库时按环境自动跳过）。
+- 用户提供的测试音源不入库、不进 App 资源包、不随 Release 分发；
+  夹具缺失时相关测试自动跳过。
+
 ## 2.5.7-pre2
 
 > 预发布版（tag `v2.5.7-pre2`，GitHub Pre-release）。洛雪音源仍由**用户自行导入**，

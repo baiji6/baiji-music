@@ -33,6 +33,24 @@ send(EVENT_NAMES.inited, { status: true, sources: {
 on(EVENT_NAMES.request, async () => { throw new Error('boom') })
 ''';
 
+// 语法错误：加载即抛异常，用于验证「加载失败不再被静默吞」。
+const String _pluginBroken = '''
+// ==UserScript==
+// @name 坏音源
+// @version 0.0.1
+// ==/UserScript==
+const broken = ;
+''';
+
+// 正常加载但从不 send(inited)：模拟宿主环境不兼容的音源。
+const String _pluginNoInited = '''
+// ==UserScript==
+// @name 无声明音源
+// @version 0.0.2
+// ==/UserScript==
+globalThis.__lx_probe_no_inited = 1;
+''';
+
 void main() {
   group('LxQuality 音质映射 / 裁剪', () {
     test('App 各平台音质对象 → 洛雪档位', () {
@@ -162,25 +180,67 @@ void main() {
           .ok, isFalse);
     });
 
-    test('musicInfo 同时给出 songmid / hash / 基本信息', () {
-      final m = LxMusicApi.musicInfoOf(
-        Song(
-          mid: 'mid1',
-          songId: 99,
-          name: '歌名',
-          singer: '歌手',
-          album: '专辑',
-          albumMid: '',
-          duration: 123000,
-          cover: '',
-        ),
-        'kg',
-      );
-      expect(m['songmid'], 'mid1');
-      expect(m['hash'], 'mid1');
-      expect(m['songId'], 99);
-      expect(m['source'], 'kg');
-      expect(m['name'], '歌名');
+    test('musicInfo 按 LX-X 标准构造，主键字段按平台区分', () {
+      Song song({
+        String mid = 'mid1',
+        int songId = 99,
+        String source = Source.qq,
+        String hash = '',
+      }) =>
+          Song(
+            mid: mid,
+            songId: songId,
+            name: '歌名',
+            singer: '歌手',
+            album: '专辑',
+            albumMid: 'ALBUM_MID',
+            duration: 123000,
+            cover: '',
+            source: source,
+            hash: hash,
+          );
+
+      // QQ：用 mid（songmid）。hash 必须为空，否则 ikun 的
+      // `hash ?? songmid` 会优先取到一个错误值导致取链失败。
+      final tx = LxMusicApi.musicInfoOf(song(), LxSubSource.tx);
+      expect(tx['songmid'], 'mid1');
+      expect(tx['id'], 'mid1');
+      expect(tx['hash'], '');
+      expect(tx['strMediaMid'], 'mid1');
+      expect(tx['source'], 'tx');
+      expect(tx['name'], '歌名');
+      expect(tx['interval'], '2:03');
+      expect(tx['albumName'], '专辑');
+      expect(tx['songId'], 99);
+      expect(tx['meta'], isA<Map>());
+      expect((tx['types'] as List), isNotEmpty);
+      expect(tx['_types'], isA<Map>());
+
+      // 网易云：用 id（mid 形如 ne$id）。
+      final wy = LxMusicApi.musicInfoOf(
+          song(mid: 'ne12345', songId: 12345, source: Source.netease),
+          LxSubSource.wy);
+      expect(wy['id'], '12345');
+      expect(wy['songmid'], '12345');
+      expect(wy['hash'], '');
+
+      // 酷我：用 id（rid）。
+      final kw = LxMusicApi.musicInfoOf(
+          song(mid: '1234567', source: Source.kuwo), LxSubSource.kw);
+      expect(kw['id'], '1234567');
+      expect(kw['songmid'], '1234567');
+      expect(kw['hash'], '');
+
+      // 酷狗：用真 FileHash，而不是 albumAudioId（Song.mid）。
+      final kg = LxMusicApi.musicInfoOf(
+          song(
+              mid: 'ALBUM_AUDIO_ID',
+              source: Source.kugou,
+              hash: 'REAL_FILE_HASH'),
+          LxSubSource.kg);
+      expect(kg['hash'], 'REAL_FILE_HASH');
+      expect((kg['meta'] as Map)['hash'], 'REAL_FILE_HASH');
+      expect(kg['songmid'], 'ALBUM_AUDIO_ID');
     });
 
     test('无 ekey 时不走中继，带 ekey 时换成本地解密地址', () async {
@@ -281,6 +341,52 @@ void main() {
       expect(missing.ok, isFalse);
       expect(missing.reason, LxFailReason.pluginsNotLoaded);
       expect(missing.error, contains('not-exist'));
+    });
+
+    test('不兼容音源加载失败可见化（loadErrors），不再静默吞', () async {
+      repo = await makeRepo([_pluginBroken, _pluginNoInited, _pluginOk]);
+      api = LxMusicApi(repo: repo);
+      await api.ensureLoaded();
+
+      final errs = api.loadErrors;
+      expect(errs.containsKey('坏音源'), isTrue,
+          reason: '语法错误音源应记录加载失败');
+      expect(errs['坏音源'], isNotEmpty);
+      expect(errs.containsKey('无声明音源'), isTrue,
+          reason: '加载成功但未声明 inited 也应提示');
+      expect(errs['无声明音源'], contains('inited'));
+      expect(errs.containsKey('测试插件A'), isFalse,
+          reason: '正常音源不应出现在错误表');
+      // 坏音源未进入运行时池；另外两个加载成功。
+      expect(api.loadedCount, 2);
+    });
+
+    test('musicInfo interval 边界与 meta 结构固化', () {
+      final s = Song(
+        mid: '001X',
+        songId: 5,
+        name: 'N',
+        singer: 'S',
+        album: 'A',
+        albumMid: 'AM',
+        duration: 0,
+        cover: '',
+        source: Source.qq,
+      );
+      final m = LxMusicApi.musicInfoOf(s, LxSubSource.tx);
+      expect(m['interval'], '');
+      expect(m['typeUrl'], isA<Map>());
+      expect((m['typeUrl'] as Map).isEmpty, isTrue);
+      expect(m['strMediaMid'], '001X');
+      expect(m['album'], 'A');
+      expect(m['albumId'], 'AM');
+      final meta = m['meta'] as Map;
+      expect(meta['songId'], 5);
+      expect(meta['songmid'], '001X');
+      expect(meta['strMediaMid'], '001X');
+      expect(meta['hash'], '');
+      expect(meta['qualitys'], isA<List>());
+      expect(meta['_qualitys'], isA<Map>());
     });
   });
 

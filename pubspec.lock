@@ -288,6 +288,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.3"
+  glob:
+    dependency: transitive
+    description:
+      name: glob
+      sha256: "218aeb56050c714f62a3182775320dfa04602b55074873e24e31bbd39bda96fb"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.2.0"
   hooks:
     dependency: transitive
     description:
@@ -487,6 +495,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.0"
+  native_synchronization:
+    dependency: transitive
+    description:
+      name: native_synchronization
+      sha256: "047fa3665d611e178edc167e56166714f125750f064d20216892f1cca69d9d1d"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.1"
+  native_toolchain_c:
+    dependency: transitive
+    description:
+      name: native_toolchain_c
+      sha256: f9c168717100ae6d9fee9ffb0be379bf1f8b26b0f6bcbd4fdddcd931993a6a72
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.19.2"
   objective_c:
     dependency: transitive
     description:
@@ -687,6 +711,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.1.0"
+  quickjs_runtime:
+    dependency: "direct main"
+    description:
+      name: quickjs_runtime
+      sha256: "231e4688362dabe47849b795d57f4071f34c61fc1db477dbc2f0813dbfd96072"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.4.9"
   record_use:
     dependency: transitive
     description:

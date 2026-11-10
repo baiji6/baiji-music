@@ -1,5 +1,6 @@
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/models/models.dart';
+import 'package:baiji_music/network/kugou/kugou_api.dart';
 import 'package:baiji_music/network/kuwo/qmc_stream.dart';
 
 import 'lx_host_bridge.dart';
@@ -313,6 +314,16 @@ class LxMusicApi {
   final Map<String, _LoadedPlugin> _plugins = <String, _LoadedPlugin>{};
   bool _loading = false;
 
+  /// 最近一次加载失败的音源（v2.5.7-pre3）：`音源名 -> 失败原因`。
+  ///
+  /// 之前 `ensureLoaded()` 只写日志、静默跳过，用户导入了不兼容的音源
+  /// （如使用当前 QuickJS 不支持的 ES2022 语法）却完全看不到提示，表现为
+  /// 「纯洛雪模式莫名其妙取不了流」。这里把错误暴露给音源管理页。
+  final Map<String, String> _loadErrors = <String, String>{};
+
+  /// 加载失败明细（只读）。
+  Map<String, String> get loadErrors => Map<String, String>.unmodifiable(_loadErrors);
+
   LxSourceRepo get repo => _repo ??= LxSourceRepo();
 
   /// 注入仓库（测试 / App 启动时调用），并清掉旧的运行时。
@@ -373,17 +384,31 @@ class LxMusicApi {
   Future<void> ensureLoaded() async {
     if (_plugins.isNotEmpty || _loading) return;
     _loading = true;
+    _loadErrors.clear();
     try {
       final sources = await repo.enabled();
       for (final s in sources) {
+        LxRuntime? rt;
         try {
           final script = await repo.readScript(s);
-          final rt = LxRuntime(http: LxDioHttpClient().call);
-          rt.loadScript(script);
+          rt = LxRuntime(http: LxDioHttpClient().call);
+          rt.loadScript(script, scriptInfo: <String, dynamic>{
+            'name': s.name,
+            'version': s.version,
+            'author': s.author,
+            'homepage': s.homepage,
+            'description': s.description,
+          });
           _plugins[s.id] = _LoadedPlugin(s, rt);
+          if (rt.inited == null) {
+            _loadErrors[s.name] = '脚本未声明 inited（宿主环境可能不兼容）';
+            AppLog.w('LxMusicApi', '音源 ${s.name} 未声明 inited');
+          }
           AppLog.d('LxMusicApi',
               '已加载音源 ${s.name} ${s.version}，声明子源 ${rt.inited?['sources']?.toString() ?? '{}'}');
         } catch (e) {
+          rt?.close();
+          _loadErrors[s.name] = e.toString();
           AppLog.w('LxMusicApi', '音源 ${s.name} 加载失败: $e');
         }
       }
@@ -499,22 +524,117 @@ class LxMusicApi {
     );
   }
 
-  /// 把 App 的 [Song] 转成洛雪源脚本期望的 `musicInfo`。
+  /// 把 App 的 [Song] 转成洛雪源脚本期望的标准 `musicInfo`。
   ///
-  /// 不同子源看不同字段：`songmid`（QQ/网易/酷我）、`hash`（酷狗）；
-  /// 两者都给，网关源或直连源可各取所需，其余字段用于兜底匹配。
-  static Map<String, dynamic> musicInfoOf(Song song, String subSource) =>
-      <String, dynamic>{
-        'songmid': song.mid,
-        'hash': song.mid,
-        'id': song.songId,
-        'songId': song.songId,
-        'name': song.name,
-        'singer': song.singer,
-        'album': song.album,
-        'source': subSource,
-        'duration': song.duration,
-      };
+  /// 对齐 LX-X `src/types/music.d.ts` 与 `musicSdk/*/musicInfo.js`：顶层含
+  /// `id / name / singer / source / interval / meta`，tx 带 `songmid /
+  /// strMediaMid / albumMid`，kg 带 `hash`。用户规则：网易云 / 酷我用 `id`，
+  /// QQ 用 `mid`（即 `songmid`），酷狗用 `hash`。
+  ///
+  /// 兼容性要点：不同音源读的字段并不统一（baimusic 读 `songmid`、ikun 读
+  /// `hash ?? songmid`），所以**所有候选字段都填上正确值**；且非酷狗平台
+  /// `hash` 必须为空，否则 ikun 会优先取到一个错误的 hash 直接取链失败。
+  static Map<String, dynamic> musicInfoOf(Song song, String subSource) {
+    final isKg = subSource == LxSubSource.kg || song.isKugou;
+    final isTx = subSource == LxSubSource.tx;
+    final isWy = subSource == LxSubSource.wy || song.isNetease;
+
+    // 网易 mid 形如 `ne$id`，去掉前缀才是真正的数字 song id。
+    final numericId = song.songId > 0
+        ? song.songId.toString()
+        : (isWy && song.mid.startsWith('ne')
+            ? song.mid.substring(2)
+            : song.mid);
+    // 网易 / 酷我以 id 为主键；QQ / 酷狗以 mid / albumAudioId 为主键。
+    final primaryId = isWy ? numericId : song.mid;
+    final songIdValue = song.songId > 0 ? song.songId : numericId;
+
+    // 酷狗真 hash：优先 Song.hash（搜索/歌单时持久化），否则查进程内缓存。
+    var kgHash = song.hash;
+    if (kgHash.isEmpty && isKg) {
+      kgHash = KugouApi.cachedSong(song.mid)?.hash ?? '';
+    }
+
+    // 顶层 songmid 统一填「平台主键」，让只读 songmid 的音源在任何子源
+    // 都能拿到有效标识；酷狗另外提供真 hash（ikun 会优先取它）。
+    final songmid = isTx ? song.mid : primaryId;
+
+    // types / _types：酷狗按各档位 hash 构造（部分音源会从 _types[q].hash
+    // 取对应音质文件），其余平台按 qualityCodes 给档位骨架。
+    final types = <Map<String, dynamic>>[];
+    final typesMap = <String, dynamic>{};
+    final cachedKg = isKg ? KugouApi.cachedSong(song.mid) : null;
+    if (cachedKg != null) {
+      for (final q in cachedKg.qualities) {
+        final name = LxQuality.from(q);
+        final entry = <String, dynamic>{
+          'type': name,
+          'size': '',
+          'hash': cachedKg.hashFor(q),
+        };
+        types.add(entry);
+        typesMap[name] = <String, dynamic>{
+          'size': '',
+          'hash': cachedKg.hashFor(q),
+        };
+      }
+    } else {
+      for (final code in song.qualityCodes) {
+        final name = LxQuality.from(code);
+        types.add(<String, dynamic>{'type': name, 'size': ''});
+        typesMap[name] = <String, dynamic>{'size': ''};
+      }
+    }
+    if (types.isEmpty) {
+      types.add(<String, dynamic>{'type': '128k', 'size': ''});
+      typesMap['128k'] = <String, dynamic>{'size': ''};
+    }
+
+    final cover = song.coverUrl;
+    final meta = <String, dynamic>{
+      'songId': songIdValue,
+      'albumName': song.album,
+      'albumId': song.albumMid,
+      'picUrl': cover,
+      'qualitys': types,
+      '_qualitys': typesMap,
+      'hash': isKg ? kgHash : '',
+      'strMediaMid': isTx ? song.mid : '',
+      'songmid': songmid,
+    };
+
+    return <String, dynamic>{
+      'id': primaryId,
+      'songmid': songmid,
+      'hash': isKg ? kgHash : '',
+      'songId': songIdValue,
+      'name': song.name,
+      'singer': song.singer,
+      'source': subSource,
+      'interval': _formatInterval(song.duration),
+      'duration': song.duration,
+      'albumName': song.album,
+      'album': song.album, // 部分音源读 album 而非 albumName
+      'albumId': song.albumMid,
+      'albumMid': song.albumMid,
+      'strMediaMid': isTx ? song.mid : '',
+      'img': cover,
+      'picUrl': cover,
+      'types': types,
+      '_types': typesMap,
+      'typeUrl': <String, dynamic>{},
+      'meta': meta,
+    };
+  }
+
+  /// 毫秒 → LX `interval` 字符串（`m:ss`）。
+  static String _formatInterval(int durationMs) {
+    if (durationMs <= 0) return '';
+    final total = (durationMs / 1000).round();
+    final m = total ~/ 60;
+    final s = total % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
 
   // ---------------- mflac / mgg + ekey 流式解密 ----------------
 

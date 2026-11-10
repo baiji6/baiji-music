@@ -12,15 +12,14 @@ enum _ProbeState { idle, running, ok, fail }
 
 /// 一次「运行全部」最多生成的探针数。
 ///
-/// 四个筛选维度是笛卡尔积，「全部音源 × 全部音质 × 全部子源 × 全部平台」
-/// 会一次跑出上百条请求打爆音源网关（部分音源如 ikun 有 429 限流），
-/// 因此超限截断并提示用户缩小筛选范围。
+/// 虽然已按插件声明裁剪，但「全部音源 × 全部音质 × 全部子源」仍可能很多，
+/// 超限截断并提示用户缩小筛选范围，避免打爆音源网关（部分音源有 429 限流）。
 const int _kMaxProbes = 60;
 
 /// 子源下拉里「全部子源」的哨兵值（与空串「自动」区分）。
 const String _kAllSubSources = '__all__';
 
-/// 搜索不可用 / mg、git 子源无对应原生平台时使用的固定测试 mid。
+/// mg / git 子源没有对应原生平台，只能用占位标识做连通性参考。
 const String _kFallbackMid = '003OUlHO1y2JzP';
 
 /// 可作为样本来源的四个原生平台。
@@ -38,8 +37,9 @@ const Map<String, String> _kPlatformLabels = {
   Source.kugou: '酷狗',
 };
 
-/// 洛雪子源 ↔ 曲目来源平台的匹配关系（用于「自动」联动与不匹配提示）。
-/// mg / git 没有对应平台，故不在表内，用固定 mid。
+/// 洛雪子源 ↔ 曲目来源平台的匹配关系。
+/// 用户规则：网易云/酷我按 `id`、QQ 按 `mid`、酷狗按 `hash` 取流，
+/// 所以子源与样本平台必须严格对应，错配的探针没有意义。
 const Map<String, String> _kSubPlatform = {
   LxSubSource.tx: Source.qq,
   LxSubSource.wy: Source.netease,
@@ -66,7 +66,7 @@ class _Probe {
   final String subSource;
   final String quality;
 
-  /// 样本曲目来源平台；空串表示用固定 mid。
+  /// 样本曲目来源平台；空串表示 mg/git 用占位标识。
   final String samplePlatform;
   final String detail;
   final Future<LxPlayResult> Function() run;
@@ -79,15 +79,18 @@ class _Probe {
   String error = '';
 }
 
-/// 洛雪音源测试（v2.5.7-pre2 重写，仿 LX Music 的 SourceTest）。
+/// 洛雪音源测试（v2.5.7-pre3 重做，仿 LX Music 的 SourceTest）。
 ///
-/// **只测试用户导入的洛雪 JS 音源**，不再对 QQ / 网易云 / 酷我 / 酷狗跑
-/// 原生「搜索 + 取流」探针。[MusicApi.search] 仅用于按平台准备一条样本
-/// mid，**不算测试原生取链**。
+/// **只测试用户导入的洛雪 JS 音源**。[MusicApi.search] 仅用于按平台准备
+/// 一条真实样本曲目，不算测试原生取链。
 ///
-/// 四个筛选维度：单个音源 / 洛雪音质 / 洛雪子源 / 曲目来源平台；每张卡片
-/// 支持单独测试，顶部保留「运行全部」。结果如实展示延迟、命中的插件、
-/// 子源、档位与直链，或 [LxPlayResult.reasonText] 的失败原因。
+/// v2.5.7-pre2 的问题：按「所有子源 × 所有平台」做笛卡尔积、用固定假 mid
+/// 打真实网关、样本搜索失败也照跑，导致整页必然全红。现在：
+/// - 只生成插件 `inited.sources` 声明支持 `musicUrl` 的子源与音质；
+/// - 子源与样本平台强制匹配（tx↔QQ、wy↔网易、kw↔酷我、kg↔酷狗）；
+/// - 用 [LxMusicApi.musicInfoOf] 构造洛雪标准 `musicInfo`（酷狗真 hash、
+///   网易/酷我 id、QQ songmid），样本搜索失败如实报错而非用假 mid 冒充；
+/// - 顶部展示加载失败的音源，不再静默跳过。
 class SourceTestPage extends StatefulWidget {
   const SourceTestPage({super.key});
 
@@ -98,6 +101,9 @@ class SourceTestPage extends StatefulWidget {
 class _SourceTestPageState extends State<SourceTestPage> {
   List<_Probe> _probes = <_Probe>[];
   List<LxPluginInfo> _pluginInfos = <LxPluginInfo>[];
+
+  /// 加载失败的音源（v2.5.7-pre3）：不再静默吞掉。
+  Map<String, String> _loadErrors = <String, String>{};
 
   /// 当前筛选下所有插件声明的音质并集（动态，不硬编码全部档位）。
   List<String> _qualities = <String>['128k'];
@@ -113,7 +119,7 @@ class _SourceTestPageState extends State<SourceTestPage> {
   String _subSource = ''; // '' = 自动；_kAllSubSources = 全部；否则具体子源
   String _samplePlatform = ''; // '' = 全部平台
 
-  /// 按平台缓存样本曲目（null = 搜索失败，回退固定 mid）。
+  /// 按平台缓存样本曲目（null = 搜索失败）。
   final Map<String, Song?> _samples = <String, Song?>{};
 
   /// 缓存搜索 Future，避免并发 / 重复请求同一平台。
@@ -134,15 +140,19 @@ class _SourceTestPageState extends State<SourceTestPage> {
       AppLog.w('SourceTestPage', '洛雪音源加载失败: $e');
     }
     List<LxPluginInfo> infos;
+    Map<String, String> errors;
     try {
       infos = LxMusicApi.instance.pluginInfos;
+      errors = LxMusicApi.instance.loadErrors;
     } catch (e) {
       AppLog.w('SourceTestPage', '读取音源声明失败: $e');
       infos = <LxPluginInfo>[];
+      errors = <String, String>{};
     }
     if (!mounted) return;
     setState(() {
       _pluginInfos = infos;
+      _loadErrors = errors;
       _refreshFilters();
       _ready = true;
     });
@@ -173,18 +183,27 @@ class _SourceTestPageState extends State<SourceTestPage> {
       ? _pluginInfos
       : _pluginInfos.where((p) => p.id == _pluginId).toList(growable: false);
 
-  /// 计算音质并集时参考的子源集合。
+  /// 计算音质并集时参考的子源集合：只取选中插件**实际声明**的子源，
+  /// 避免造出「该音源根本不支持」的必假失败档位。
   List<String> _declaredSubsForFilter() {
-    if (_subSource == _kAllSubSources) return LxSubSource.all;
-    if (_subSource.isNotEmpty) return <String>[_subSource];
+    final declared = <String>{};
+    for (final p in _selectedPlugins()) {
+      for (final e in p.sources.entries) {
+        if (e.value.supportsMusicUrl) declared.add(e.key);
+      }
+    }
+    if (_subSource == _kAllSubSources) return declared.toList();
+    if (_subSource.isNotEmpty) {
+      return declared.contains(_subSource) ? <String>[_subSource] : <String>[];
+    }
     final platforms = _samplePlatform.isEmpty
         ? _kSamplePlatforms
         : <String>[_samplePlatform];
-    return platforms.map(LxSubSource.fromApp).toSet().toList();
+    final wanted = platforms.map(LxSubSource.fromApp).toSet();
+    return declared.where(wanted.contains).toList();
   }
 
   /// 当前「音源 × 子源」下所有插件声明的音质并集，按 [LxQuality.all] 排序。
-  /// 不硬编码全部档位：某些音源只声明 4 档，硬编码会造出必假失败探针。
   List<String> _computeQualities() {
     final set = <String>{};
     final subs = _declaredSubsForFilter();
@@ -206,70 +225,48 @@ class _SourceTestPageState extends State<SourceTestPage> {
     return list.isEmpty ? <String>['128k'] : list;
   }
 
-  /// (子源, 样本平台) 组合。
-  ///
-  /// - 「自动」：子源跟随曲目平台；
-  /// - 指定子源 / 全部子源：每个子源配它匹配的样本平台（mg/git 用固定
-  ///   mid）；若用户**明确**选了某个曲目平台，则一律用该平台，卡片
-  ///   detail 会标注「不匹配」，如实提示失败可能来自组合不当。
-  ///
-  /// 这样「曲目平台 = 全部」不会与 6 个子源做无意义的笛卡尔积。
-  List<({String sub, String platform})> _probeCombos() {
-    final out = <({String sub, String platform})>[];
-    final explicitPlatform = _samplePlatform.isNotEmpty;
-
-    if (_subSource == _kAllSubSources) {
-      for (final sub in LxSubSource.all) {
-        final matched = _kSubPlatform[sub];
-        out.add((
-          sub: sub,
-          platform: matched == null
-              ? ''
-              : (explicitPlatform ? _samplePlatform : matched),
-        ));
-      }
-    } else if (_subSource.isNotEmpty) {
-      final matched = _kSubPlatform[_subSource];
-      if (matched == null) {
-        out.add((sub: _subSource, platform: ''));
-      } else {
-        out.add((
-          sub: _subSource,
-          platform: explicitPlatform ? _samplePlatform : matched,
-        ));
-      }
-    } else {
-      final platforms =
-          explicitPlatform ? <String>[_samplePlatform] : _kSamplePlatforms;
-      for (final platform in platforms) {
-        out.add((sub: LxSubSource.fromApp(platform), platform: platform));
-      }
+  /// 某个插件在当前筛选下真正要测的子源：只取它声明支持 `musicUrl` 的子源。
+  List<String> _subsForProbe(LxPluginInfo plugin) {
+    final declared = plugin.sources.entries
+        .where((e) => e.value.supportsMusicUrl)
+        .map((e) => e.key)
+        .where((sub) => LxSubSource.all.contains(sub))
+        .toList();
+    if (_subSource == _kAllSubSources) return declared;
+    if (_subSource.isNotEmpty) {
+      return declared.contains(_subSource) ? <String>[_subSource] : <String>[];
     }
-    return out;
+    // 「自动」：子源跟随曲目平台。
+    final platforms = _samplePlatform.isEmpty
+        ? _kSamplePlatforms
+        : <String>[_samplePlatform];
+    final wanted = platforms.map(LxSubSource.fromApp).toSet();
+    return declared.where(wanted.contains).toList();
   }
 
   void _rebuildProbes() {
     var probes = <_Probe>[];
-    final plugins = _selectedPlugins();
-    final qualities = _quality.isEmpty ? _qualities : <String>[_quality];
-    final combos = _probeCombos();
-
-    for (final plugin in plugins) {
-      for (final quality in qualities) {
-        for (final combo in combos) {
-          final sub = combo.sub;
-          final platform = combo.platform;
-          final matchedPlatform = _kSubPlatform[sub];
-          final mismatch = matchedPlatform != null &&
-              platform.isNotEmpty &&
-              matchedPlatform != platform;
+    for (final plugin in _selectedPlugins()) {
+      for (final sub in _subsForProbe(plugin)) {
+        final platform = _kSubPlatform[sub] ?? '';
+        // 明确选了曲目平台却与该子源不匹配 → 直接跳过，不造必假失败项。
+        if (_samplePlatform.isNotEmpty &&
+            platform.isNotEmpty &&
+            _samplePlatform != platform) {
+          continue;
+        }
+        // 只测该插件在这个子源上声明过的音质档位。
+        final declaredQ = plugin.qualitysOf(sub);
+        final qualities = (_quality.isEmpty ? _qualities : <String>[_quality])
+            .where((q) => declaredQ.isEmpty || declaredQ.contains(q))
+            .toList();
+        for (final quality in qualities) {
           final subLabel = LxSubSource.labels[sub] ?? sub;
           final platformLabel = platform.isEmpty
-              ? '固定 mid'
+              ? '占位标识（该子源无对应平台，结果仅供参考）'
               : (_kPlatformLabels[platform] ?? platform);
           final detail = '音源 ${plugin.display} · 子源 $subLabel($sub)'
-              ' · 档位 $quality · 样本 $platformLabel'
-              '${mismatch ? '（子源与样本平台不匹配，失败可能源于此）' : ''}';
+              ' · 档位 $quality · 样本 $platformLabel';
 
           probes.add(_Probe(
             pluginId: plugin.id,
@@ -284,9 +281,18 @@ class _SourceTestPageState extends State<SourceTestPage> {
                 info = _fixedMusicInfo(sub);
               } else {
                 final song = await _sampleFor(platform);
-                info = song != null
-                    ? LxMusicApi.musicInfoOf(song, sub)
-                    : _fixedMusicInfo(sub);
+                if (song == null) {
+                  // 不再拿假 mid 冒充测试结果：如实说明样本没准备好。
+                  return LxPlayResult.failed(
+                    LxFailReason.pluginError,
+                    error: '${_kPlatformLabels[platform] ?? platform} '
+                        '样本搜索失败，无法准备真实曲目',
+                    quality: quality,
+                    subSource: sub,
+                    pluginName: plugin.display,
+                  );
+                }
+                info = LxMusicApi.musicInfoOf(song, sub);
               }
               return LxMusicApi.instance.musicUrl(
                 subSource: sub,
@@ -305,15 +311,35 @@ class _SourceTestPageState extends State<SourceTestPage> {
     _probes = probes;
   }
 
+  /// mg / git 没有对应原生平台，只能给一份洛雪标准结构的占位 musicInfo。
   static Map<String, dynamic> _fixedMusicInfo(String sub) =>
       <String, dynamic>{
+        'id': _kFallbackMid,
         'songmid': _kFallbackMid,
-        'hash': _kFallbackMid,
+        'hash': '',
+        'songId': _kFallbackMid,
         'name': '测试曲目',
+        'singer': '测试',
         'source': sub,
+        'interval': '0:00',
+        'albumName': '',
+        'types': <Map<String, dynamic>>[
+          <String, dynamic>{'type': '128k', 'size': ''}
+        ],
+        '_types': <String, dynamic>{
+          '128k': <String, dynamic>{'size': ''}
+        },
+        'typeUrl': <String, dynamic>{},
+        'meta': <String, dynamic>{
+          'songId': _kFallbackMid,
+          'albumName': '',
+          'qualitys': <dynamic>[],
+          '_qualitys': <String, dynamic>{},
+          'hash': '',
+        },
       };
 
-  // ===== 样本曲目（按平台搜索并缓存，仅用于准备 mid） =====
+  // ===== 样本曲目（按平台搜索并缓存） =====
 
   Future<Song?> _sampleFor(String platform) {
     final cached = _sampleFutures[platform];
@@ -348,7 +374,7 @@ class _SourceTestPageState extends State<SourceTestPage> {
         .toList();
     setState(() {
       _probeSongLabel = found.isEmpty
-          ? '固定测试 mid（按平台搜索不可用）'
+          ? '按平台自动准备（尚未搜索）'
           : found.join(' / ');
     });
   }
@@ -423,6 +449,7 @@ class _SourceTestPageState extends State<SourceTestPage> {
               children: [
                 _buildIntro(),
                 const SizedBox(height: 10),
+                _buildLoadErrors(),
                 _buildFilters(),
                 const SizedBox(height: 12),
                 if (_truncated) _buildTruncatedHint(),
@@ -441,14 +468,50 @@ class _SourceTestPageState extends State<SourceTestPage> {
   Widget _buildIntro() => Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text(
-          '只测试已导入的洛雪 JS 音源：按「音源 / 音质 / 子源 / 曲目平台」筛选后'
-          '逐个取流，展示延迟与真实结果。曲目平台仅用于按平台搜索一条样本 mid'
-          '（不算测试原生取链）；样本：$_probeSongLabel。'
-          '失败会如实显示原因，可据此增删或切换音源。',
+          '只测试已导入的洛雪 JS 音源：按每个音源声明的子源与音质生成探针，'
+          '子源与曲目平台强制匹配（QQ / 网易云 / 酷我 / 酷狗），'
+          '曲目平台仅用于搜索一条真实样本（不算测试原生取链）。'
+          '样本：$_probeSongLabel。样本搜索失败会如实报错，不再用假 mid 冒充结果。',
           style: TextStyle(
               fontSize: 11.5, height: 1.6, color: AppColors.textTertiary),
         ),
       );
+
+  /// 加载失败的音源不再静默跳过（v2.5.7-pre3）。
+  Widget _buildLoadErrors() {
+    if (_loadErrors.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GlassCard(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '有 ${_loadErrors.length} 个音源加载失败（不参与测试）',
+                style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.danger),
+              ),
+              const SizedBox(height: 6),
+              for (final e in _loadErrors.entries)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    '${e.key}：${e.value}',
+                    style: TextStyle(
+                        fontSize: 11, height: 1.4,
+                        color: AppColors.textTertiary),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _buildFilters() => GlassCard(
         padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),

@@ -13,22 +13,19 @@ import 'package:pointycastle/export.dart' as pc;
 /// 下都会把本函数的返回值**同步**转成 JS 值回传，因此源脚本里同步调用
 /// `lx.utils.crypto.*` 能立即拿到结果（用于拼签名 URL 等），无需异步桥。
 ///
-/// 之所以不手写纯 JS 哈希：QuickJS 内置的 JS 引擎对 BigInt 字面量支持不全，
-/// 且手写 MD5/SHA/HMAC 易错；改为复用 Dart 的 `crypto` / `pointycastle`
-/// 保证与洛雪官方实现一致。
-///
 /// 入参为 bootstrap 发来的 spec（`jsonDecode` 后的 Map）：
 ///  - `algo`：`md5` / `sha1` / `sha256` / `hmacsha1` / `hmacsha256` /
-///    `random` / `aesenc` / `aesdec`
+///    `random` / `aesenc` / `aesdec` / `rsaenc`
 ///  - `d` / `k`：base64 编码的输入数据 / 密钥（哈希、HMAC）
 ///  - `n`：随机字节数（random）
 ///  - `data` / `key` / `mode` / `iv`：AES 输入、密钥、模式（`ecb`/`cbc`）、
 ///    IV（除 `mode` 外均为 base64）
+///  - `rsaenc`：`key` 为去掉 PEM 头尾的 base64 X.509 公钥，`mode` =
+///    `nopadding`（对齐 LX-X 的 `RSA/ECB/NoPadding`）
 ///
 /// 返回：
 ///  - 哈希 / HMAC → **hex 字符串**（洛雪契约，直接拼进签名 URL / 请求体）
-///  - `random` → base64（bootstrap 侧再解成 BufferLike）
-///  - AES → base64 密文 / 明文（bootstrap 侧解成 BufferLike）
+///  - `random` / AES / RSA → base64（bootstrap 侧再解成字节数组）
 dynamic handleLxCrypto(dynamic args) {
   try {
     final spec = Map<String, dynamic>.from(args as Map);
@@ -58,12 +55,14 @@ dynamic handleLxCrypto(dynamic args) {
         return base64.encode(_aes(spec, forEncryption: true));
       case 'aesdec':
         return base64.encode(_aes(spec, forEncryption: false));
+      case 'rsaenc':
+        return base64.encode(_rsaEncrypt(spec));
       default:
         return '';
     }
   } catch (_) {
     // 同步桥不宜把 Dart 异常抛进 JS 栈（会中断源脚本加载）；返回空串，
-    // 由源脚本自行兜底。真实错误可在此按需接入日志。
+    // 由源脚本自行兜底。
     return '';
   }
 }
@@ -72,9 +71,6 @@ List<int> _b64(dynamic v) =>
     v is String && v.isNotEmpty ? base64.decode(v) : const <int>[];
 
 /// AES（ECB / CBC）+ PKCS7 填充，输入输出均为原始字节。
-///
-/// 逐块调用 `processBlock`（与项目内 `netease_crypto.dart` 的风格一致），
-/// 自行处理 PKCS7，避免依赖 `PaddedBlockCipherParameters` 的泛型推断。
 List<int> _aes(Map<String, dynamic> spec, {required bool forEncryption}) {
   final key = Uint8List.fromList(_b64(spec['key']));
   final ivBytes = _b64(spec['iv']);
@@ -125,4 +121,84 @@ List<int> _aes(Map<String, dynamic> spec, {required bool forEncryption}) {
     return out.sublist(0, out.length - padLen);
   }
   return out;
+}
+
+// ---------------- RSA / ECB / NoPadding（LX-X） ----------------
+//
+// Java `Cipher.getInstance("RSA/ECB/NoPadding")` 对长度恰为 modulus 长度的
+// 输入做的正是裸模幂 `c = m^e mod n`。用 BigInt.modPow 实现，避免依赖
+// pointycastle 的 ASN.1 解析器细节；只需从 X.509 SubjectPublicKeyInfo 的
+// DER 里取出 modulus / publicExponent 两个 INTEGER。
+
+class _DerReader {
+  final List<int> bytes;
+  int pos = 0;
+
+  _DerReader(this.bytes);
+
+  int _readLength() {
+    final first = bytes[pos++];
+    if ((first & 0x80) == 0) return first;
+    final count = first & 0x7f;
+    var len = 0;
+    for (var i = 0; i < count; i++) {
+      len = (len << 8) | bytes[pos++];
+    }
+    return len;
+  }
+
+  /// 读一个 TLV，返回值部分（不含 tag / length）。
+  List<int> readValue(int expectedTag) {
+    final tag = bytes[pos++];
+    if (tag != expectedTag) throw ArgumentError('非法 DER tag: $tag');
+    final len = _readLength();
+    if (pos + len > bytes.length) throw ArgumentError('DER 长度越界');
+    final value = bytes.sublist(pos, pos + len);
+    pos += len;
+    return value;
+  }
+}
+
+BigInt _bigIntOf(List<int> bytes) {
+  var v = BigInt.zero;
+  for (final b in bytes) {
+    v = (v << 8) | BigInt.from(b);
+  }
+  return v;
+}
+
+List<int> _bytesOf(BigInt v, int size) {
+  final out = Uint8List(size);
+  var x = v;
+  for (var i = size - 1; i >= 0; i--) {
+    out[i] = (x & BigInt.from(255)).toInt();
+    x = x >> 8;
+  }
+  return out;
+}
+
+List<int> _rsaEncrypt(Map<String, dynamic> spec) {
+  final pem = (spec['key'] as String? ?? '').replaceAll(RegExp(r'\s'), '');
+  if (pem.isEmpty) throw ArgumentError('RSA 公钥为空');
+  final der = base64.decode(pem);
+
+  // SubjectPublicKeyInfo ::= SEQUENCE { algorithm, subjectPublicKey BIT STRING }
+  final spki = _DerReader(der).readValue(0x30);
+  final spkiReader = _DerReader(spki);
+  spkiReader.readValue(0x30); // AlgorithmIdentifier
+  final bitString = spkiReader.readValue(0x03);
+  // BIT STRING 首字节是 unused-bits 计数，其后是 RSAPublicKey DER。
+  final rsaSeq = _DerReader(bitString.sublist(1)).readValue(0x30);
+  final rsaReader = _DerReader(rsaSeq);
+  final n = _bigIntOf(rsaReader.readValue(0x02)); // modulus
+  final e = _bigIntOf(rsaReader.readValue(0x02)); // publicExponent
+
+  final data = _b64(spec['data']);
+  final size = (n.bitLength + 7) ~/ 8;
+  if (data.length > size) throw ArgumentError('RSA 明文超过密钥长度');
+  // NoPadding：左侧补零到密钥长度（与 Java Cipher 一致）。
+  final block = Uint8List(size);
+  block.setRange(size - data.length, size, data);
+  final c = _bigIntOf(block).modPow(e, n);
+  return _bytesOf(c, size);
 }

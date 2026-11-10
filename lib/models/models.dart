@@ -799,6 +799,13 @@ class Song {
   /// mvid 字符串；酷我：搜索接口不带 MVID，恒为空（播放时按 rid 现查）。
   final String mvId;
 
+  /// 平台音频哈希（v2.5.7-pre3）：酷狗的 128k `FileHash`。
+  ///
+  /// 洛雪音源取酷狗曲目时只认 `musicInfo.hash`，而 [mid] 存的是
+  /// `albumAudioId`（MixSongID），两者不是一回事。这里在搜索/歌单解析时
+  /// 一并持久化，保证收藏、历史、播放队列里的酷狗歌曲也能正确交给洛雪音源。
+  final String hash;
+
   /// 音源：qq / netease / local。
   final String source;
 
@@ -841,6 +848,7 @@ class Song {
     required this.cover,
     this.source = Source.qq,
     this.mvId = '',
+    this.hash = '',
     this.localPath = '',
     this.localSize = 0,
     this.localMtime = 0,
@@ -990,6 +998,7 @@ class Song {
         cover: map['cover'] as String? ?? '',
         source: map['source'] as String? ?? Source.qq,
         mvId: map['mvId'] as String? ?? '',
+        hash: map['hash'] as String? ?? '',
         localPath: map['localPath'] as String? ?? '',
         localSize: (map['localSize'] as num?)?.toInt() ?? 0,
         localMtime: (map['localMtime'] as num?)?.toInt() ?? 0,
@@ -1012,6 +1021,7 @@ class Song {
         'cover': cover,
         'source': source,
         if (mvId.isNotEmpty) 'mvId': mvId,
+        if (hash.isNotEmpty) 'hash': hash,
         if (localPath.isNotEmpty) 'localPath': localPath,
         if (localPath.isNotEmpty) 'localSize': localSize,
         if (localPath.isNotEmpty) 'localMtime': localMtime,
@@ -1032,6 +1042,7 @@ class Song {
     String? cover,
     String? source,
     String? mvId,
+    String? hash,
     String? localPath,
     int? localSize,
     int? localMtime,
@@ -1050,6 +1061,7 @@ class Song {
         cover: cover ?? this.cover,
         source: source ?? this.source,
         mvId: mvId ?? this.mvId,
+        hash: hash ?? this.hash,
         localPath: localPath ?? this.localPath,
         localSize: localSize ?? this.localSize,
         localMtime: localMtime ?? this.localMtime,

@@ -195,6 +195,9 @@ class MusicApi {
         cover: s.pic,
         source: Source.kugou,
         mvId: s.mvHash,
+        // 洛雪音源取酷狗曲目只认 musicInfo.hash，而 mid 是 albumAudioId；
+        // 这里把 128k FileHash 一并持久化，收藏/播放列表恢复后仍然可用。
+        hash: s.hash,
         qualityCodes: s.qualities.map((q) => q.id).toSet(),
       );
 
