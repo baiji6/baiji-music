@@ -363,7 +363,7 @@ jobs:
           $log = "build_win_verbose.log";
           flutter build windows --release --verbose ${{ env.OBF_ARGS }} ${{ steps.integrity.outputs.has_key == 'true' && '--dart-define=BAIJI_CI_BUILD=true' || '' }} 2>&1 | Out-File -FilePath $log -Encoding utf8;
           $code = $LASTEXITCODE;
-          if ($code -ne 0) { Write-Host "=== native assets / build hook 诊断 ==="; Select-String -Path $log -Pattern 'quickjs|hook\.dart|build\.dart|error|Error|cl\.exe|link\.exe|MSVC|ProcessException|ld\.lld|BuildInput' | Select-Object -Last 200 | ForEach-Object { $_.Line } };
+          if ($code -ne 0) { Write-Host "=== native assets / build hook 诊断 ==="; Select-String -Path $log -Pattern 'quickjs|hook\.dart|build\.dart|error|Error|cl\.exe|link\.exe|MSVC|ProcessException|ld\.lld|BuildInput' | Select-Object -Last 400 | ForEach-Object { $_.Line } } else { Write-Host "=== 构建摘要 ==="; Get-Content $log -Tail 12 };
           exit $code
 
       # 下载 UPX Windows 版并加壳所有可执行文件
