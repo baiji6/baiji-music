@@ -78,7 +78,10 @@ dependencies:
   # Android / Linux / Windows 走 vendored QuickJS 2024-01-13（pure-Dart FFI +
   # Native Assets 六端自编译），解决 flutter_js 内置 QuickJS 2020/2021 无法
   # 解析 molan.js 等现代语法音源的问题。
-  quickjs_runtime: ^0.4.9
+  # 本地 fork（third_party/quickjs_runtime）修正了上游 hook/build.dart 在
+  # Android NDK 下误链 -lpthread 的问题（NDK 无独立 libpthread.so）。
+  quickjs_runtime:
+    path: third_party/quickjs_runtime
 
 dependency_overrides:
   # AC-4 解码：官方 media_kit_libs_android_audio 1.3.8 的 ffmpeg 是白名单编译，

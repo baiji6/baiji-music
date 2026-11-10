@@ -61,3 +61,6 @@ app.*.map.json
 # 本地调试产物与第三方库 Gradle 构建输出（不入库）
 /bugreport/
 /third_party/**/android/build/
+
+# quickjs_runtime 本地编译产物（六端由 Native Assets hook 自动编译，不入库）
+/third_party/quickjs_runtime/native/quickjs/libquickjs_bridge.so

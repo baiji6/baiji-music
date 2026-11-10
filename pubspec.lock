@@ -714,10 +714,9 @@ packages:
   quickjs_runtime:
     dependency: "direct main"
     description:
-      name: quickjs_runtime
-      sha256: "231e4688362dabe47849b795d57f4071f34c61fc1db477dbc2f0813dbfd96072"
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/quickjs_runtime"
+      relative: true
+    source: path
     version: "0.4.9"
   record_use:
     dependency: transitive

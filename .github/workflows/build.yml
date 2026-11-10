@@ -355,9 +355,16 @@ jobs:
           }
 
       - name: Build Windows Release
+        # --verbose 让 Native Assets build hook 的 stderr 可见（MSBuild 默认把
+        # 自定义生成命令输出吞掉，排查 quickjs_runtime 的 C 编译失败必须靠它）。
+        # 全量输出写入文件，仅在失败时打印诊断行，避免打爆 Actions 日志。
+        shell: pwsh
         run: >-
-          flutter build windows --release ${{ env.OBF_ARGS }}
-          ${{ steps.integrity.outputs.has_key == 'true' && '--dart-define=BAIJI_CI_BUILD=true' || '' }}
+          $log = "build_win_verbose.log";
+          flutter build windows --release --verbose ${{ env.OBF_ARGS }} ${{ steps.integrity.outputs.has_key == 'true' && '--dart-define=BAIJI_CI_BUILD=true' || '' }} 2>&1 | Out-File -FilePath $log -Encoding utf8;
+          $code = $LASTEXITCODE;
+          if ($code -ne 0) { Write-Host "=== native assets / build hook 诊断 ==="; Select-String -Path $log -Pattern 'quickjs|hook\.dart|build\.dart|error|Error|cl\.exe|link\.exe|MSVC|ProcessException|ld\.lld|BuildInput' | Select-Object -Last 200 | ForEach-Object { $_.Line } };
+          exit $code
 
       # 下载 UPX Windows 版并加壳所有可执行文件
       - name: UPX pack
