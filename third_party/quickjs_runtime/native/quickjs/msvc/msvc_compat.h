@@ -84,6 +84,37 @@ static __forceinline int qjs_atomic_fetch_add_int(volatile int *p, int delta)
     return (int)_InterlockedExchangeAdd((volatile long *)p, (long)delta);
 }
 
+static __forceinline void qjs_atomic_store_release(volatile int *p, int v)
+{
+    _InterlockedExchange((volatile long *)p, (long)v);
+}
+
+/* GCC memory-order constants. The shims ignore the order argument because
+   _Interlocked* on x86/x64 is already a full barrier, but cl.exe still
+   requires the identifiers to be declared: without them the build fails
+   with C2065: '__ATOMIC_RELEASE': undeclared identifier (GitHub Actions
+   Windows job, VS 18). */
+#ifndef __ATOMIC_RELAXED
+#define __ATOMIC_RELAXED 0
+#endif
+#ifndef __ATOMIC_CONSUME
+#define __ATOMIC_CONSUME 1
+#endif
+#ifndef __ATOMIC_ACQUIRE
+#define __ATOMIC_ACQUIRE 2
+#endif
+#ifndef __ATOMIC_RELEASE
+#define __ATOMIC_RELEASE 3
+#endif
+#ifndef __ATOMIC_ACQ_REL
+#define __ATOMIC_ACQ_REL 4
+#endif
+#ifndef __ATOMIC_SEQ_CST
+#define __ATOMIC_SEQ_CST 5
+#endif
+
+#define __atomic_store_n(ptr, value, order) \
+    qjs_atomic_store_release((volatile int *)(ptr), (int)(value))
 #define __atomic_load_n(ptr, order) \
     qjs_atomic_load_acquire((volatile int *)(ptr))
 #define __sync_fetch_and_add(ptr, delta) \
