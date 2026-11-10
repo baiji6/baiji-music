@@ -16,12 +16,14 @@ import '../../core/capture_trust.dart';
 import '../../core/device_guid.dart';
 import '../../core/dev_mode.dart';
 import '../../core/lyric_settings.dart';
+import '../../core/pure_lx_mode.dart';
 import '../../core/telemetry.dart';
 import '../../core/theme_controller.dart';
 import '../../core/ui_settings.dart';
 import '../../core/update_checker.dart';
 import '../../download/download_extras.dart';
 import '../../download/download_manager.dart';
+import '../../lx/lx_music_api.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
 import '../../network/kugou/kugou_auth.dart';
@@ -488,6 +490,32 @@ class _SettingsPageState extends State<SettingsPage> {
                       MaterialPageRoute(
                           builder: (_) => const LxSourceManagePage()),
                     ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  // 内置音源（需登录）总开关（v2.5.7-pre2）：关闭后进入
+                  // 纯洛雪模式，所有网络歌曲只由洛雪音源取流，失败不回退原生。
+                  MiuixSwitchPreference(
+                    title: '内置音源（需登录）',
+                    summary: '关闭后进入纯洛雪模式：所有歌曲只由洛雪音源取流，'
+                        '不再回退原生平台',
+                    startAction: const Icon(Icons.music_off_rounded,
+                        color: AppColors.violet, size: 22),
+                    value: PureLxMode.nativeEnabled(),
+                    onChanged: (v) async {
+                      await PureLxMode.setNativeEnabled(v);
+                      if (!mounted) return;
+                      setState(() {});
+                      // 允许关闭，但强提示未导入音源的后果（尊重用户设置顺序）。
+                      if (!v && LxMusicApi.instance.loadedCount == 0) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('当前未导入洛雪音源，'
+                                '关闭内置音源后将无法播放网络歌曲'),
+                          ),
+                        );
+                      }
+                    },
                   ),
                 ],
               ),

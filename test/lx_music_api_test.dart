@@ -191,5 +191,114 @@ void main() {
       expect(relayed, contains('.flac'));
       expect(relayed, isNot(equals(url)));
     });
+
+    test('失败结果带结构化原因（pluginsNotLoaded / subSourceUnsupported / pluginError）',
+        () async {
+      repo = await makeRepo([_pluginFail]);
+      api = LxMusicApi(repo: repo);
+
+      final allFail = await api.musicUrl(
+          subSource: 'kw', quality: '128k', musicInfo: {'songmid': 'x'});
+      expect(allFail.ok, isFalse);
+      expect(allFail.reason, LxFailReason.pluginError);
+      expect(allFail.reasonText, contains('取链失败'));
+      expect(allFail.error, contains('boom'));
+
+      final noSub = await api.musicUrl(
+          subSource: 'wy', quality: '128k', musicInfo: {'songmid': 'x'});
+      expect(noSub.reason, LxFailReason.subSourceUnsupported);
+      expect(noSub.reasonText, contains('子源'));
+
+      final emptyTemp = await Directory.systemTemp.createTemp('lx_no_plugin');
+      try {
+        final emptyApi =
+            LxMusicApi(repo: LxSourceRepo(directory: () async => emptyTemp));
+        final notLoaded = await emptyApi.musicUrl(
+            subSource: 'kw', quality: '128k', musicInfo: {'songmid': 'x'});
+        expect(notLoaded.reason, LxFailReason.pluginsNotLoaded);
+        expect(notLoaded.reasonText, contains('未加载'));
+        emptyApi.closeAll();
+      } finally {
+        if (await emptyTemp.exists()) await emptyTemp.delete(recursive: true);
+      }
+    });
+
+    test('pluginInfos 暴露插件声明（音源测试页下拉数据源）', () async {
+      repo = await makeRepo([_pluginOk, _pluginFail]);
+      api = LxMusicApi(repo: repo);
+      await api.ensureLoaded();
+      final infos = api.pluginInfos;
+      expect(infos.length, 2);
+      final ok = infos.firstWhere((i) => i.name == '测试插件A');
+      expect(ok.sources.containsKey('kw'), isTrue);
+      expect(ok.supports('kw'), isTrue);
+      expect(ok.supports('mg'), isFalse);
+      expect(ok.qualitysOf('kw'), containsAll(<String>['128k', 'flac']));
+      expect(ok.display, contains('测试插件A'));
+    });
+
+    test('pluginId 只命中指定插件，不被其它插件静默补链', () async {
+      repo = await makeRepo([_pluginFail, _pluginOk]);
+      api = LxMusicApi(repo: repo);
+      await api.ensureLoaded();
+      final infos = api.pluginInfos;
+      final failId = infos.firstWhere((i) => i.name == '测试插件B').id;
+      final okId = infos.firstWhere((i) => i.name == '测试插件A').id;
+
+      // 不指定 pluginId：B 失败后自动切到 A（原行为保留）。
+      final auto = await api.musicUrl(
+          subSource: 'kw', quality: '128k', musicInfo: {'songmid': 'x'});
+      expect(auto.ok, isTrue);
+      expect(auto.pluginName, '测试插件A');
+
+      // 单独测 B：不能因为 A 可用就误判 B 可用。
+      final onlyFail = await api.musicUrl(
+        subSource: 'kw',
+        quality: '128k',
+        musicInfo: {'songmid': 'x'},
+        pluginId: failId,
+      );
+      expect(onlyFail.ok, isFalse);
+      expect(onlyFail.reason, LxFailReason.pluginError);
+
+      // 单独测 A：正常拿到直链。
+      final onlyOk = await api.musicUrl(
+        subSource: 'kw',
+        quality: '128k',
+        musicInfo: {'songmid': 'x'},
+        pluginId: okId,
+      );
+      expect(onlyOk.ok, isTrue);
+      expect(onlyOk.pluginName, '测试插件A');
+
+      // 不存在的 id：如实失败。
+      final missing = await api.musicUrl(
+        subSource: 'kw',
+        quality: '128k',
+        musicInfo: {'songmid': 'x'},
+        pluginId: 'not-exist',
+      );
+      expect(missing.ok, isFalse);
+      expect(missing.reason, LxFailReason.pluginsNotLoaded);
+      expect(missing.error, contains('not-exist'));
+    });
+  });
+
+  group('LxPlayResult 失败原因文案', () {
+    test('reasonText 中文映射覆盖全部原因', () {
+      expect(LxPlayResult.failed(LxFailReason.pluginsNotLoaded).reasonText,
+          contains('未加载'));
+      expect(LxPlayResult.failed(LxFailReason.subSourceUnsupported).reasonText,
+          contains('子源'));
+      expect(LxPlayResult.failed(LxFailReason.qualityUnsupported).reasonText,
+          contains('音质'));
+      expect(LxPlayResult.failed(LxFailReason.pluginError).reasonText,
+          contains('取链失败'));
+      expect(LxPlayResult.failed(LxFailReason.timeout).reasonText,
+          contains('超时'));
+      expect(LxPlayResult.failed(LxFailReason.emptyUrl).reasonText,
+          contains('空链接'));
+      expect(LxPlayResult.empty.reasonText, isEmpty);
+    });
   });
 }

@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/kv_store.dart';
+import 'package:baiji_music/core/pure_lx_mode.dart';
 import 'package:baiji_music/core/telemetry.dart';
 import 'package:baiji_music/dts/dts_decoder.dart';
 import 'package:baiji_music/local/local_scanner.dart';
@@ -799,6 +800,27 @@ class PlayerController {
       return local;
     }
 
+    // 纯洛雪模式（v2.5.7-pre2）：所有网络歌曲只由洛雪音源取一次流。
+    // 必须放在各平台分支之前——否则酷我/酷狗/QQ 歌曲仍会走原生 6 档
+    // 降级链，反复打洛雪网关（ikun 等音源有 429 限流）。洛雪歌曲
+    // （song.isLx）无论开关状态也走这里，替代 pre1 的独立 lx 分支。
+    if (PureLxMode.shouldUseLx(song)) {
+      final r = await _fetch(
+        song,
+        effectiveQuality,
+        effectiveNeteaseQuality,
+        kuwo: effectiveKuwoQuality,
+        kugou: effectiveKugouQuality,
+      );
+      if (r.isNotEmpty) {
+        _applyActual(r);
+        _reportPlay(song, r);
+        return r.url;
+      }
+      _clearActual();
+      return await _tryFallback(song);
+    }
+
     // 酷我（v2.4.0）：音质降级链在 [KuwoApi.playUrlWithFallback] 内部处理，
     // 这里只需要带当前选中的酷我音质即可。
     if (song.isKuwo) {
@@ -855,19 +877,6 @@ class PlayerController {
           // 失败时诚实降级：播原始 320k 文件，不假装是母带。
           return r.url;
         }
-        return r.url;
-      }
-      _clearActual();
-      return await _tryFallback(song);
-    }
-
-    // 洛雪（v2.5.7）：插件内部已按自己声明的 qualitys 裁剪/降级，原生
-    // 6 档降级链对洛雪没有意义（且会重复请求网关），只取一次即可。
-    if (song.isLx) {
-      final r = await _fetch(song, effectiveQuality, effectiveNeteaseQuality);
-      if (r.isNotEmpty) {
-        _applyActual(r);
-        _reportPlay(song, r);
         return r.url;
       }
       _clearActual();
@@ -1195,6 +1204,14 @@ class PlayerController {
   /// 「已从 X 源补充」。洛雪插件内部的失败切换由 `LxMusicApi.musicUrl`
   /// 处理，这里只做跨音源的一层兜底。
   Future<String> _tryFallback(Song song) async {
+    // 纯洛雪模式（v2.5.7-pre2）：洛雪取链失败也不回退内置（原生）音源，
+    // 如实提示用户，避免静默绕过「只走洛雪」的语义。
+    if (PureLxMode.pureLx) {
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('纯洛雪模式：取链失败，已跳过内置音源回退');
+      }
+      return '';
+    }
     dynamic q;
     if (song.isKuwo) {
       q = effectiveKuwoQuality;

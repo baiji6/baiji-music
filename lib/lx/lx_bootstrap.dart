@@ -121,13 +121,70 @@ const String lxBootstrapJs = r'''
   if (typeof globalThis.TextDecoder === 'undefined') globalThis.TextDecoder = TextDecoder;
   if (typeof globalThis.Buffer === 'undefined') globalThis.Buffer = BufferLike;
 
+  // ===================== console polyfill（v2.5.7-pre2）=====================
+  // flutter_js 只注入 log / warn / error；真实音源（如 ikun）在
+  // `env !== 'mobile'` 时会调 console.groupEnd()，缺失直接 TypeError 打断取链。
+  // 这里补齐常用方法，并把 log/warn/error 转发给 Dart 落进 App 日志，
+  // 便于排查「洛雪取流失败」时看到脚本内部报错。
+  var _console = (typeof globalThis.console !== 'undefined' && globalThis.console)
+      ? globalThis.console : {};
+  globalThis.console = _console;
+  var _noop = function () {};
+  ['debug', 'info', 'dir', 'table', 'trace', 'assert', 'count', 'countReset',
+   'clear', 'group', 'groupCollapsed', 'groupEnd', 'time', 'timeLog', 'timeEnd',
+   'profile', 'profileEnd'].forEach(function (k) {
+    if (typeof _console[k] !== 'function') _console[k] = _noop;
+  });
+  ['log', 'warn', 'error'].forEach(function (level) {
+    var original = typeof _console[level] === 'function' ? _console[level] : _noop;
+    _console[level] = function () {
+      try {
+        var args = Array.prototype.slice.call(arguments).map(function (a) {
+          if (typeof a === 'string') return a;
+          try { return JSON.stringify(a); } catch (e) { return String(a); }
+        });
+        sendMessage('lx_console', JSON.stringify({ level: level, args: args }));
+      } catch (e) {}
+      try { return original.apply(_console, arguments); } catch (e) { return undefined; }
+    };
+  });
+
+  // ===================== 响应体归一（v2.5.7-pre2）=====================
+  // 洛雪各版本 / 各音源对 resp.body 的期望并不一致：
+  //   - baimusic 用 parseBody 兼容「字符串」与「对象」两种；
+  //   - ikun 直接读 body.code / body.url，要求响应体已经是对象。
+  // pre1 恒回传字符串，导致 ikun 的 `isNaN(Number(body.code))` 恒真、
+  // 抛 "unknow error"，取链 100% 失败。这里只对「看起来是 JSON」的文本
+  // 尝试解析，成功传对象、否则保留原字符串；刻意不用 new String + Object.assign
+  // 包装——那会让 typeof 变成 'object'，反而破坏 parseBody 的字符串分支。
+  function __lxBody(body) {
+    if (typeof body !== 'string') return body;
+    var t = body.trim();
+    if (t.length === 0 || (t.charAt(0) !== '{' && t.charAt(0) !== '[')) return body;
+    try {
+      var v = JSON.parse(body);
+      return (v !== null && typeof v === 'object') ? v : body;
+    } catch (e) {
+      return body;
+    }
+  }
+
   // ===================== LX 契约 + 消息桥 =====================
   var requestCallbacks = {};
   var reqIdSeq = 0;
   var eventHandlers = {};
 
   globalThis.lx = {
-    EVENT_NAMES: { request: 'request', inited: 'inited' },
+    // 真实音源会用到更多事件名（如 ikun 的 updateAlert 推送更新提示）。
+    // send() 对非 inited 事件统一走 lx_send，Dart 侧只记日志，不会打断脚本。
+    EVENT_NAMES: {
+      request: 'request',
+      inited: 'inited',
+      updateAlert: 'updateAlert',
+      updateLog: 'updateLog',
+      log: 'log',
+      error: 'error',
+    },
     env: 'desktop',
     version: '1.0.0',
     on: function (event, handler) { eventHandlers[event] = handler; },
@@ -188,12 +245,12 @@ const String lxBootstrapJs = r'''
   };
 
   // Dart 侧回调 lx.request 的 (err, resp)
-  globalThis.__lxResolveRequest = function (reqId, statusCode, body, isError) {
+  globalThis.__lxResolveRequest = function (reqId, statusCode, body, isError, headers) {
     var cb = requestCallbacks[reqId];
     if (!cb) return;
     delete requestCallbacks[reqId];
     if (isError) cb(body, null);
-    else cb(null, { statusCode: statusCode, body: body, headers: {} });
+    else cb(null, { statusCode: statusCode, body: __lxBody(body), headers: headers || {} });
   };
 })();
 ''';

@@ -144,6 +144,20 @@ class LxSubSource {
   }
 }
 
+/// 洛雪取链失败原因（v2.5.7-pre2）。
+///
+/// pre1 返回 `LxPlayResult.empty` 时不带任何原因，用户只能看到「无法获取播放
+/// 链接」，无从判断是没导入音源、子源不支持还是插件报错。
+enum LxFailReason {
+  none,
+  pluginsNotLoaded,
+  subSourceUnsupported,
+  qualityUnsupported,
+  pluginError,
+  timeout,
+  emptyUrl,
+}
+
 /// 洛雪取流结果。
 class LxPlayResult {
   const LxPlayResult({
@@ -152,9 +166,28 @@ class LxPlayResult {
     this.format = '',
     this.quality = '',
     this.pluginName = '',
+    this.subSource = '',
+    this.reason = LxFailReason.none,
+    this.error = '',
   });
 
   static const empty = LxPlayResult();
+
+  /// 构造一个带原因的失败结果。
+  factory LxPlayResult.failed(
+    LxFailReason reason, {
+    String error = '',
+    String pluginName = '',
+    String quality = '',
+    String subSource = '',
+  }) =>
+      LxPlayResult(
+        reason: reason,
+        error: error,
+        pluginName: pluginName,
+        quality: quality,
+        subSource: subSource,
+      );
 
   final String url;
 
@@ -170,10 +203,30 @@ class LxPlayResult {
   /// 命中的插件名（用于 UI「已从 X 源补充」提示）。
   final String pluginName;
 
+  /// 本次请求的洛雪子源（tx / wy / kw / kg …）。
+  final String subSource;
+
+  /// 失败原因；成功时为 [LxFailReason.none]。
+  final LxFailReason reason;
+
+  /// 插件/运行时返回的原始错误（多条时用「；」拼接）。
+  final String error;
+
   bool get ok => url.isNotEmpty;
 
   /// 是否需要走 QMC 流式解密中继。
   bool get needsRelay => ekey.isNotEmpty;
+
+  /// 给用户看的中文原因。
+  String get reasonText => switch (reason) {
+        LxFailReason.none => '',
+        LxFailReason.pluginsNotLoaded => '未加载任何洛雪音源',
+        LxFailReason.subSourceUnsupported => '没有音源声明支持该平台子源',
+        LxFailReason.qualityUnsupported => '没有音源支持该音质档位',
+        LxFailReason.pluginError => '音源脚本取链失败',
+        LxFailReason.timeout => '音源取链超时',
+        LxFailReason.emptyUrl => '音源返回了空链接',
+      };
 }
 
 /// 单个已加载插件（一个 [LxRuntime] 对应一个音源脚本）。
@@ -203,6 +256,45 @@ class _LoadedPlugin {
         ? q.map((e) => e.toString()).toList()
         : const <String>[];
   }
+}
+
+/// 单个子源的 `inited.sources[sub]` 声明（v2.5.7-pre2，供音源测试页筛选）。
+class LxSubSourceDecl {
+  const LxSubSourceDecl({
+    required this.sub,
+    required this.actions,
+    required this.qualitys,
+  });
+
+  final String sub;
+  final List<String> actions;
+  final List<String> qualitys;
+
+  bool get supportsMusicUrl => actions.contains('musicUrl');
+}
+
+/// 一个已加载插件的元信息（音源测试页「单独测试一个音源」用）。
+class LxPluginInfo {
+  const LxPluginInfo({
+    required this.id,
+    required this.name,
+    required this.version,
+    required this.author,
+    required this.sources,
+  });
+
+  final String id;
+  final String name;
+  final String version;
+  final String author;
+  final Map<String, LxSubSourceDecl> sources;
+
+  bool supports(String sub) => sources[sub]?.supportsMusicUrl ?? false;
+
+  List<String> qualitysOf(String sub) =>
+      sources[sub]?.qualitys ?? const <String>[];
+
+  String get display => version.isEmpty ? name : '$name $version';
 }
 
 /// 洛雪音源取流入口：管理运行时池、按子源/音质路由、失败自动切下一个插件。
@@ -242,6 +334,35 @@ class LxMusicApi {
     return out;
   }
 
+  /// 已加载插件的元信息（v2.5.7-pre2，音源测试页下拉数据源）。
+  ///
+  /// 每个插件的 `sources` 直接来自 `runtime.inited.sources`，与取流时
+  /// `_LoadedPlugin.supports/qualitysOf` 读的是同一份声明，不会出现
+  /// 「测试页显示支持、实际取链却不支持」的偏差。
+  List<LxPluginInfo> get pluginInfos => _plugins.values.map((p) {
+        final sources = <String, LxSubSourceDecl>{};
+        p.declared.forEach((key, value) {
+          if (value is! Map) return;
+          final sub = key.toString();
+          final m = Map<String, dynamic>.from(value);
+          final actions = m['actions'] is List
+              ? (m['actions'] as List).map((e) => e.toString()).toList()
+              : const <String>[];
+          sources[sub] = LxSubSourceDecl(
+            sub: sub,
+            actions: actions,
+            qualitys: p.qualitysOf(sub),
+          );
+        });
+        return LxPluginInfo(
+          id: p.source.id,
+          name: p.source.name,
+          version: p.source.version,
+          author: p.source.author,
+          sources: sources,
+        );
+      }).toList(growable: false);
+
   /// 重新加载所有启用音源（导入/删除/启用开关/自动更新后调用）。
   Future<void> reload() async {
     closeAll();
@@ -275,30 +396,61 @@ class LxMusicApi {
   ///
   /// 遍历所有声明支持该子源的启用插件，逐个 `dispatch('request', …)`；
   /// 任一返回空/异常即自动切到下一个插件（音源间自动切换）。
+  /// [pluginId] 非空时只使用这一个插件（音源测试页「单独测试一个音源」），
+  /// 避免被其它插件静默补链导致误判该音源可用。失败结果带 [LxFailReason]
+  /// 与汇总错误，供 UI / 日志如实展示。
   Future<LxPlayResult> musicUrl({
     required String subSource,
     required String quality,
     required Map<String, dynamic> musicInfo,
+    String? pluginId,
   }) async {
     await ensureLoaded();
-    final candidates = _plugins.values
-        .where((p) => p.supports(subSource))
-        .toList(growable: false);
-    if (candidates.isEmpty) return LxPlayResult.empty;
+    if (_plugins.isEmpty) {
+      return LxPlayResult.failed(LxFailReason.pluginsNotLoaded,
+          quality: quality, subSource: subSource);
+    }
+    final pool = pluginId == null
+        ? _plugins.values.toList(growable: false)
+        : _plugins.entries
+            .where((e) => e.key == pluginId)
+            .map((e) => e.value)
+            .toList(growable: false);
+    if (pool.isEmpty) {
+      return LxPlayResult.failed(LxFailReason.pluginsNotLoaded,
+          error: '未找到音源 $pluginId',
+          quality: quality,
+          subSource: subSource);
+    }
+    final candidates =
+        pool.where((p) => p.supports(subSource)).toList(growable: false);
+    if (candidates.isEmpty) {
+      return LxPlayResult.failed(LxFailReason.subSourceUnsupported,
+          error: '没有音源声明支持 $subSource',
+          quality: quality,
+          subSource: subSource);
+    }
 
+    final errors = <String>[];
     for (final p in candidates) {
-      final q = LxQuality.pick(quality, p.qualitysOf(subSource));
+      final declaredQ = p.qualitysOf(subSource);
+      final q = LxQuality.pick(quality, declaredQ);
       try {
-        final res = await p.runtime
-            .dispatch('request', <String, dynamic>{
-              'action': 'musicUrl',
-              'source': subSource,
-              'info': <String, dynamic>{'musicInfo': musicInfo, 'type': q},
-            })
-            .timeout(const Duration(seconds: 20));
+        final res = await p.runtime.dispatch('request', <String, dynamic>{
+          'action': 'musicUrl',
+          'source': subSource,
+          'info': <String, dynamic>{'musicInfo': musicInfo, 'type': q},
+        });
         final url = res.url;
-        if (res.isError || url == null || url.isEmpty) {
-          AppLog.w('LxMusicApi', '${p.source.name} 取链失败: ${res.error ?? '空链接'}');
+        if (res.isError) {
+          final why = res.error ?? '未知错误';
+          errors.add('${p.source.name}: $why');
+          AppLog.w('LxMusicApi', '${p.source.name} 取链失败: $why');
+          continue;
+        }
+        if (url == null || url.isEmpty) {
+          errors.add('${p.source.name}: 空链接');
+          AppLog.w('LxMusicApi', '${p.source.name} 取链返回空链接');
           continue;
         }
         return LxPlayResult(
@@ -309,16 +461,33 @@ class LxMusicApi {
               '',
           quality: q,
           pluginName: p.source.name,
+          subSource: subSource,
         );
       } catch (e) {
+        errors.add('${p.source.name}: $e');
         AppLog.w('LxMusicApi', '${p.source.name} 取链异常: $e');
       }
     }
-    return LxPlayResult.empty;
+    final allTimeout = errors.isNotEmpty &&
+        errors.every((e) => e.toLowerCase().contains('timeout'));
+    final allEmpty = errors.isNotEmpty &&
+        errors.every((e) => e.contains('空链接'));
+    return LxPlayResult.failed(
+      allTimeout
+          ? LxFailReason.timeout
+          : (allEmpty ? LxFailReason.emptyUrl : LxFailReason.pluginError),
+      error: errors.join('；'),
+      quality: quality,
+      subSource: subSource,
+    );
   }
 
   /// 由 [Song] 直接取流：自动映射子源、音质、构造洛雪 `musicInfo`。
-  Future<LxPlayResult> musicUrlForSong(Song song, dynamic quality) async {
+  Future<LxPlayResult> musicUrlForSong(
+    Song song,
+    dynamic quality, {
+    String? pluginId,
+  }) async {
     final sub = song.lxSource.isNotEmpty
         ? song.lxSource
         : LxSubSource.fromApp(song.source);
@@ -326,6 +495,7 @@ class LxMusicApi {
       subSource: sub,
       quality: LxQuality.from(quality),
       musicInfo: musicInfoOf(song, sub),
+      pluginId: pluginId,
     );
   }
 

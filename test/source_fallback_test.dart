@@ -127,5 +127,37 @@ void main() {
       );
       expect(out, isNull);
     });
+
+    test('纯洛雪模式整体短路：lx 与 qq 歌曲都不回退原生 / 不二次补链',
+        () async {
+      var nativeCalls = 0;
+      Future<PlayUrlResult> nativeFetch(Song s, dynamic q) async {
+        nativeCalls++;
+        return PlayUrlResult.lx('http://native/qq.mp3', quality: '128k');
+      }
+
+      final outLx = await SourceFallback.onFailure(
+        _song(source: Source.lx, lxSource: 'tx'),
+        Quality.flac,
+        enabledOverride: true,
+        pureLxOverride: true,
+        lxApi: api,
+        nativeFetch: nativeFetch,
+      );
+      expect(outLx, isNull);
+
+      // 非纯洛雪时这条会走「洛雪补链」成功；纯洛雪下也必须整体短路，
+      // 否则会二次打同一个洛雪网关。
+      final outQq = await SourceFallback.onFailure(
+        _song(),
+        Quality.flac,
+        enabledOverride: true,
+        pureLxOverride: true,
+        lxApi: api,
+        nativeFetch: nativeFetch,
+      );
+      expect(outQq, isNull);
+      expect(nativeCalls, 0);
+    });
   });
 }

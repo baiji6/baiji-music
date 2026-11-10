@@ -1,4 +1,5 @@
 import 'package:baiji_music/core/app_logger.dart';
+import 'package:baiji_music/core/pure_lx_mode.dart';
 import 'package:baiji_music/lx/lx_music_api.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_api.dart';
@@ -278,6 +279,44 @@ class MusicApi {
       Song song, Quality qqQuality, NeteaseQuality neQuality) async =>
       (await playUrlInfo(song, qqQuality, neQuality)).url;
 
+  /// 纯洛雪 / 洛雪歌曲的统一取流入口（v2.5.7-pre2）。
+  ///
+  /// 按 [song] 的来源平台挑选用户实际选中的档位：网易云走 ne、酷我走
+  /// kuwo、酷狗走 kugou、其余（QQ / 洛雪）走 qq —— 只传 QQ 档位会让
+  /// 其它平台用户在音质弹层里的选择失效。子源、洛雪档位名与 musicInfo
+  /// 由 [LxMusicApi.musicUrlForSong] 统一映射。
+  static Future<PlayUrlResult> _playUrlViaLx(
+    Song song,
+    Quality qqQuality,
+    NeteaseQuality neQuality, {
+    KuwoQuality? kuwo,
+    KugouQuality? kugou,
+  }) async {
+    final dynamic want;
+    if (song.isNetease) {
+      want = neQuality;
+    } else if (song.isKuwo) {
+      want = kuwo ?? KuwoQuality.playbackDefault;
+    } else if (song.isKugou) {
+      want = kugou ?? KugouQuality.playbackDefault;
+    } else {
+      want = qqQuality;
+    }
+    final r = await LxMusicApi.instance.musicUrlForSong(song, want);
+    if (!r.ok) {
+      AppLog.w('MusicApi',
+          '洛雪取流失败 [${r.reasonText}] ${r.error}（子源 ${r.subSource}）');
+      return PlayUrlResult.empty;
+    }
+    // 部分洛雪源返回 mflac/mgg + ekey：复用 QQ/酷我同一条本地 QMC
+    // 流式解密中继；明文直链则原样返回。
+    final url = await LxMusicApi.resolveEncrypted(r.url, r.ekey, r.format);
+    AppLog.d('MusicApi',
+        '洛雪源 ${r.pluginName} 取链成功（${r.quality}，子源 ${r.subSource}）');
+    return PlayUrlResult.lx(url,
+        ext: lxExt(r.format, r.url), quality: r.quality, ekey: r.ekey);
+  }
+
   /// 按歌曲来源取播放直链，并一并返回**服务端实际提供**的音质。
   ///
   /// 服务端普遍存在"请求成功但返回更低音质"的情况（未登录/无版权/未开通会员），
@@ -287,15 +326,13 @@ class MusicApi {
   static Future<PlayUrlResult> playUrlInfo(
     Song song, Quality qqQuality, NeteaseQuality neQuality,
     {KuwoQuality? kuwoQuality, KugouQuality? kugouQuality}) async {
-    if (song.isLx) {
-      final r = await LxMusicApi.instance.musicUrlForSong(song, qqQuality);
-      if (!r.ok) return PlayUrlResult.empty;
-      // 部分洛雪源返回 mflac/mgg + ekey：复用 QQ/酷我同一条本地 QMC
-      // 流式解密中继；明文直链则原样返回。
-      final url = await LxMusicApi.resolveEncrypted(r.url, r.ekey, r.format);
-      AppLog.d('MusicApi', '洛雪源 ${r.pluginName} 取链成功（${r.quality}）');
-      return PlayUrlResult.lx(url,
-          ext: lxExt(r.format, r.url), quality: r.quality, ekey: r.ekey);
+    // 纯洛雪模式（v2.5.7-pre2）：关闭内置音源后，所有网络歌曲（含从
+    // QQ/网易/酷我/酷狗搜索到的）一律只由洛雪 JS 音源取流；洛雪歌曲
+    // 无论开关状态都走这里。子源由 musicUrlForSong 按 song.source 推断，
+    // 天然绕开 search(Source.lx) 固定 tx 的旧路径。
+    if (PureLxMode.shouldUseLx(song)) {
+      return _playUrlViaLx(song, qqQuality, neQuality,
+          kuwo: kuwoQuality, kugou: kugouQuality);
     }
     if (song.isKugou) {
       final r = await KugouApi.playUrlWithFallback(

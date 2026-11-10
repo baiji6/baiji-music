@@ -124,6 +124,18 @@ class LxRuntime {
     // 同步取回结果（hash 返回 hex，random/AES 返回 base64）。此回调必须同步
     // 返回值，不得 await——flutter_js 会把返回值转成 JS 值回传给源脚本。
     _rt.onMessage('lx_crypto', handleLxCrypto);
+    // v2.5.7-pre2：把音源脚本的 console 输出转发到 App 日志。用户反馈
+    // 「洛雪取流好像有问题」时，脚本内部的 throw / 鉴权失败终于可见。
+    _rt.onMessage('lx_console', (dynamic args) {
+      try {
+        final map = Map<String, dynamic>.from(args as Map);
+        final level = map['level']?.toString() ?? 'log';
+        final text = (map['args'] as List? ?? const <dynamic>[]).join(' ');
+        AppLog.d('LxScript', '[$level] $text');
+      } catch (_) {
+        /* 日志通道不能反过来打断脚本 */
+      }
+    });
     _rt.onMessage('lx_inited', (dynamic args) {
       // args 已是 jsonDecode 后的对象：{ data: {...} }
       final map = Map<String, dynamic>.from(args as Map);
@@ -163,12 +175,15 @@ class LxRuntime {
         final resp = await _http(LxHttpRequest(url: url, opts: opts));
         if (_closed) return;
         final bodyJson = jsonEncode(resp.body);
-        _rt.evaluate('__lxResolveRequest($reqId, ${resp.statusCode}, $bodyJson)');
+        // v2.5.7-pre2：透传响应头（pre1 恒为空对象，部分源会读 headers）。
+        final headersJson = jsonEncode(resp.headers);
+        _rt.evaluate(
+            '__lxResolveRequest($reqId, ${resp.statusCode}, $bodyJson, false, $headersJson)');
         _rt.executePendingJob();
       } catch (e) {
         if (_closed) return;
         final errJson = jsonEncode(e.toString());
-        _rt.evaluate('__lxResolveRequest($reqId, 0, $errJson, true)');
+        _rt.evaluate('__lxResolveRequest($reqId, 0, $errJson, true, {})');
         _rt.executePendingJob();
       }
     }();
@@ -191,15 +206,23 @@ class LxRuntime {
   /// 派发一个 LX 事件（如 `'request'`，data 为 `{action, source, info}`）。
   ///
   /// 立即返回；处理器可通过 `lx.request` 异步取数，结果经 `lx_result` 回传。
+  /// v2.5.7-pre2：超时在这里统一处理并从待决表移除，避免脚本永远不回
+  /// `lx_result` 时泄漏 Completer（原来外层 `.timeout` 只抛异常、不清表）。
   Future<LxDispatchResult> dispatch(
-      String event, Map<String, dynamic> data) {
+    String event,
+    Map<String, dynamic> data, {
+    Duration timeout = const Duration(seconds: 20),
+  }) {
     final id = ++_dispatchId;
     final completer = Completer<LxDispatchResult>();
     _dispatchCompleters[id] = completer;
     final payload = {'event': event, 'data': data};
     _rt.evaluate('__lxDispatch($id, ${jsonEncode(payload)})');
     _rt.executePendingJob();
-    return completer.future;
+    return completer.future.timeout(timeout, onTimeout: () {
+      _dispatchCompleters.remove(id);
+      return LxDispatchResult(error: 'timeout after ${timeout.inSeconds}s');
+    });
   }
 
   /// 释放运行时。

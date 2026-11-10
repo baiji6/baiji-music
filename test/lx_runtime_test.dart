@@ -115,4 +115,97 @@ void main() {
           equals('Hello'));
     });
   });
+
+  // v2.5.7-pre2：宿主契约加固。pre1 的 resp.body 恒为字符串，ikun 直接读
+  // body.code 必抛 "unknow error"；console.groupEnd / EVENT_NAMES.updateAlert
+  // 缺失也会打断脚本。下面用内联脚本 + 真实夹具同时锁住这几条修复。
+  group('洛雪宿主契约加固（v2.5.7-pre2）', () {
+    /// 按 URL 区分 JSON / 纯文本响应，并带上自定义响应头。
+    Future<LxHttpResponse> probeHandler(LxHttpRequest req) async {
+      if (req.url.contains('/text')) {
+        return LxHttpResponse(
+            statusCode: 200,
+            body: 'plain-not-json',
+            headers: const {'x-test': 'yes'});
+      }
+      return LxHttpResponse(
+        statusCode: 200,
+        body: jsonEncode({'code': 200, 'url': 'http://cdn/ikun.flac'}),
+        headers: const {'x-test': 'yes'},
+      );
+    }
+
+    test('console 补齐 groupEnd / group / table / timeEnd', () {
+      final rt = LxRuntime(http: probeHandler);
+      final r = rt.rawRuntime.evaluate(
+          "typeof console.groupEnd === 'function' && "
+          "typeof console.group === 'function' && "
+          "typeof console.table === 'function' && "
+          "typeof console.timeEnd === 'function'");
+      expect(r.stringResult, 'true');
+      rt.close();
+    });
+
+    test('EVENT_NAMES 补齐 updateAlert / updateLog / log / error', () {
+      final rt = LxRuntime(http: probeHandler);
+      final r = rt.rawRuntime.evaluate(
+          "lx.EVENT_NAMES.updateAlert + '|' + lx.EVENT_NAMES.updateLog + '|' + "
+          "lx.EVENT_NAMES.log + '|' + lx.EVENT_NAMES.error");
+      expect(r.stringResult, 'updateAlert|updateLog|log|error');
+      rt.close();
+    });
+
+    test('lx.request：JSON 体→对象、非 JSON 体→字符串、headers 透传',
+        () async {
+      final rt = LxRuntime(http: probeHandler);
+      const script = r'''
+const { EVENT_NAMES, on, send, request } = globalThis.lx
+send(EVENT_NAMES.inited, { status: true, sources: {} })
+on(EVENT_NAMES.request, () => new Promise((resolve) => {
+  request('https://example/json', {}, (err, resp) => {
+    if (err) return resolve({ fatal: String(err) })
+    request('https://example/text', {}, (err2, resp2) => {
+      if (err2) return resolve({ fatal: String(err2) })
+      resolve({
+        jsonType: typeof resp.body,
+        jsonCode: resp.body.code,
+        textType: typeof resp2.body,
+        text: resp2.body,
+        header: resp.headers['x-test'],
+      })
+    })
+  })
+}))
+''';
+      rt.loadScript(script);
+      final res = await rt.dispatch('request', {'action': 'probe'});
+      expect(res.isError, isFalse, reason: '${res.error}');
+      expect(res.field('jsonType'), 'object');
+      expect(res.field('jsonCode'), 200);
+      expect(res.field('textType'), 'string');
+      expect(res.field('text'), 'plain-not-json');
+      expect(res.field('header'), 'yes');
+      rt.close();
+    });
+
+    // 现有「baimusic musicUrl 拿到直链」用例即不回归保证：cannedHandler
+    // 返回 JSON 字符串，修复后 __lxBody 解析成对象，baimusic.parseBody
+    // 对非字符串直接 return，body.url 仍可用。
+    test('ikun 真实音源取链成功（锁 resp.body 对象化 + console/EVENT_NAMES）',
+        () async {
+      final rt = LxRuntime(http: probeHandler);
+      rt.loadScript(await readSource(ikunPath));
+      final res = await rt.dispatch('request', {
+        'action': 'musicUrl',
+        'source': 'tx',
+        'info': {
+          'musicInfo': {'hash': 'HASH1', 'songmid': 'MID1'},
+          'type': '128k',
+        },
+      });
+      expect(res.isError, isFalse, reason: '${res.error}');
+      expect(res.url, 'http://cdn/ikun.flac');
+      rt.close();
+    }, skip: hasIkun ? null : noFixture);
+  });
 }

@@ -1,5 +1,6 @@
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/kv_store.dart';
+import 'package:baiji_music/core/pure_lx_mode.dart';
 import 'package:baiji_music/lx/lx_music_api.dart';
 import 'package:baiji_music/models/models.dart';
 
@@ -29,6 +30,8 @@ class FallbackOutcome {
 ///    接口（歌曲 mid 即 QQ songmid），插件全部失效时退回原生再试一次。
 ///
 /// 开关持久化在 [KvStore]，`KvStore` 未初始化（纯测试环境）时默认开启。
+///
+/// v2.5.7-pre2：纯洛雪模式下本兜底整体不生效（见 [onFailure]）。
 class SourceFallback {
   SourceFallback._();
 
@@ -52,16 +55,23 @@ class SourceFallback {
 
   /// 取流失败后的自动切换入口；返回替代结果，无法补充时返回 null。
   ///
-  /// [enabledOverride] / [lxApi] / [nativeFetch] 仅用于单测注入真实依赖。
+  /// [enabledOverride] / [pureLxOverride] / [lxApi] / [nativeFetch]
+  /// 仅用于单测注入真实依赖。
   static Future<FallbackOutcome?> onFailure(
     Song song,
     dynamic quality, {
     bool? enabledOverride,
+    bool? pureLxOverride,
     LxMusicApi? lxApi,
     Future<PlayUrlResult> Function(Song, dynamic)? nativeFetch,
   }) async {
     if (!(enabledOverride ?? enabled())) return null;
     if (song.isLocal) return null;
+    // 纯洛雪模式（v2.5.7-pre2）：主取流本来就只走洛雪，失败后禁止再
+    // 回退原生平台，也不做「洛雪补链」（否则会二次打同一网关）。必须
+    // 整体短路：_fallbackToNative 里的 playUrlInfo(copyWith(source: qq))
+    // 会被 playUrlInfo 顶部的纯洛雪分支重新接回洛雪，形成回环。
+    if (pureLxOverride ?? PureLxMode.pureLx) return null;
 
     if (song.isLx) {
       return _fallbackToNative(song, quality, nativeFetch);

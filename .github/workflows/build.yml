@@ -29,6 +29,14 @@ on:
 permissions:
   contents: write
 
+# 并发控制（v2.5.7-pre2）：同一 commit 的 main run 与 tag run 共享 group
+# 串行排队，避免 GitHub Actions 把 job 跨 run 去重 —— 实测会导致 tag run
+# 缺 iOS/Windows/release job、release 因 needs 不满足被静默跳过。
+# cancel-in-progress: false 表示排队等待而非取消正在跑的 run。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
 env:
   FLUTTER_VERSION: '3.47.6'
   # 注意：不要在这里写死 APP_VERSION。

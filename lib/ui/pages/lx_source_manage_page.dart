@@ -281,7 +281,8 @@ class _LxSourceManagePageState extends State<LxSourceManagePage> {
                       const MiuixHorizontalDivider(),
                       MiuixSwitchPreference(
                         title: '取链失败自动切换音源',
-                        summary: '原生接口取链失败时自动改用洛雪音源补链（未登录也能播放）',
+                        summary: '原生接口取链失败时自动改用洛雪音源补链'
+                            '（未登录也能播放；纯洛雪模式下不生效）',
                         startAction: Icon(Icons.swap_horiz_rounded,
                             color: AppColors.accentAlt, size: 22),
                         value: _fallbackEnabled,
@@ -294,7 +295,7 @@ class _LxSourceManagePageState extends State<LxSourceManagePage> {
                       const MiuixHorizontalDivider(),
                       MiuixArrowPreference(
                         title: '音源测试',
-                        summary: '对每个已启用音源跑搜索 / 取流探针，查看延迟与结果',
+                        summary: '按单个音源 / 音质 / 子源 / 曲目平台测试洛雪取流',
                         startAction: Icon(Icons.network_check_rounded,
                             color: AppColors.cyan, size: 22),
                         onClick: () => Navigator.push<void>(
