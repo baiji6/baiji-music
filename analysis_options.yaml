@@ -17,9 +17,6 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
-    # vendored 第三方包（quickjs_runtime / media_kit_libs_android_audio 等）
-    # 自带上游代码与测试，不参与主项目的 lint / 静态分析。
-    - third_party/**
 
 linter:
   # The lint rules applied to this project can be customized in the

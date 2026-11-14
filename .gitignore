@@ -53,14 +53,6 @@ app.*.map.json
 *.jks
 *.keystore
 
-# 洛雪音源测试夹具：用户提供的测试源仅用于本地/集成验证，
-# 按需求「发布时不上传到项目」，不入库、不随 App 资源包分发。
-# 缺失时相关单测会自动跳过（见 test/lx_runtime_test.dart）。
-/test/res/lx_sources/
-
 # 本地调试产物与第三方库 Gradle 构建输出（不入库）
 /bugreport/
 /third_party/**/android/build/
-
-# quickjs_runtime 本地编译产物（六端由 Native Assets hook 自动编译，不入库）
-/third_party/quickjs_runtime/native/quickjs/libquickjs_bridge.so

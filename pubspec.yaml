@@ -2,7 +2,7 @@ name: baiji_music
 description: "白姬音乐 - 跨平台音乐播放客户端（iOS / macOS / Windows / Linux / Android / HarmonyOS）"
 publish_to: 'none'
 
-version: 2.5.7-pre3+32
+version: 2.5.8+33
 
 environment:
   sdk: ^3.13.5
@@ -72,16 +72,6 @@ dependencies:
   # MV 播放页（v2.4.3）：Android 自动播放手势开关在平台包上，
   # 直接 import 其 API，按 lint 要求显式声明（版本随 webview_flutter）。
   webview_flutter_android: ^4.14.1
-  # 洛雪音源 JS 运行时宿主（v2.5.7 起）。
-  # flutter_js：iOS / macOS 走系统 JavaScriptCore（App Store 3.3.2 合规）。
-  flutter_js: ^0.8.0
-  # Android / Linux / Windows 走 vendored QuickJS 2024-01-13（pure-Dart FFI +
-  # Native Assets 六端自编译），解决 flutter_js 内置 QuickJS 2020/2021 无法
-  # 解析 molan.js 等现代语法音源的问题。
-  # 本地 fork（third_party/quickjs_runtime）修正了上游 hook/build.dart 在
-  # Android NDK 下误链 -lpthread 的问题（NDK 无独立 libpthread.so）。
-  quickjs_runtime:
-    path: third_party/quickjs_runtime
 
 dependency_overrides:
   # AC-4 解码：官方 media_kit_libs_android_audio 1.3.8 的 ffmpeg 是白名单编译，

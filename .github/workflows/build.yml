@@ -29,9 +29,9 @@ on:
 permissions:
   contents: write
 
-# 并发控制（v2.5.7-pre2）：同一 commit 的 main run 与 tag run 共享 group
-# 串行排队，避免 GitHub Actions 把 job 跨 run 去重 —— 实测会导致 tag run
-# 缺 iOS/Windows/release job、release 因 needs 不满足被静默跳过。
+# 并发控制：同一 commit 的 main run 与 tag run 共享 group、串行排队，
+# 避免 GitHub Actions 把 job 跨 run 去重 —— 实测会导致 tag run 缺
+# iOS/Windows/release job、release 因 needs 不满足被静默跳过。
 # cancel-in-progress: false 表示排队等待而非取消正在跑的 run。
 concurrency:
   group: ${{ github.workflow }}-${{ github.sha }}
@@ -104,14 +104,6 @@ jobs:
         run: |
           find ~/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
           find /home/runner/.pub-cache -path "*/android/build.gradle" -exec sed -i 's/compileSdkVersion\s*34/compileSdkVersion 36/g; s/compileSdk\s*34/compileSdk 36/g; s/compileSdkVersion\s*35/compileSdkVersion 36/g; s/compileSdk\s*35/compileSdk 36/g' {} + || true
-
-          # v2.5.7：flutter_js 0.8.7 自身声明 kotlinOptions.jvmTarget=1.8，
-          # 与 AGP 9 抬到 11 的插件 Java target 冲突，KGP 会直接判
-          # :flutter_js:compileReleaseKotlin 失败。这里把插件目标对齐到 11
-          # （与 Java 一致），配合 gradle.properties 的 validation.mode=warning
-          # 双保险；本地无 CI sed 时靠 warning 也能正常出包。
-          find ~/.pub-cache /home/runner/.pub-cache -path "*flutter_js*/android/build.gradle" \
-            -exec sed -i 's/JavaVersion.VERSION_1_8.toString()/JavaVersion.VERSION_11.toString()/g' {} + 2>/dev/null || true
 
       # v2.4.5 首次 Android 失败的实测根因（CI 日志）：:gradle:compileKotlin
       # 解析 kotlinBuildToolsApiClasspath 时下载 kotlin-compiler-embeddable-2.2.21.jar
@@ -355,16 +347,9 @@ jobs:
           }
 
       - name: Build Windows Release
-        # --verbose 让 Native Assets build hook 的 stderr 可见（MSBuild 默认把
-        # 自定义生成命令输出吞掉，排查 quickjs_runtime 的 C 编译失败必须靠它）。
-        # 全量输出写入文件，仅在失败时打印诊断行，避免打爆 Actions 日志。
-        shell: pwsh
         run: >-
-          $log = "build_win_verbose.log";
-          flutter build windows --release --verbose ${{ env.OBF_ARGS }} ${{ steps.integrity.outputs.has_key == 'true' && '--dart-define=BAIJI_CI_BUILD=true' || '' }} 2>&1 | Out-File -FilePath $log -Encoding utf8;
-          $code = $LASTEXITCODE;
-          if ($code -ne 0) { Write-Host "=== native assets / build hook 诊断 ==="; Select-String -Path $log -Pattern 'quickjs|hook\.dart|build\.dart|error|Error|cl\.exe|link\.exe|MSVC|ProcessException|ld\.lld|BuildInput' | Select-Object -Last 400 | ForEach-Object { $_.Line } } else { Write-Host "=== 构建摘要 ==="; Get-Content $log -Tail 12 };
-          exit $code
+          flutter build windows --release ${{ env.OBF_ARGS }}
+          ${{ steps.integrity.outputs.has_key == 'true' && '--dart-define=BAIJI_CI_BUILD=true' || '' }}
 
       # 下载 UPX Windows 版并加壳所有可执行文件
       - name: UPX pack

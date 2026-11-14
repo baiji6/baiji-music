@@ -6,6 +6,35 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.8
+
+> 正式版（tag `v2.5.8`）。本版起**不再适配洛雪（LX）音源**，彻底移除
+> v2.5.7-pre1 ~ pre3 期间引入的全部洛雪相关代码与依赖，回归
+> **QQ 音乐 / 网易云音乐 / 酷我音乐 / 酷狗音乐** 四音源。
+
+### 🗑️ 移除洛雪音源适配
+
+- 删除整个 `lib/lx/` 运行时目录（宿主引导脚本、HTTP 请求桥、同步加密桥、
+  JS 引擎抽象层与两套引擎适配、取流入口 `LxMusicApi`、音源仓库、版本比较与
+  检测更新），以及 `lib/core/pure_lx_mode.dart`、`lib/network/source_fallback.dart`。
+- 删除洛雪音源管理页与音源测试页，移除设置页「内置音源（需登录）」总开关、
+  平台下拉的「洛雪」项、播放器与数据模型（`Source.lx` / `Song.hash` / `isLx` /
+  `lxSource`）中的全部分支，以及启动时预热音源的逻辑。
+- 「取链失败自动切换音源」（原生→洛雪补链 / 洛雪→回退 QQ）随洛雪一并移除；
+  播放取流回归四大原生平台各自内部的音质降级链，功能不受影响。
+- 删除 `third_party/quickjs_runtime` 第三方引擎源码（约 9.5 万行 QuickJS C 代码）
+  与 7 组洛雪单测、本地测试音源夹具；移除 `flutter_js` / `quickjs_runtime`
+  依赖并重新生成 `pubspec.lock` 与六端插件注册表。`crypto` / `pointycastle` /
+  `ffi` 等原生能力依赖完整保留。
+
+### 🛠️ 构建与工程
+
+- 回退仅为洛雪引入的 Android `kotlin.jvmTarget.validation.mode` 兼容配置、
+  CI 中 flutter_js 的 JVM target sed 与 Windows `--verbose` build hook 诊断；
+  `build.yml` 保留通用的 `concurrency` 串行排队（避免 tag run 缺 Release job）。
+- `flutter analyze --no-pub` 零问题；全量 `flutter test --no-pub` 全绿；
+  本地 `flutter build linux --release` 实跑通过。版本号 `2.5.8+33`。
+
 ## 2.5.7-pre3
 
 > 预发布版（tag `v2.5.7-pre3`，GitHub Pre-release）。洛雪音源仍由**用户自行导入**，

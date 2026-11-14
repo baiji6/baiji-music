@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../core/pure_lx_mode.dart';
 import '../../models/models.dart';
 import '../../theme/app_theme.dart';
 
@@ -17,7 +16,6 @@ class PlatformPicker extends StatelessWidget {
     super.key,
     required this.current,
     required this.onChanged,
-    this.pureLx = false,
   });
 
   /// 当前平台（[Source.qq] / [Source.netease] / [Source.kuwo]）。
@@ -26,22 +24,12 @@ class PlatformPicker extends StatelessWidget {
   /// 平台切换回调。
   final ValueChanged<String> onChanged;
 
-  /// 是否强制隐藏「洛雪」项（v2.5.7-pre2）。
-  ///
-  /// 纯洛雪模式下任意平台的搜索结果都已由洛雪音源取流，而
-  /// `MusicApi.search(Source.lx)` 仍固定把子源写成 tx，留着这一项会把
-  /// 用户带回旧陷阱。未显式传入时由 [PureLxMode.pureLx] 兜底，保证设置页
-  /// 切换开关后搜索页 / 歌单页 / 发现页的所有平台下拉即时生效。
-  final bool pureLx;
-
   /// 平台展示信息。
   static List<({String id, String label, Color color})> get platforms => [
         (id: Source.qq, label: 'QQ 音乐', color: AppColors.accent),
         (id: Source.netease, label: '网易云', color: AppColors.accentAlt),
         (id: Source.kuwo, label: '酷我', color: const Color(0xFF3B82F6)),
         (id: Source.kugou, label: '酷狗', color: const Color(0xFF1EC17D)),
-        // 洛雪（v2.5.7）：用户自行导入的 JS 取流音源，未登录也能取流播放。
-        (id: Source.lx, label: '洛雪', color: const Color(0xFF9B59B6)),
       ];
 
   static ({String label, Color color}) infoOf(String source) {
@@ -53,12 +41,7 @@ class PlatformPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hideLx = pureLx || PureLxMode.pureLx;
-    // 纯洛雪下若当前仍是 lx（切换开关前的历史状态），显示回落到 QQ，
-    // 避免「菜单里没有洛雪项、标题却显示洛雪」的割裂状态。
-    final effectiveCurrent =
-        (hideLx && current == Source.lx) ? Source.qq : current;
-    final info = infoOf(effectiveCurrent);
+    final info = infoOf(current);
     return PopupMenuButton<String>(
       tooltip: '切换平台',
       position: PopupMenuPosition.under,
@@ -71,40 +54,35 @@ class PlatformPicker extends StatelessWidget {
       onSelected: onChanged,
       itemBuilder: (context) => [
         for (final p in platforms)
-          if (!hideLx || p.id != Source.lx)
-            PopupMenuItem<String>(
-              value: p.id,
-              height: 42,
-              child: Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: p.color,
-                      shape: BoxShape.circle,
-                    ),
+          PopupMenuItem<String>(
+            value: p.id,
+            height: 42,
+            child: Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: p.color,
+                    shape: BoxShape.circle,
                   ),
-                  const SizedBox(width: 10),
-                  Text(
-                    p.label,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: p.id == effectiveCurrent
-                          ? FontWeight.w700
-                          : FontWeight.w500,
-                      color: p.id == effectiveCurrent
-                          ? p.color
-                          : AppColors.textSecondary,
-                    ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  p.label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: p.id == current ? FontWeight.w700 : FontWeight.w500,
+                    color: p.id == current ? p.color : AppColors.textSecondary,
                   ),
-                  if (p.id == effectiveCurrent) ...[
-                    const Spacer(),
-                    Icon(Icons.check_rounded, size: 16, color: p.color),
-                  ],
+                ),
+                if (p.id == current) ...[
+                  const Spacer(),
+                  Icon(Icons.check_rounded, size: 16, color: p.color),
                 ],
-              ),
+              ],
             ),
+          ),
       ],
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
