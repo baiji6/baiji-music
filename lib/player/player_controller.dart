@@ -9,6 +9,7 @@ import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/core/telemetry.dart';
 import 'package:baiji_music/dts/dts_decoder.dart';
 import 'package:baiji_music/local/local_scanner.dart';
+import 'package:baiji_music/local/local_special_player.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/nac/nac_decoder.dart';
 import 'package:baiji_music/network/kuwo/kuwo_link.dart';
@@ -795,6 +796,26 @@ class PlayerController {
         _clearActual();
         return '';
       }
+      // v2.5.8-fix1：NAC / DTS:X / 360RA 等本地特殊格式，media_kit 的
+      // ffmpeg 没有对应解码器，先在播放前转成 PCM WAV 再播；AC-3/E-AC-3
+      // （杜比全景声）由 ffmpeg 直解，保持原文件不动。
+      final gen = ++_resolveGen;
+      final special = await LocalSpecialPlayer.ensurePlayable(
+        song,
+        onNotice: (msg) {
+          if (!_noticeStream.isClosed) _noticeStream.add(msg);
+        },
+      );
+      if (gen != _resolveGen) return _resolveSuperseded;
+      if (special != null && special.isNotEmpty) return special;
+      if (special != null) {
+        AppLog.w('PlayerController',
+            '本地特殊格式转码不可用，尝试直接播放: ${song.localPath}');
+        if (!_noticeStream.isClosed) {
+          _noticeStream.add('该格式需要 App 内置解码器（仅 Android arm64 可用），'
+              '可先用工具箱「音频转码」转成 WAV');
+        }
+      }
       return local;
     }
 
@@ -888,6 +909,46 @@ class PlayerController {
       // NAC（v2.4.2-pre12）：TL01 神经音频编解码，码流是矢量量化码字，
       // 必须经 MNN 模型推理重建频谱再 ISTFT，走 nac_glue 自研管线。
       final isNacPlan = !song.isNetease && plan.qq.code == Quality.nac.code;
+
+      // v2.5.8-fix1：解码进行中时最终 wav 还没落盘（native 写的是 .part），
+      // 此时若重新取流会被频控打空、或直接降级到低档。先复用首次解码任务，
+      // 安静等它完成，避免「NAC 解码两分钟里反复点播 → 一直播低档」。
+      if (isDtsxPlan && DtsMusic.isSupported) {
+        final pending = DtsMusic.waitOngoing(song.mid);
+        if (pending != null) {
+          final res = await pending;
+          if (gen != _resolveGen) return _resolveSuperseded;
+          if (res != null) {
+            AppLog.i('PlayerController', 'DTS:X 解码进行中，等待完成');
+            _applyDtsxActual();
+            return Uri.file(res.wavPath).toString();
+          }
+        }
+      }
+      if (isRa360Plan && Ra360Music.isSupported) {
+        final pending = Ra360Music.waitOngoing(song.mid);
+        if (pending != null) {
+          final res = await pending;
+          if (gen != _resolveGen) return _resolveSuperseded;
+          if (res != null) {
+            AppLog.i('PlayerController', '360RA 解码进行中，等待完成');
+            _applyRa360Actual(plan.qq);
+            return Uri.file(res.wavPath).toString();
+          }
+        }
+      }
+      if (isNacPlan && NacMusic.isSupported) {
+        final pending = NacMusic.waitOngoing(song.mid);
+        if (pending != null) {
+          final res = await pending;
+          if (gen != _resolveGen) return _resolveSuperseded;
+          if (res != null) {
+            AppLog.i('PlayerController', 'NAC 解码进行中，等待完成');
+            _applyNacActual();
+            return Uri.file(res.wavPath).toString();
+          }
+        }
+      }
 
       // 臻品 DTS:X / 索尼 360RA 缓存直通：这类档位的取流对短时间重复
       // 请求有频控（连续点播返回空 URL），而重试/复播时本地多半已有

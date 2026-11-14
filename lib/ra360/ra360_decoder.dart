@@ -26,6 +26,8 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
+import '../core/wav_cache.dart';
+
 import '../core/app_logger.dart';
 
 /// 解码产物：WAV 文件路径。
@@ -167,13 +169,21 @@ class Ra360Music {
   }
 
   /// 判断某首歌的 360RA 缓存是否已就绪（再次播放零等待）。
-  static Future<bool> hasCachedWav(String key) async =>
-      File(await wavPathFor(key)).existsSync();
+  ///
+  /// v2.5.8-fix1：校验 WAV 完整性，拒绝解码中途的半成品/残文件并清理。
+  static Future<bool> hasCachedWav(String key) async => WavCache.isValidCache(
+        File(await wavPathFor(key)),
+        tag: 'Ra360Music',
+      );
 
-  /// 删除某首歌的缓存（mp4 + wav）。
+  /// 删除某首歌的缓存（mp4 + wav + 半成品）。
   static Future<void> clearCache(String key) async {
     final root = await _coefRoot();
-    for (final name in ['ra360_$key.wav', 'ra360_$key.mp4']) {
+    for (final name in [
+      'ra360_$key.wav',
+      'ra360_$key.wav.part',
+      'ra360_$key.mp4',
+    ]) {
       final f = File('$root${Platform.pathSeparator}$name');
       if (f.existsSync()) f.deleteSync();
     }
@@ -195,16 +205,17 @@ class Ra360Music {
     if (!isSupported) return null;
     await _ensureCoefFiles();
     final root = await _coefRoot();
+    final part = WavCache.partPath(wavPath);
     try {
+      final partFile = File(part);
+      if (partFile.existsSync()) partFile.deleteSync();
       final out = await Isolate.run(() => _decodeNative(
             mp4Path: sourcePath,
-            wavPath: wavPath,
+            wavPath: part,
             appRoot: root,
           ));
       if (out == null) return null;
-      if (!File(wavPath).existsSync() || File(wavPath).lengthSync() < 44) {
-        return null;
-      }
+      if (!await WavCache.commit(part, wavPath, tag: 'Ra360Music')) return null;
       return wavPath;
     } catch (e) {
       AppLog.w('Ra360Music', '本地转 WAV 失败: $e');
@@ -247,12 +258,15 @@ class Ra360Music {
   }) async {
     await _ensureCoefFiles();
     final wavPath = await wavPathFor(key);
+    final part = WavCache.partPath(wavPath);
 
-    // 秒开：缓存命中直接回放。
+    // 秒开：只有完整的缓存才直接回放。
     if (await hasCachedWav(key)) {
       onProgress?.call(100, 'cached');
       return Ra360DecodeResult(wavPath);
     }
+    final partFile = File(part);
+    if (partFile.existsSync()) partFile.deleteSync();
 
     // 1) 下载 MHA1 mp4（CDN 直链，vkey 已签）。
     final mp4Path = wavPath.replaceAll('.wav', '.mp4');
@@ -270,12 +284,16 @@ class Ra360Music {
     try {
       final ok = await Isolate.run(() => _decodeNative(
             mp4Path: mp4Path,
-            wavPath: wavPath,
+            wavPath: part,
             appRoot: root,
           ));
       sw.stop();
       if (ok == null) {
         AppLog.w('Ra360Music', '360RA 解码失败（走音质降级）');
+        return null;
+      }
+      if (!await WavCache.commit(part, wavPath, tag: 'Ra360Music')) {
+        AppLog.w('Ra360Music', '360RA 解码产物不完整（走音质降级）');
         return null;
       }
       AppLog.i('Ra360Music', '360RA 解码完成 ${sw.elapsedMilliseconds}ms → $wavPath');

@@ -18,6 +18,8 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
+import '../core/wav_cache.dart';
+
 import '../core/app_logger.dart';
 
 /// 解码产物：WAV 文件路径 + 实际生效信息。
@@ -114,14 +116,22 @@ class DtsMusic {
   }
 
   /// 判断某首歌的 DT03 缓存是否已就绪（再次播放零等待）。
-  static Future<bool> hasCachedWav(String key) async =>
-      File(await wavPathFor(key)).existsSync();
+  ///
+  /// v2.5.8-fix1：校验 WAV 完整性，拒绝解码中途的半成品/残文件并清理。
+  static Future<bool> hasCachedWav(String key) async => WavCache.isValidCache(
+        File(await wavPathFor(key)),
+        tag: 'DtsMusic',
+      );
 
-  /// 删除某首歌的缓存（mp4 + wav）。
+  /// 删除某首歌的缓存（mp4 + wav + 半成品）。
   static Future<void> clearCache(String key) async {
     final dir = await getApplicationCacheDirectory();
     final base = '${dir.path}${Platform.pathSeparator}dts';
-    for (final name in ['dts_$key.wav', 'dts_$key.mp4']) {
+    for (final name in [
+      'dts_$key.wav',
+      'dts_$key.wav.part',
+      'dts_$key.mp4',
+    ]) {
       final f = File('$base${Platform.pathSeparator}$name');
       if (f.existsSync()) f.deleteSync();
     }
@@ -151,17 +161,18 @@ class DtsMusic {
   ) async {
     if (!isSupported) return null;
     final (licPath, cfgPath) = await _ensureLicenseFiles();
+    final part = WavCache.partPath(wavPath);
     try {
+      final partFile = File(part);
+      if (partFile.existsSync()) partFile.deleteSync();
       final dropped = await Isolate.run(() => _decodeNative(
             mp4Path: sourcePath,
-            wavPath: wavPath,
+            wavPath: part,
             licPath: licPath,
             cfgPath: cfgPath,
           ));
       if (dropped == null) return null;
-      if (!File(wavPath).existsSync() || File(wavPath).lengthSync() < 44) {
-        return null;
-      }
+      if (!await WavCache.commit(part, wavPath, tag: 'DtsMusic')) return null;
       return wavPath;
     } catch (e) {
       AppLog.w('DtsMusic', '本地转 WAV 失败: $e');
@@ -204,12 +215,15 @@ class DtsMusic {
   }) async {
     final (licPath, cfgPath) = await _ensureLicenseFiles();
     final wavPath = await wavPathFor(key);
+    final part = WavCache.partPath(wavPath);
 
-    // 秒开：缓存命中直接回放。
+    // 秒开：只有完整的缓存才直接回放。
     if (await hasCachedWav(key)) {
       onProgress?.call(100, 'cached');
       return DtsDecodeResult(wavPath, 0);
     }
+    final partFile = File(part);
+    if (partFile.existsSync()) partFile.deleteSync();
 
     // 1) 下载 mp4（CDN 直链，vkey 已签）。
     final mp4Path = wavPath.replaceAll('.wav', '.mp4');
@@ -226,13 +240,17 @@ class DtsMusic {
     try {
       final dropped = await Isolate.run(() => _decodeNative(
             mp4Path: mp4Path,
-            wavPath: wavPath,
+            wavPath: part,
             licPath: licPath,
             cfgPath: cfgPath,
           ));
       sw.stop();
       if (dropped == null) {
         AppLog.w('DtsMusic', 'DTS:X 解码失败（走音质降级）');
+        return null;
+      }
+      if (!await WavCache.commit(part, wavPath, tag: 'DtsMusic')) {
+        AppLog.w('DtsMusic', 'DTS:X 解码产物不完整（走音质降级）');
         return null;
       }
       AppLog.i('DtsMusic',

@@ -26,6 +26,12 @@ import 'package:baiji_music/metadata/audio_reader.dart';
 import 'package:baiji_music/models/models.dart';
 
 /// 支持的音频扩展名（小写）。
+///
+/// v2.5.8-fix1：补齐特殊音质容器，让本地扫描也能收录它们——
+/// NAC(.nac) / DTS:X(.dts/.dtshd/.dtsx) / 索尼 360RA(.mha1/.mhm1) /
+/// 杜比(.ac3/.eac3/.ec3) / AV3A(.av3a)。收录后由
+/// local_special_player.dart 在播放前把自研解码器才能解的格式转成 WAV，
+/// AC-3/E-AC-3 交给 media_kit 内置 ffmpeg 直接解。
 const Set<String> kAudioExtensions = <String>{
   'mp3',
   'flac',
@@ -38,6 +44,17 @@ const Set<String> kAudioExtensions = <String>{
   'oga',
   'wav',
   'wave',
+  // 特殊音质容器
+  'nac',
+  'dts',
+  'dtshd',
+  'dtsx',
+  'mha1',
+  'mhm1',
+  'ac3',
+  'eac3',
+  'ec3',
+  'av3a',
 };
 
 /// 单个文件的增量指纹：大小 + 修改时间。

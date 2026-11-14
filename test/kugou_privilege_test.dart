@@ -135,6 +135,77 @@ const Map<String, dynamic> _with360raItem = <String, dynamic>{
   ],
 };
 
+/// 真实响应片段（2026-11-14 实测，杨丞琳《雨爱》
+/// hash=2592FFA57A2D8B1A16F18D991B7098CD）。
+///
+/// 关键：**三档 360RA 的 `info.filesize` 全是 0、`extname` 为空**，但 hash
+/// 都是真实且互不相同的 32 位 hex。用 `360ra_l3` 的 hash 请求 /v5/url 返回
+/// `status=2`（需会员/登录），证明档位真实存在。v2.5.4 的解析把
+/// `filesize<=0` 当作「服务端占位」，把这三条整批丢掉 —— 这正是「有的歌
+/// 有 360RA，音质列表里却没有」的根因。
+const Map<String, dynamic> _yuaPrivilegeItem = <String, dynamic>{
+  'type': 'audio',
+  'album_audio_id': 65727949,
+  'hash': '2592FFA57A2D8B1A16F18D991B7098CD',
+  'name': '杨丞琳 - 雨爱',
+  'relate_goods': <Map<String, dynamic>>[
+    <String, dynamic>{
+      'hash': '2592FFA57A2D8B1A16F18D991B7098CD',
+      'quality': '128',
+      'level': 2,
+      'info': <String, dynamic>{'filesize': 4168946, 'extname': 'mp3'},
+    },
+    <String, dynamic>{
+      'hash': 'E72D5EEC94706BEF1BB6DCA4DE1CF09F',
+      'quality': '320',
+      'level': 4,
+      'info': <String, dynamic>{'filesize': 10421564, 'extname': 'mp3'},
+    },
+    <String, dynamic>{
+      'hash': 'F9ED36771CE6A071C2A4C210E4E68F56',
+      'quality': 'flac',
+      'level': 5,
+      'info': <String, dynamic>{'filesize': 33618441, 'extname': 'flac'},
+    },
+    <String, dynamic>{
+      'hash': '3E483896EA485A57E390A7717E615486',
+      'quality': 'high',
+      'level': 6,
+      'info': <String, dynamic>{'filesize': 34229336, 'extname': 'flac'},
+    },
+    <String, dynamic>{
+      'hash': 'AC0FFF1D8EBD01C80F49922993DC3FF1',
+      'quality': 'viper_atmos',
+      'level': 0,
+      'info': <String, dynamic>{'filesize': 75074328, 'extname': ''},
+    },
+    <String, dynamic>{
+      'hash': '121E484D7B2272F7C484433FD0778680',
+      'quality': 'viper_hifi',
+      'level': 0,
+      'info': <String, dynamic>{'filesize': 34229336, 'extname': ''},
+    },
+    <String, dynamic>{
+      'hash': '5972211B55D476AFB185B4FE18B0D7B7',
+      'quality': '360ra_l1',
+      'level': 0,
+      'info': <String, dynamic>{'filesize': 0, 'extname': ''},
+    },
+    <String, dynamic>{
+      'hash': '26C4656B1372635A50102C1BD69B84A6',
+      'quality': '360ra_l2',
+      'level': 0,
+      'info': <String, dynamic>{'filesize': 0, 'extname': ''},
+    },
+    <String, dynamic>{
+      'hash': 'FA13C7044B6F80D593088787DDB12145',
+      'quality': '360ra_l3',
+      'level': 0,
+      'info': <String, dynamic>{'filesize': 0, 'extname': ''},
+    },
+  ],
+};
+
 void main() {
   group('KugouPrivilegeApi.parseQualities', () {
     test('解析 relate_goods → quality → option', () {
@@ -155,18 +226,37 @@ void main() {
       expect(opts['viper_atmos']!.hash, '44CC94A3AA62AEC24923EDB609445C47');
     });
 
-    test('filesize=0 的条目被跳过（服务端占位）', () {
+    test('filesize=0 但 hash 有效仍保留（v2.5.8-fix1，360RA 实测）', () {
+      // 服务端对 360RA 三档一律不下发 filesize，旧逻辑据此整批丢弃，
+      // 导致所有带 360RA 的歌曲都看不到该档位。
+      final opts = KugouPrivilegeApi.parseQualities(_yuaPrivilegeItem);
+      expect(opts.containsKey('360ra_l1'), isTrue);
+      expect(opts.containsKey('360ra_l2'), isTrue);
+      expect(opts.containsKey('360ra_l3'), isTrue);
+      expect(opts['360ra_l3']!.hash, 'FA13C7044B6F80D593088787DDB12145');
+      expect(opts['360ra_l3']!.filesize, 0,
+          reason: '0 只表示服务端没给大小，不是档位无效');
+    });
+
+    test('hash 为空的占位条目才被跳过', () {
       final opts = KugouPrivilegeApi.parseQualities(<String, dynamic>{
         'relate_goods': <Map<String, dynamic>>[
           <String, dynamic>{
-            'hash': 'HASHX',
+            'hash': '',
+            'quality': '360ra_l3',
+            'level': 0,
+            'info': <String, dynamic>{'filesize': 0},
+          },
+          <String, dynamic>{
+            'hash': 'REALHASH000000000000000000000000',
             'quality': 'flac',
             'level': 5,
-            'info': <String, dynamic>{'filesize': 0},
+            'info': <String, dynamic>{'filesize': 1024},
           },
         ],
       });
-      expect(opts, isEmpty);
+      expect(opts.containsKey('360ra_l3'), isFalse);
+      expect(opts.containsKey('flac'), isTrue);
     });
 
     test('非 Map / 缺 relate_goods 时返回空', () {
@@ -294,6 +384,41 @@ void main() {
       expect(song.hashFor(KugouQuality.k320), 'HASH320');
       expect(song.hashFor(KugouQuality.flac), 'HASHFLAC');
       expect(song.hashFor(KugouQuality.hires), 'HASHRES');
+    });
+  });
+
+  group('v2.5.8-fix1 回归：雨爱的 360RA 必须出现在音质列表', () {
+    test('解析 → 档位推导含 360ra（只出现一次）', () {
+      final opts = KugouPrivilegeApi.parseQualities(_yuaPrivilegeItem);
+      final tiers = KugouApi.tiersFromPrivilege(opts,
+          has320: true, hasFlac: true);
+      final ids = tiers.map((q) => q.id).toList();
+      expect(ids, contains('360ra'),
+          reason: '《雨爱》服务端确实下发 360ra_l1/l2/l3，UI 必须展示');
+      expect(ids.where((id) => id == '360ra').length, 1,
+          reason: '三档映射到同一 UI 档位，需去重');
+    });
+
+    test('qualityCodes 含 360ra → filterQualityOptions 不会把它过滤掉', () {
+      final opts = KugouPrivilegeApi.parseQualities(_yuaPrivilegeItem);
+      final tiers = KugouApi.tiersFromPrivilege(opts,
+          has320: true, hasFlac: true);
+      final codes = tiers.map((q) => q.id).toSet();
+      final visible = filterQualityOptions(
+          codes, KugouQuality.playbackOptions, (q) => q.id);
+      expect(visible.map((q) => q.id), contains('360ra'));
+    });
+
+    test('取流能拿到服务端下发的 360ra_l3 hash', () {
+      final opts = KugouPrivilegeApi.parseQualities(_yuaPrivilegeItem);
+      final song = KugouApi.parseSong(<String, dynamic>{
+        'MixSongID': '65727949',
+        'SongName': '雨爱',
+        'SingerName': '杨丞琳',
+        'FileHash': '2592FFA57A2D8B1A16F18D991B7098CD',
+      })!.copyWith(qualityOptions: opts);
+      expect(song.hashFor(KugouQuality.ra360),
+          'FA13C7044B6F80D593088787DDB12145');
     });
   });
 

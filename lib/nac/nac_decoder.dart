@@ -23,6 +23,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
 import '../core/app_logger.dart';
+import '../core/wav_cache.dart';
 
 /// 解码产物：WAV 文件路径。
 class NacDecodeResult {
@@ -116,13 +117,23 @@ class NacMusic {
   }
 
   /// 判断某首歌的 NAC 缓存是否已就绪（再次播放零等待）。
-  static Future<bool> hasCachedWav(String key) async =>
-      File(await wavPathFor(key)).existsSync();
+  ///
+  /// v2.5.8-fix1：不能只看文件是否存在——原生解码器边解码边写最终路径，
+  /// 中途的文件开头是 44 字节全 0，播了会报 `Failed to recognize file
+  /// format.`；被中断留下的残文件同理。这里校验 WAV 完整性并自动清理残文件。
+  static Future<bool> hasCachedWav(String key) async => WavCache.isValidCache(
+        File(await wavPathFor(key)),
+        tag: 'NacMusic',
+      );
 
-  /// 删除某首歌的缓存（nac + wav）。
+  /// 删除某首歌的缓存（wav / 半成品 / nac）。
   static Future<void> clearCache(String key) async {
     final root = await _workRoot();
-    for (final name in ['nac_$key.wav', 'nac_$key.nac']) {
+    for (final name in [
+      'nac_$key.wav',
+      'nac_$key.wav.part',
+      'nac_$key.nac',
+    ]) {
       final f = File('$root${Platform.pathSeparator}$name');
       if (f.existsSync()) f.deleteSync();
     }
@@ -139,16 +150,18 @@ class NacMusic {
   ) async {
     if (!isSupported) return null;
     final modelPath = await _ensureModel();
+    final part = WavCache.partPath(wavPath);
     try {
+      // 上次解码若被中断，先清掉半成品，避免 native 以 "wb" 覆盖时残留。
+      final partFile = File(part);
+      if (partFile.existsSync()) partFile.deleteSync();
       final out = await Isolate.run(() => _decodeNative(
             nacPath: sourcePath,
-            wavPath: wavPath,
+            wavPath: part,
             modelPath: modelPath,
           ));
       if (out == null) return null;
-      if (!File(wavPath).existsSync() || File(wavPath).lengthSync() < 44) {
-        return null;
-      }
+      if (!await WavCache.commit(part, wavPath, tag: 'NacMusic')) return null;
       return wavPath;
     } catch (e) {
       AppLog.w('NacMusic', '本地转 WAV 失败: $e');
@@ -195,12 +208,16 @@ class NacMusic {
   }) async {
     final modelPath = await _ensureModel();
     final wavPath = await wavPathFor(key);
+    final part = WavCache.partPath(wavPath);
 
-    // 秒开：缓存命中直接回放。
+    // 秒开：只有**完整**的缓存才直接回放（残文件会在 hasCachedWav 里清掉）。
     if (await hasCachedWav(key)) {
       onProgress?.call(100, 'cached');
       return NacDecodeResult(wavPath);
     }
+    // 清掉上次中断留下的半成品，避免与新解码的写入混在一起。
+    final partFile = File(part);
+    if (partFile.existsSync()) partFile.deleteSync();
 
     // 1) 下载 .nac（CDN 直链，vkey 已签）
     final nacPath = wavPath.replaceAll('.wav', '.nac');
@@ -217,12 +234,18 @@ class NacMusic {
     try {
       final ok = await Isolate.run(() => _decodeNative(
             nacPath: nacPath,
-            wavPath: wavPath,
+            wavPath: part,
             modelPath: modelPath,
           ));
       sw.stop();
       if (ok == null) {
         AppLog.w('NacMusic', 'NAC 解码失败（走音质降级）');
+        return null;
+      }
+      // v2.5.8-fix1：解码先写 .part，校验完整后才原子替换最终 wav。
+      // 否则解码进行中（NAC 需 1~2 分钟）最终路径上的半成品会被缓存命中。
+      if (!await WavCache.commit(part, wavPath, tag: 'NacMusic')) {
+        AppLog.w('NacMusic', 'NAC 解码产物不完整（走音质降级）');
         return null;
       }
       AppLog.i('NacMusic', 'NAC 解码完成 ${sw.elapsedMilliseconds}ms -> $wavPath');

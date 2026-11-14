@@ -25,6 +25,17 @@
 //
 // 该接口**不校验 gateway 签名**（只认 appid / clientver），但仍带上
 // 设备 mid 保持与登录态一致。
+//
+// **v2.5.8-fix1 修正**：服务端对 360RA 三档（`360ra_l1/l2/l3`）一律
+// **不下发 `info.filesize`**（值为 0，`extname` 也为空），但每档都带真实
+// 且互不相同的 32 位 hash。2026-11-14 实测杨丞琳《雨爱》
+// （hash=2592FFA57A2D8B1A16F18D991B7098CD）：三档 hash 分别是
+// 5972211B… / 26C4656B… / FA13C704…，用 `360ra_l3` 的 hash 请求 /v5/url
+// 返回 `status=2`（需会员/登录），证明档位真实存在、只是需要登录。
+// 旧实现把 `filesize<=0` 当成「服务端占位、档位无效」整批丢掉，于是
+// **所有带 360RA 的歌曲都看不到 360RA 选项**。同批 10 个关键词共 1207 个
+// 档位条目，filesize=0 的只有这 3 条，且都是合法 hash——因此有效性只看
+// (quality, hash)，filesize 仅作元数据（0 = 服务端未给大小）。
 library;
 
 import 'dart:convert';
@@ -212,8 +223,17 @@ abstract final class KugouPrivilegeApi {
       final info = g['info'];
       final infoMap = info is Map ? info : const <String, dynamic>{};
       final size = _toInt(infoMap['filesize']);
-      // 服务端偶尔给 filesize=0 的条目（高级档常见），跳过空档。
-      if (size <= 0) continue;
+      // v2.5.8-fix1：**不能**再用 filesize<=0 判档位无效。实测服务端对
+      // 360RA 三档一律不下发 filesize（0）且 extname 为空，但 hash 是真实
+      // 的 32 位 hex，取链也认这个档（未登录返回 status=2）。旧逻辑把
+      // 「服务端没给文件大小」当成「档位不存在」，于是所有带 360RA 的歌
+      // 都看不到 360RA 选项（如杨丞琳《雨爱》）。
+      //
+      // 服务端只为歌曲**真实拥有**的档位返回 relate_goods 条目（同批 10 个
+      // 关键词 1207 个条目里，filesize=0 的仅《雨爱》这 3 条 360RA，
+      // 且 hash 均合法），因此有效性只看 (quality, hash)；
+      // 真正需要挡掉的占位条目是 hash 为空的那些，上面已 continue。
+      // filesize 退化为纯元数据：0 = 服务端未给大小。
       out[quality] = KugouQualityOption(
         quality: quality,
         hash: hash,
