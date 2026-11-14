@@ -6,6 +6,79 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.8-fix2
+
+> 正式修订版（tag `v2.5.8-fix2`）。修复酷狗 360RA 无法解码，新增日志自定义
+> 保存位置，并让 DTS:X / 360RA / NAC 三个自研解码格式支持**边转码边播放**。
+
+### 🐛 酷狗：360RA 音质无法解码
+
+- 根因：酷狗服务端下发的 360RA 是 **MPEG-H 3D Audio** 容器——mp4 的 stsd 里
+  fourcc 为 `mhm1`，`mhaC` 配置盒内联 `mpegh3daConfig`。media_kit 的 ffmpeg
+  白名单没有这个解码器，旧版把直链原样丢给播放器，只会得到
+  `Failed to recognize file format.`（日志里能看到
+  `播放: ...qu360ra_l3...mp4` 之后没有解码记录）。而 QQ 音乐的 RA01-04
+  走的是原生解码管线，酷狗这一档**完全没接进去**。
+- 逆向确认（酷狗音乐 20.8.8 官方 64 位 / 32 位 APK）：
+  - 酷狗 `libkugouplayer.so` 内置 `KugouPlayer::Sony360RADecoder` +
+    `KugouPlayer::MpeghDecoder`，调用的是 `sia_mhdr_*` / `sia_virtualizer_*`
+    ——与官方 QQ 解码器 `qm_native_decoder_360ra.so` 内置的是**同一套
+    Sony SAL SDK**；
+  - 两者的 mp4 解析器都支持 `mhm1` / `mhaC`：反汇编
+    `CMP4Parser::find_stsd_in_stbl` 确认它依次 `strncmp` 比较
+    `mha1`(0x1bd1d) / `mhm1`(0x1bd27) / `mhaC`(0x1bd22)。
+  - 实测《雨爱》360RA 样本（52MB）：stsd fourcc = `mhm1`，`mhaC` 内
+    `profileLevelIndication=0x0e`（MPEG-H 3D Audio），config 内联，
+    与 QQ 音乐 RA0x **完全同型**。
+- 修复：酷狗 `360ra` 档位接入与 QQ 音乐 RA0x 相同的原生解码管线，产出
+  48kHz/32bit binaural WAV 后播放；解码失败时诚实降级到其它音质。缓存 key
+  带 `kg360ra_` 前缀，与 QQ 侧隔离（避免同 mid 的两平台歌互相命中对方的
+  解码产物）。
+- 补齐路由回归测试，锁定「酷狗 360RA → 原生解码」的映射与缓存隔离。
+
+### 🎵 边转码边播放（DTS:X / 360RA / NAC）
+
+- 此前三个自研解码格式都是「整曲解码完 → 写 WAV 缓存 → 再播放」。NAC 一次
+  解码要 1~2 分钟（MNN 神经推理 + ISTFT），360RA 要数秒到数十秒，这段时间
+  **完全没声**；用户中途切歌，已解的部分全部白费。
+- 修复：新增 `lib/core/transcode_stream.dart`——本机 HttpServer（127.0.0.1
+  随机端口）tail 原生解码器**边解边写**的临时文件，把增量 PCM 实时推给
+  播放器；libmpv 收到多少算多少，**首帧到达即出声**。
+  - 原生侧新增 `ra360glue_decode_stream` / `dtsglue_decode_stream` /
+    `nacglue_decode_stream`：边解码边追加写 PCM，每段 `fflush`。
+  - 流式 WAV 头的 RIFF / data 长度写 `0xFFFFFFFF`（未知总长，流式场景的
+    常规做法）——已实测 ffmpeg 能正常解码这类 WAV（`duration=N/A` 是流式的
+    正常表现），端到端验证「解码未完成即开始出数据、字节数精确匹配」。
+  - DTS:X 的声道数在解码首帧前未知，因此**先解一帧探测真实声道数**再写头，
+    避免头里声道数写错导致音频变成噪声。
+  - 流式失败自动回落到「整曲解码 + WAV 缓存」旧路径，两条路互为兜底。
+- 说明：流式产物写在系统临时目录，**不污染正式缓存**；正式缓存仍由
+  v2.5.8-fix1 的「`.part` + 校验 + 原子落盘」流程负责。
+
+### ⚙️ 日志支持自定义保存位置
+
+- 日志此前固定写在应用支持目录下的 `logs/`，用户想抓日志排查问题只能连
+  adb 拉文件。现在设置页新增「日志保存位置」，可自选目录（如 SD 卡上的某
+  个文件夹），方便直接用文件管理器取。
+- 切换时做**写入预检**（建目录 + 写探针文件 + 删除），选到不可写的目录会
+  明确提示「Android 11+ 写公共目录需要「所有文件访问权限」」，而不是让
+  日志静默地继续写在旧目录里、用户却以为已经切好。
+- 自定义目录不可用（卡被拔、目录被删、权限被收回）时**静默回落到默认目录**
+  并记一条 warn——日志功能不能因为一个目录设置而整体停摆。
+- 切换只影响之后的写入，旧日志留在原处（不迁移）；清理过期日志仍只删
+  匹配 `baiji_YYYYMMDD.log` 的文件，不会误伤用户目录里的其它内容。
+
+### 🧪 回归测试
+
+- 新增 `test/transcode_stream_test.dart`：验证「文件增长过程中即可读到已
+  写入的部分」（首帧不必等写完）、多次追加的数据按顺序完整读出无重复遗漏、
+  流式 WAV 头的未知长度标记。
+- 新增 `test/kugou_360ra_route_test.dart`：锁定酷狗 360RA 的档位属性与
+  解码管线路由、缓存 key 的平台隔离。
+- 新增 `test/log_custom_dir_test.dart`：覆盖自定义目录读写、不可写不落盘、
+  回落默认目录、旧日志不迁移、键名不冲突。
+- 全量 **1211 项测试通过**（v2.5.8-fix1 为 1187 项）。
+
 ## 2.5.8-fix1
 
 > 正式修订版（tag `v2.5.8-fix1`）。修复三个线上问题：酷狗有 360RA 却不展示、

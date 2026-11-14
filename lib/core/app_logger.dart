@@ -96,6 +96,14 @@ class AppLog {
   /// 平台拿不到目录时静默降级为纯内存日志。
   Future<void> initFileSink() async {
     await LogStore.instance.init();
+    // 自定义日志目录不可用时 LogStore 会静默回落到默认目录。
+    // 这里补一条 warn：否则用户以为日志还写在 SD 卡上，实际却躺在应用
+    // 私有目录里，排查问题时找不到文件还以为日志功能坏了。
+    // 放在 LogStore 之外记录，是为了不让底层存储模块反向依赖 AppLog。
+    final note = LogStore.instance.fallbackNote;
+    if (note != null) {
+      _instance.log(warn, 'LogStore', note);
+    }
     final history = await LogStore.instance.readToday();
     if (history.isEmpty) return;
     for (final line in history) {

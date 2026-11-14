@@ -780,6 +780,178 @@ void nacglue_close(void) {
         std::fill(g_state[i].begin(), g_state[i].end(), 0.0f);
 }
 
+/* ===================== 流式解码（v2.5.8-fix2：边转码边播放） =====================
+ *
+ * NAC 一次解码要 1~2 分钟（MNN 神经推理 + ISTFT），整曲解码完才出声的
+ * 体验很差。流式版本**边解边把 PCM 追加写到目标文件**，progress 回调
+ * 通知已写字节数（-1 = 正常结束）；Dart 侧 tail 这个文件并推给本机
+ * HttpServer → media_kit，播放器边收边播，首帧到达即出声。
+ *
+ * 采样率与声道数取自 .nac 容器头（g_hdr），解码前即已知，头可以一次写对。
+ *
+ * 文件格式：标准 44 字节 WAV 头，RIFF / data 长度写 0xFFFFFFFF（未知总长，
+ * 流式场景的常规做法，ffmpeg / mpv 都能正常解码）。
+ */
+int nacglue_decode_stream(const char *wav_path,
+                           void (*progress)(long, void *), void *user) {
+    if (!g_sess || !g_interp) return -20;
+    if (g_hdr.nseg <= 0 || g_hdr.channels <= 0) return -20;
+
+    const int NF = g_hdr.nf;        /* 每段有效帧数 32 */
+    const int HOP = g_hdr.hop;      /* 256 */
+    const int NFFT = g_hdr.fft;     /* 512 */
+    const int FR = 34;              /* 模型输出帧数（含 2 padding） */
+    const int BINS = NFFT / 2 + 1;  /* 257 */
+    const int CH = g_hdr.channels;
+    const int CODE_N = g_hdr.cn * NF * CH;
+
+    const int LEN = (NF - 1) * HOP + NFFT;
+    const int EMIT = NF * HOP;              /* 8192 可定稿长度 */
+    const int TAIL = LEN - EMIT;            /* 256 需与下段重叠 */
+
+    void *tCodes = g_getInput(g_interp, g_sess, "codes");
+    void *tFreq = g_getOutput(g_interp, g_sess, "freq");
+    if (!tCodes || !tFreq) {
+        setErr("missing tensor codes/freq");
+        return -22;
+    }
+
+    void *tIn[(sizeof(kBufs) / sizeof(kBufs[0]))];
+    void *tOut[(sizeof(kBufs) / sizeof(kBufs[0]))];
+    for (int i = 0; i < kNBuf; i++) {
+        tIn[i] = g_getInput(g_interp, g_sess, kBufs[i].inName);
+        tOut[i] = g_getOutput(g_interp, g_sess, kBufs[i].outName);
+    }
+
+    FILE *w = fopen(wav_path, "wb");
+    if (!w) {
+        LOGE("wav open: %s", wav_path);
+        return -21;
+    }
+    /* 流式头：长度字段全 0xFFFFFFFF（未知总长）。 */
+    wavWriteHeader(w, 0xFFFFFFFFu, g_hdr.sampleRate, CH);
+
+    /* Hann 窗（对称，与 np.hanning(512) 一致） */
+    std::vector<float> win((size_t)NFFT);
+    for (int i = 0; i < NFFT; i++)
+        win[(size_t)i] = (float)(0.5 - 0.5 * std::cos(2.0 * M_PI * i / (NFFT - 1)));
+
+    std::vector<int32_t> codes((size_t)CODE_N);
+    std::vector<float> Xr((size_t)NFFT), Xi((size_t)NFFT);
+    std::vector<float> freqBuf((size_t)CH * 2 * FR * BINS);
+
+    std::vector<double> acc((size_t)LEN, 0.0);
+    std::vector<double> nrm((size_t)LEN, 0.0);
+    std::vector<std::vector<double>> carry((size_t)CH,
+                                            std::vector<double>((size_t)TAIL, 0.0));
+    std::vector<std::vector<double>> carryN((size_t)CH,
+                                             std::vector<double>((size_t)TAIL, 0.0));
+    std::vector<int16_t> inter((size_t)EMIT * (size_t)CH);
+
+    long totalSamples = 0;
+
+    for (int s = 0; s < g_hdr.nseg; s++) {
+        const uint8_t *seg = g_payload.data() + (size_t)s * (size_t)g_hdr.stride;
+        unpackSegment(seg, codes.data(), g_hdr);
+
+        g_copyFromBuf(tCodes, codes.data(),
+                      (unsigned long)((size_t)CODE_N * 4));
+        for (int i = 0; i < kNBuf; i++) {
+            if (tIn[i])
+                g_copyFromBuf(tIn[i], g_state[i].data(),
+                              (unsigned long)(g_state[i].size() * sizeof(float)));
+        }
+
+        if (g_runSession(g_interp, g_sess) != 0) {
+            LOGE("runSession failed at seg %d", s);
+            fclose(w);
+            return -22;
+        }
+
+        g_copyToBuf(tFreq, freqBuf.data(),
+                    (unsigned long)(freqBuf.size() * sizeof(float)));
+        for (int i = 0; i < kNBuf; i++) {
+            if (tOut[i])
+                g_copyToBuf(tOut[i], g_state[i].data(),
+                            (unsigned long)(g_state[i].size() * sizeof(float)));
+        }
+
+        for (int ch = 0; ch < CH; ch++) {
+            std::fill(acc.begin(), acc.end(), 0.0);
+            std::fill(nrm.begin(), nrm.end(), 0.0);
+            for (int f = 1; f <= NF; f++) {
+                const float *re = freqBuf.data() + ((size_t)ch * 2 * FR + f) * BINS;
+                const float *im = freqBuf.data() + ((size_t)ch * 2 * FR + FR + f) * BINS;
+
+                for (int n = 0; n < NFFT; n++) { Xr[(size_t)n] = 0.0f; Xi[(size_t)n] = 0.0f; }
+                for (int k = 0; k < BINS; k++) {
+                    Xr[(size_t)k] = re[k];
+                    Xi[(size_t)k] = im[k];
+                    if (k > 0 && k < NFFT / 2) {
+                        Xr[(size_t)(NFFT - k)] =  re[k];
+                        Xi[(size_t)(NFFT - k)] = -im[k];
+                    }
+                }
+                fftRadix2(Xr.data(), Xi.data(), NFFT, /*inverse=*/true);
+
+                const int off = (f - 1) * HOP;
+                for (int n = 0; n < NFFT; n++) {
+                    acc[(size_t)(off + n)] += (double)Xr[(size_t)n] * (double)win[(size_t)n];
+                    nrm[(size_t)(off + n)] += (double)win[(size_t)n];
+                }
+            }
+
+            for (int i = 0; i < TAIL; i++) {
+                acc[(size_t)i] += carry[(size_t)ch][(size_t)i];
+                nrm[(size_t)i] += carryN[(size_t)ch][(size_t)i];
+            }
+
+            for (long i = 0; i < EMIT; i++) {
+                double v = (nrm[(size_t)i] > 1e-6) ? acc[(size_t)i] / nrm[(size_t)i] : 0.0;
+                v = softClip(v);
+                double q = v * 32767.0;
+                if (q > 32767.0) q = 32767.0;
+                if (q < -32768.0) q = -32768.0;
+                inter[(size_t)(i * CH + ch)] = (int16_t)(q >= 0 ? q + 0.5 : q - 0.5);
+            }
+
+            for (int i = 0; i < TAIL; i++) {
+                carry[(size_t)ch][(size_t)i]  = acc[(size_t)(EMIT + i)];
+                carryN[(size_t)ch][(size_t)i] = nrm[(size_t)(EMIT + i)];
+            }
+        }
+
+        /* 本段 PCM 立即落盘（边转码边播的关键：tail 侧能读到新数据）。 */
+        fwrite(inter.data(), 1, inter.size() * 2, w);
+        fflush(w);
+        totalSamples += EMIT;
+        if (progress) progress((long)(totalSamples * CH * 2), user);
+    }
+
+    /* 收尾：写出最后一段的残余 */
+    for (int i = 0; i < TAIL; i++) {
+        for (int ch = 0; ch < CH; ch++) {
+            double v = (carryN[(size_t)ch][(size_t)i] > 1e-6)
+                           ? carry[(size_t)ch][(size_t)i] / carryN[(size_t)ch][(size_t)i]
+                           : 0.0;
+            v = softClip(v);
+            double q = v * 32767.0;
+            if (q > 32767.0) q = 32767.0;
+            if (q < -32768.0) q = -32768.0;
+            inter[(size_t)(i * CH + ch)] = (int16_t)(q >= 0 ? q + 0.5 : q - 0.5);
+        }
+    }
+    fwrite(inter.data(), 1, (size_t)TAIL * (size_t)CH * 2, w);
+    fflush(w);
+    totalSamples += TAIL;
+
+    fclose(w);
+    if (progress) progress(-1, user);
+    LOGI("stream decoded segs=%d -> %ld samples (%ld bytes)", g_hdr.nseg, totalSamples,
+         totalSamples * (long)CH * 2);
+    return 0;
+}
+
 void nacglue_release(void) {
     nacglue_close();
     if (g_destroy && g_interp) g_destroy(g_interp);

@@ -318,6 +318,83 @@ void ra360glue_close(void)
     }
 }
 
+/* ===================== 流式解码（v2.5.8-fix2：边转码边播放） =====================
+ *
+ * 背景：ra360glue_decode_to_wav 是「整曲解码完再写文件」，首次播放要等
+ * 全曲解码完成（360RA 全曲真机约数秒到数十秒）才能出声。
+ *
+ * 流式版本**边解码边把 PCM 追加写到目标文件**，并通过 progress 回调
+ * 通知已写字节数。Dart 侧（见 lib/core/transcode_stream.dart）tail 这个
+ * 文件，把新追加的字节推给本机 HttpServer → media_kit，播放器边收边播，
+ * 首帧到达即出声。
+ *
+ * 文件格式：标准 44 字节 WAV 头，但 RIFF / data 长度写 0xFFFFFFFF
+ * （未知总长，流式场景的常规做法；ffmpeg / mpv 都能正常解码）。
+ *
+ * 回调约定：progress(pct, user) 中 pct 为已写字节数（>100 表示正常
+ * 完成，-1 表示出错）。返回值忽略——解码中断由 Dart 侧通过取消
+ * 下载/关闭响应来表达。
+ */
+int ra360glue_decode_stream(const char *wav_path,
+                            void (*progress)(long, void *), void *user)
+{
+    if (!g_dec || !g_decode || g_minbuf <= 0) return -20;
+    FILE *w = fopen(wav_path, "wb");
+    if (!w) { LOGE("wav open %s", wav_path); return -21; }
+    /* 流式头：长度字段全 0xFFFFFFFF（未知总长）。 */
+    wav_write_header(w, 0xFFFFFFFFu);
+
+    unsigned char *buf = (unsigned char *)malloc((size_t)g_minbuf);
+    if (!buf) { fclose(w); return -21; }
+
+    /* 输出缓冲：SDK 每帧仅回 ~8KB，逐帧 fwrite 会产生海量 syscall。
+     * 攒到 64KB 再落盘，显著减少写次数（不改变输出字节序/内容）。
+     * 64KB 的粒度也决定了「边转码边播」的最小延迟粒度。 */
+    const long kChunk = 64 * 1024;
+    unsigned char *outbuf = (unsigned char *)malloc((size_t)kChunk);
+    if (!outbuf) { free(buf); fclose(w); return -21; }
+    long outlen = 0;
+
+    long total = 0;
+    int empty_run = 0;
+    int first_err = 0;
+    for (int i = 0; i < 200000; i++) {
+        long n = g_decode(g_dec, buf, 0, (unsigned long)g_minbuf);
+        if (n > 0) {
+            if (outlen + n > kChunk) {
+                fwrite(outbuf, 1, (size_t)outlen, w);
+                fflush(w); /* 立刻刷盘，让 tail 侧能读到新数据 */
+                outlen = 0;
+            }
+            memcpy(outbuf + outlen, buf, (size_t)n);
+            outlen += n;
+            total += n;
+            empty_run = 0;
+            if (progress) progress(total, user);
+        } else if (n < 0) {
+            if (!first_err) {
+                FnIntFn getErr = (FnIntFn)dlsym(g_lib, "_ZN19SonyIaNativeDecoder16getDetailErrCodeEv");
+                first_err = getErr ? getErr(g_dec) : (int)n;
+                LOGW("stream decode stop at loop %d, err=%d, total=%ld", i, first_err, total);
+            }
+            break; /* 负值 = EOF/错误，终止 */
+        } else {
+            if (++empty_run > 4096) { LOGW("too many empty reads"); break; }
+        }
+    }
+    if (outlen > 0) {
+        fwrite(outbuf, 1, (size_t)outlen, w);
+        fflush(w);
+    }
+    free(buf);
+    free(outbuf);
+    LOGI("stream decoded total=%ld bytes", total);
+    if (total <= 0) { fclose(w); return -22; }
+    if (progress) progress(-1, user); /* -1 = 正常结束 */
+    fclose(w);
+    return 0;
+}
+
 void ra360glue_release(void)
 {
     ra360glue_close();

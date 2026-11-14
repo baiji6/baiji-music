@@ -251,6 +251,110 @@ class Ra360Music {
     }
   }
 
+  /// 流式解码 360RA：**边解码边把 PCM 写进 [outPath]**，供上层 tail 后
+  /// 推给播放器，实现「边转码边播放」。
+  ///
+  /// 360RA 全曲解码要数秒到数十秒，整曲解完再播的话这段时间完全没声。
+  /// 本方法让原生解码器边解边写（`ra360glue_decode_stream`），上层
+  /// 通过 [TranscodeStreamServer] 把增量 PCM 推给 media_kit，首帧到达
+  /// 即出声。
+  ///
+  /// [outPath] 由调用方指定（一般是临时文件）。解码结束后该文件是
+  /// **完整可播**的 WAV（RIFF/data 长度写 0xFFFFFFFF = 未知总长，
+  /// ffmpeg / mpv 都能正常解码）。
+  ///
+  /// 返回 0 成功，非 0 为错误码。
+  static Future<int> decodeToStreamFile(
+    String mp4Url,
+    String key,
+    String outPath, {
+    void Function(int pct, String stage)? onProgress,
+  }) async {
+    if (!isSupported) return -1;
+    await _ensureCoefFiles();
+    final root = await _coefRoot();
+
+    // 先下载 mp4（MPEG-H 的采样表在 moov 里，解码器要随机访问，不能
+    // 边下边解）。
+    final base = (await wavPathFor(key)).replaceAll('.wav', '');
+    final mp4Path = '$base.stream.mp4';
+    try {
+      onProgress?.call(0, 'download');
+      await _download(mp4Url, mp4Path,
+          onProgress: (p) => onProgress?.call((p * 0.25).round(), 'download'));
+      onProgress?.call(25, 'decode');
+      final rc = await Isolate.run(() => _decodeStreamNative(
+            mp4Path: mp4Path,
+            wavPath: outPath,
+            appRoot: root,
+          ));
+      onProgress?.call(100, rc == 0 ? 'done' : 'failed');
+      return rc;
+    } catch (e) {
+      AppLog.e('Ra360Music', '360RA 流式解码异常: $e');
+      return -1;
+    } finally {
+      try {
+        final f = File(mp4Path);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
+  }
+
+  /// 在独立 isolate 中执行的原生流式解码。
+  ///
+  /// 原生侧边解码边把 PCM 追加写进 [wavPath]（流式 WAV 头，RIFF/data
+  /// 长度未知），因此这里只需要传路径，不需要跨 isolate 传字节。
+  @pragma('vm:entry-point')
+  static int _decodeStreamNative({
+    required String mp4Path,
+    required String wavPath,
+    required String appRoot,
+  }) {
+    DynamicLibrary lib;
+    try {
+      lib = DynamicLibrary.open('libra360_glue.so');
+    } catch (_) {
+      return -1;
+    }
+    try {
+      final init = lib.lookupFunction<
+          Int32 Function(Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>,
+              Pointer<Uint8>),
+          int Function(Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>,
+              Pointer<Uint8>)>('ra360glue_init');
+      final open = lib.lookupFunction<Int32 Function(Pointer<Uint8>),
+          int Function(Pointer<Uint8>)>('ra360glue_open');
+      final decodeStream = lib.lookupFunction<
+          Int32 Function(Pointer<Uint8>, Pointer<Void>, Pointer<Void>),
+          int Function(Pointer<Uint8>, Pointer<Void>, Pointer<Void>)>(
+          'ra360glue_decode_stream');
+
+      final appP = _cstr(appRoot);
+      final cfgP = _cstr('coef/$_configName');
+      final cpP = _cstr('coef/com.sony.360ra.cp.config');
+      final spkP = _cstr('');
+      final mp4P = _cstr(mp4Path);
+      final wavP = _cstr(wavPath);
+      try {
+        var rc = init(appP, cfgP, cpP, spkP);
+        if (rc != 0) return rc;
+        rc = open(mp4P);
+        if (rc != 0) return rc;
+        return decodeStream(wavP, nullptr, nullptr);
+      } finally {
+        malloc.free(appP);
+        malloc.free(cfgP);
+        malloc.free(cpP);
+        malloc.free(spkP);
+        malloc.free(mp4P);
+        malloc.free(wavP);
+      }
+    } catch (e) {
+      return -1;
+    }
+  }
+
   static Future<Ra360DecodeResult?> _decodeToWavGuarded(
     String mp4Url,
     String key, {
@@ -381,4 +485,5 @@ class Ra360Music {
       malloc.free(wavP);
     }
   }
+
 }

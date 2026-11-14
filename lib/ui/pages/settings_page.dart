@@ -15,6 +15,7 @@ import '../../core/cache_manager.dart';
 import '../../core/capture_trust.dart';
 import '../../core/device_guid.dart';
 import '../../core/dev_mode.dart';
+import '../../core/log_store.dart';
 import '../../core/lyric_settings.dart';
 import '../../core/telemetry.dart';
 import '../../core/theme_controller.dart';
@@ -62,6 +63,12 @@ class _SettingsPageState extends State<SettingsPage> {
   String _captureProxy = '';
   LyricDownloadMode _lyricMode = LyricDownloadMode.line;
   bool _saveCover = true;
+
+  /// 当前生效的日志目录（自定义或默认）。
+  String _logDir = '';
+
+  /// 默认日志目录；「恢复默认日志目录」用它做摘要展示。
+  String _defaultLogDir = '';
 
   /// Miuix Snackbar 宿主状态（脚手架 snackbarHost 槽位）。
   final _snackbarHostState = MiuixSnackbarHostState();
@@ -118,6 +125,11 @@ class _SettingsPageState extends State<SettingsPage> {
     final dir = await DownloadManager.instance.getDownloadDir();
     final player = PlayerController.instance;
     final cacheRoot = await CacheManager.cacheRoot();
+    final defaultLog = await LogStore.defaultDirPath();
+    // 优先显示"实际生效"的目录：自定义目录不可用时 LogStore 已经回落到
+    // 默认目录了，这里显示回落后的真值，避免界面显示一个不存在的路径。
+    final effectiveLog =
+        LogStore.instance.currentDirPath ?? LogStore.customDir ?? defaultLog;
     if (!mounted) return;
     setState(() {
       _downloadPath = dir.path;
@@ -131,6 +143,8 @@ class _SettingsPageState extends State<SettingsPage> {
       _captureProxy = CaptureTrust.proxy;
       _lyricMode = DownloadExtras.lyricMode;
       _saveCover = DownloadExtras.saveCover;
+      _logDir = effectiveLog ?? '';
+      _defaultLogDir = defaultLog ?? '';
     });
     _refreshCacheSize();
   }
@@ -230,6 +244,65 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _cachePath = root.path);
     _showSnack('已恢复默认缓存目录');
     _refreshCacheSize();
+  }
+
+  /// 选择自定义的日志保存目录。
+  ///
+  /// 选择后立刻做写入预检（建目录 + 写一个探针文件再删掉），避免用户
+  /// 选完目录后才发现根本写不进去——那样日志会静默地继续写在旧目录里，
+  /// 用户却以为已经切好了，等着去 SD 卡上抓日志却扑个空。
+  /// （Android 11+ 写公共目录还需要「所有文件访问权限」。）
+  Future<void> _pickLogDir() async {
+    try {
+      final result = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择日志保存位置',
+      );
+      if (result == null || result.isEmpty) return;
+      // 写入预检。
+      try {
+        final d = Directory(result);
+        if (!await d.exists()) await d.create(recursive: true);
+        final probe =
+            File('${d.path}${Platform.pathSeparator}.baiji_write_test');
+        await probe.writeAsString('test', flush: true);
+        await probe.delete();
+      } catch (e) {
+        AppLog.w('SettingsPage', '日志目录写入预检失败: $e');
+        if (!mounted) return;
+        _showSnack('所选目录不可写（Android 11+ 写公共目录需要'
+            '「所有文件访问权限」）：$result', isError: true);
+        return;
+      }
+      // 持久化并立即生效（切换只影响之后的写入，旧文件留在原处）。
+      final effective = await LogStore.instance.setCustomDir(result);
+      if (!mounted) return;
+      setState(() => _logDir = effective ?? result);
+      // 生效目录和用户选的不一致 = 目录其实用不了（拔卡了 / 权限被收回），
+      // 这时不能说"已设为"，否则用户去抓日志会发现文件根本不在那儿。
+      if (effective != null && effective != result) {
+        _showSnack('所选目录不可用，日志仍写在：$effective', isError: true);
+        return;
+      }
+      _showSnack('日志保存位置已设为：$result');
+    } catch (e) {
+      AppLog.w('SettingsPage', '选择日志目录失败: $e');
+      if (!mounted) return;
+      _showSnack('选择目录失败: $e', isError: true);
+    }
+  }
+
+  /// 恢复默认日志目录（应用支持目录下的 logs 子目录）。
+  Future<void> _resetLogDir() async {
+    try {
+      final effective = await LogStore.instance.setCustomDir(null);
+      if (!mounted) return;
+      setState(() => _logDir = effective ?? _defaultLogDir);
+      _showSnack('已恢复默认日志目录');
+    } catch (e) {
+      AppLog.w('SettingsPage', '恢复默认日志目录失败: $e');
+      if (!mounted) return;
+      _showSnack('恢复失败: $e', isError: true);
+    }
   }
 
   void _selectCacheMemoryLimit(int v) {
@@ -727,6 +800,27 @@ class _SettingsPageState extends State<SettingsPage> {
                     onClick: _resetCacheDir,
                   ),
                   const MiuixHorizontalDivider(),
+                  // 日志保存位置：默认在应用私有目录，用户可改到 SD 卡等
+                  // 方便抓取的目录。与缓存目录一样是"存储位置"这一类设置，
+                  // 所以放在同一张卡片里紧挨着。
+                  MiuixArrowPreference(
+                    title: '日志保存位置',
+                    summary: _logDir.isEmpty ? '默认目录' : _logDir,
+                    startAction: Icon(Icons.description_outlined,
+                        color: AppColors.accent, size: 22),
+                    onClick: _pickLogDir,
+                  ),
+                  if (_defaultLogDir.isNotEmpty && _logDir != _defaultLogDir) ...[
+                    const MiuixHorizontalDivider(),
+                    MiuixArrowPreference(
+                      title: '恢复默认日志目录',
+                      summary: _defaultLogDir,
+                      startAction: Icon(Icons.restore_rounded,
+                          color: AppColors.textTertiary, size: 22),
+                      onClick: _resetLogDir,
+                    ),
+                  ],
+                  const MiuixHorizontalDivider(),
                   MiuixArrowPreference(
                     title: '内存图片缓存上限',
                     summary: '$_cacheMemoryMb MB',
@@ -744,7 +838,9 @@ class _SettingsPageState extends State<SettingsPage> {
               child: Text(
                 '封面在 App 内是通过内存缓存加载的（不落盘），所以「清理缓存」清的是'
                 '内存里的封面、日志导出文件与临时文件。'
-                '缓存目录被手动删除后会自动回落到系统默认目录，不会导致缓存读写失败。',
+                '缓存目录被手动删除后会自动回落到系统默认目录，不会导致缓存读写失败。'
+                '日志按天写成 baiji_年月日.log 并保留 7 天；改了保存位置后'
+                '新日志写到新目录，之前的旧日志仍留在原处。',
                 style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
               ),
             ),

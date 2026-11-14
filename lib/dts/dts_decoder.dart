@@ -208,6 +208,93 @@ class DtsMusic {
     }
   }
 
+  /// 流式解码 DTS:X：**边解码边把 PCM 写进 [outPath]**，供上层 tail 后
+  /// 推给播放器，实现「边转码边播放」。
+  ///
+  /// 原生侧 `dtsglue_decode_stream` 会先解一帧探测真实声道数，再写 WAV
+  /// 头（RIFF/data 长度写 0xFFFFFFFF = 未知总长），之后边解边追加 PCM。
+  ///
+  /// 返回 0 成功，非 0 为错误码。
+  static Future<int> decodeToStreamFile(
+    String mp4Url,
+    String key,
+    String outPath, {
+    void Function(int pct, String stage)? onProgress,
+  }) async {
+    if (!isSupported) return -1;
+    final (licPath, cfgPath) = await _ensureLicenseFiles();
+    final base = (await wavPathFor(key)).replaceAll('.wav', '');
+    final srcPath = '$base.stream.mp4';
+    try {
+      onProgress?.call(0, 'download');
+      await _download(mp4Url, srcPath,
+          onProgress: (p) => onProgress?.call((p * 0.25).round(), 'download'));
+      onProgress?.call(25, 'decode');
+      final rc = await Isolate.run(() => _decodeStreamNative(
+            mp4Path: srcPath,
+            wavPath: outPath,
+            licPath: licPath,
+            cfgPath: cfgPath,
+          ));
+      onProgress?.call(100, rc == 0 ? 'done' : 'failed');
+      return rc;
+    } catch (e) {
+      AppLog.e('DtsMusic', 'DTS:X 流式解码异常: $e');
+      return -1;
+    } finally {
+      try {
+        final f = File(srcPath);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
+  }
+
+  /// 在独立 isolate 中执行的原生流式解码（原生边解边写文件）。
+  @pragma('vm:entry-point')
+  static int _decodeStreamNative({
+    required String mp4Path,
+    required String wavPath,
+    required String licPath,
+    required String cfgPath,
+  }) {
+    DynamicLibrary lib;
+    try {
+      lib = DynamicLibrary.open('libdts_glue.so');
+    } catch (_) {
+      return -1;
+    }
+    try {
+      final init =
+          lib.lookupFunction<Int32 Function(Pointer<Uint8>, Pointer<Uint8>),
+              int Function(Pointer<Uint8>, Pointer<Uint8>)>('dtsglue_init');
+      final open = lib.lookupFunction<Int32 Function(Pointer<Uint8>),
+          int Function(Pointer<Uint8>)>('dtsglue_open');
+      final decodeStream = lib.lookupFunction<
+          Int32 Function(Pointer<Uint8>, Pointer<Void>, Pointer<Void>),
+          int Function(Pointer<Uint8>, Pointer<Void>, Pointer<Void>)>(
+          'dtsglue_decode_stream');
+
+      final licP = _cstr(licPath);
+      final cfgP = _cstr(cfgPath);
+      final mp4P = _cstr(mp4Path);
+      final wavP = _cstr(wavPath);
+      try {
+        var rc = init(licP, cfgP);
+        if (rc != 0) return rc;
+        rc = open(mp4P);
+        if (rc != 0) return rc;
+        return decodeStream(wavP, nullptr, nullptr);
+      } finally {
+        malloc.free(licP);
+        malloc.free(cfgP);
+        malloc.free(mp4P);
+        malloc.free(wavP);
+      }
+    } catch (e) {
+      return -1;
+    }
+  }
+
   static Future<DtsDecodeResult?> _decodeToWavGuarded(
     String mp4Url,
     String key, {

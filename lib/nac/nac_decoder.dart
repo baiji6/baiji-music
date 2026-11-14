@@ -201,6 +201,89 @@ class NacMusic {
     }
   }
 
+  /// 流式解码 NAC：**边解码边把 PCM 写进 [outPath]**，供上层 tail 后推给
+  /// 播放器，实现「边转码边播放」。
+  ///
+  /// NAC 一次解码要 1~2 分钟（MNN 神经推理 + ISTFT），整曲解完再播的
+  /// 体验很差。本方法让原生解码器边解边写（`nacglue_decode_stream`，
+  /// 每解完一段就 flush），上层把增量 PCM 推给 media_kit，首帧即出声。
+  ///
+  /// 返回 0 成功，非 0 为错误码。
+  static Future<int> decodeToStreamFile(
+    String nacUrl,
+    String key,
+    String outPath, {
+    void Function(int pct, String stage)? onProgress,
+  }) async {
+    if (!isSupported) return -1;
+    final modelPath = await _ensureModel();
+    final base = (await wavPathFor(key)).replaceAll('.wav', '');
+    final srcPath = '$base.stream.nac';
+    try {
+      onProgress?.call(0, 'download');
+      await _download(nacUrl, srcPath,
+          onProgress: (p) => onProgress?.call((p * 0.05).round(), 'download'));
+      onProgress?.call(5, 'decode');
+      final rc = await Isolate.run(() => _decodeStreamNative(
+            nacPath: srcPath,
+            wavPath: outPath,
+            modelPath: modelPath,
+          ));
+      onProgress?.call(100, rc == 0 ? 'done' : 'failed');
+      return rc;
+    } catch (e) {
+      AppLog.e('NacMusic', 'NAC 流式解码异常: $e');
+      return -1;
+    } finally {
+      try {
+        final f = File(srcPath);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
+  }
+
+  /// 在独立 isolate 中执行的原生流式解码（原生边解边写文件）。
+  @pragma('vm:entry-point')
+  static int _decodeStreamNative({
+    required String nacPath,
+    required String wavPath,
+    required String modelPath,
+  }) {
+    DynamicLibrary lib;
+    try {
+      lib = DynamicLibrary.open('libnac_glue.so');
+    } catch (_) {
+      return -1;
+    }
+    try {
+      final init = lib.lookupFunction<Int32 Function(Pointer<Uint8>),
+          int Function(Pointer<Uint8>)>('nacglue_init');
+      final open = lib.lookupFunction<Int32 Function(Pointer<Uint8>),
+          int Function(Pointer<Uint8>)>('nacglue_open');
+      final decodeStream = lib.lookupFunction<
+          Int32 Function(Pointer<Uint8>, Pointer<Void>, Pointer<Void>),
+          int Function(Pointer<Uint8>, Pointer<Void>, Pointer<Void>)>(
+          'nacglue_decode_stream');
+
+      final modelP = _cstr(modelPath);
+      final nacP = _cstr(nacPath);
+      final wavP = _cstr(wavPath);
+      try {
+        var rc = init(modelP);
+        if (rc != 0) return rc;
+        rc = open(nacP);
+        if (rc != 0) return rc;
+        return decodeStream(wavP, nullptr, nullptr);
+      } finally {
+        malloc.free(modelP);
+        malloc.free(nacP);
+        malloc.free(wavP);
+      }
+    } catch (e) {
+      return -1;
+    }
+  }
+
   static Future<NacDecodeResult?> _decodeToWavGuarded(
     String nacUrl,
     String key, {

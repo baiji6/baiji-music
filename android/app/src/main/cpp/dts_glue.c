@@ -488,6 +488,81 @@ void dtsglue_close(void)
     mp4_free(&g_mp4);
 }
 
+/* ===================== 流式解码（v2.5.8-fix2：边转码边播放） =====================
+ *
+ * 与 ra360glue_decode_stream 同型：**边解码边把 PCM 追加写到目标文件**，
+ * progress 回调通知已写字节数（-1 = 正常结束）。Dart 侧 tail 这个文件并
+ * 推给本机 HttpServer → media_kit，播放器边收边播。
+ *
+ * 声道数在解码首帧前未知，而 WAV 头必须一次写对（声道数写错会让解码器
+ * 按错误的帧长解析，音频变成噪声）。因此这里**先解一帧探测声道数**，
+ * 拿到真实 ch 后再开文件写头，之后每帧按真实 ch 交错输出。
+ *
+ * 文件格式：标准 44 字节 WAV 头，RIFF / data 长度写 0xFFFFFFFF（未知总长，
+ * 流式场景的常规做法，ffmpeg / mpv 都能正常解码）。
+ */
+int dtsglue_decode_stream(const char *wav_path,
+                          void (*progress)(long, void *), void *user)
+{
+    if (!g_instance || !g_mp4.count || !g_decode) return -20;
+
+    int ch = 0, frames_total = 0;
+    long long dropped = 0;
+    float **planar = NULL;
+    long total_s16 = 0;
+    FILE *w = NULL;
+
+    /* 复用单帧交错缓冲（随最大帧尺寸增长，避免每帧 malloc）。 */
+    static long fcap = 0;
+    static short *fbuf = NULL;
+
+    for (unsigned int i = 0; i < g_mp4.count; i++) {
+        int consumed = 0, och = 0, ofr = 0;
+        int rc = g_decode(g_instance, g_mp4.data + g_mp4.offsets[i],
+                          g_mp4.sizes[i], &consumed, &och, &ofr, &planar);
+        if (rc == 0 && och > 0 && ofr > 0) {
+            ch = och;
+            frames_total += ofr;
+            long need = (long)ofr * och;
+            if (need > fcap) {
+                free(fbuf);
+                fbuf = (short *)malloc((size_t)need * 2);
+                fcap = need;
+            }
+            for (int fr = 0; fr < ofr; fr++)
+                for (int c = 0; c < och; c++) {
+                    float v = planar[c][fr];
+                    if (v > 1.0f) v = 1.0f;
+                    if (v < -1.0f) v = -1.0f;
+                    fbuf[fr * och + c] = (short)(v * 32767.0f);
+                }
+            /* 首帧：拿到真实声道数后才开文件、写头。 */
+            if (w == NULL) {
+                int rate = 48000;
+                if (g_mp4.timescale > 0 && g_mp4.timescale != 1)
+                    rate = (int)g_mp4.timescale;
+                w = fopen(wav_path, "wb");
+                if (!w) { LOGE("wav open %s", wav_path); return -21; }
+                wav_write_header(w, 0xFFFFFFFFu, ch, rate);
+            }
+            fwrite(fbuf, 2, (size_t)need, w);
+            total_s16 += need * 2;
+            if (progress) progress(total_s16, user);
+        } else {
+            dropped++;
+        }
+    }
+    if (w) {
+        fflush(w);
+        fclose(w);
+    }
+    LOGI("stream decoded frames=%d ch=%d dropped=%lld bytes=%ld",
+         frames_total, ch, dropped, total_s16);
+    if (ch <= 0 || frames_total == 0) return -23;
+    if (progress) progress(-1, user);
+    return dropped > 0 && frames_total == 0 ? -25 : 0;
+}
+
 void dtsglue_release(void)
 {
     dtsglue_close();

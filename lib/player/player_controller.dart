@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/core/telemetry.dart';
+import 'package:baiji_music/core/transcode_stream.dart';
 import 'package:baiji_music/dts/dts_decoder.dart';
 import 'package:baiji_music/local/local_scanner.dart';
 import 'package:baiji_music/local/local_special_player.dart';
@@ -875,6 +876,27 @@ class PlayerController {
           // 失败时诚实降级：播原始 320k 文件，不假装是母带。
           return r.url;
         }
+        // 酷狗 360RA（v2.5.8-fix2）：服务端下发的是 MPEG-H 3D Audio
+        // 容器（stsd fourcc = `mhm1`，配置盒 `mhaC` 内联
+        // mpegh3daConfig），media_kit 的 ffmpeg 没有这个解码器，直接把
+        // mp4 丢给播放器只会得到 "Failed to recognize file format"。
+        //
+        // 该容器与 QQ 音乐 RA01-04（RA0x）**同型**：官方 QQ 解码器
+        // `qm_native_decoder_360ra.so` 内置的 Sony SAL（sia_mhdr_* /
+        // sia_virtualizer_*）与酷狗 `libkugouplayer.so` 里静态集成的
+        // 是同一套实现，其 mp4 解析器（libextra_mp4_parser.so）明确
+        // 支持 `mhm1` / `mhaC`。因此酷狗档位可以直接复用同一条
+        // 原生解码管线，无需另写解码器。
+        if (r.kugou?.id == KugouQuality.ra360.id) {
+          final gen = _resolveGen;
+          final wav = await _decodeKugou360ra(song, r.url);
+          if (gen != _resolveGen) return _resolveSuperseded;
+          if (wav != null) return wav;
+          // 解码失败时诚实降级：直链交给播放器（多半播不出，但至少
+          // 不比现在更糟），并由上层记录失败原因。
+          AppLog.w('PlayerController', '酷狗 360RA 解码失败，回落直链');
+          return r.url;
+        }
         return r.url;
       }
       _clearActual();
@@ -996,6 +1018,17 @@ class PlayerController {
           if (!_noticeStream.isClosed) {
             if (!_noticeStream.isClosed) _noticeStream.add('臻品 DTS:X 转码中，首次播放约需 10 秒…');
           }
+          // v2.5.8-fix2：优先走流式（边转码边播放），失败再回落整曲解码。
+          final streamUrl = await _streamTranscode(
+            'dts_${song.mid}',
+            '臻品 DTS:X 边转码边播放中…',
+            (out) => DtsMusic.decodeToStreamFile(r.url, song.mid, out),
+          );
+          if (streamUrl != null) {
+            _applyActual(r);
+            _reportPlay(song, r);
+            return streamUrl;
+          }
           final res = await DtsMusic.decodeToWav(r.url, song.mid);
           if (gen != _resolveGen) return _resolveSuperseded; // 解码期间来了新请求，放弃播放
           if (res != null) {
@@ -1017,6 +1050,17 @@ class PlayerController {
           if (!_noticeStream.isClosed) {
             if (!_noticeStream.isClosed) _noticeStream.add('索尼 360RA 转码中，首次播放约需 10 秒…');
           }
+          // v2.5.8-fix2：优先走流式（边转码边播放），失败再回落整曲解码。
+          final streamUrl = await _streamTranscode(
+            'ra360_${song.mid}',
+            '索尼 360RA 边转码边播放中…',
+            (out) => Ra360Music.decodeToStreamFile(r.url, song.mid, out),
+          );
+          if (streamUrl != null) {
+            _applyActual(r);
+            _reportPlay(song, r);
+            return streamUrl;
+          }
           final res = await Ra360Music.decodeToWav(r.url, song.mid);
           if (gen != _resolveGen) return _resolveSuperseded;
           if (res != null) {
@@ -1037,6 +1081,18 @@ class PlayerController {
           }
           if (!_noticeStream.isClosed) {
             if (!_noticeStream.isClosed) _noticeStream.add('NAC 神经解码中，首次播放约需 1 分钟…');
+          }
+          // v2.5.8-fix2：优先走流式（边转码边播放）——NAC 整曲解码要
+          // 1~2 分钟，流式下首帧到达即出声。
+          final streamUrl = await _streamTranscode(
+            'nac_${song.mid}',
+            'NAC 神经解码中，边转码边播放…',
+            (out) => NacMusic.decodeToStreamFile(r.url, song.mid, out),
+          );
+          if (streamUrl != null) {
+            _applyActual(r);
+            _reportPlay(song, r);
+            return streamUrl;
           }
           final res = await NacMusic.decodeToWav(r.url, song.mid);
           if (gen != _resolveGen) return _resolveSuperseded;
@@ -1208,9 +1264,124 @@ class PlayerController {
     }
   }
 
+  /// 流式转码播放（v2.5.8-fix2）：**边转码边播放**。
+  ///
+  /// 三个自研解码器（DTS:X / 360RA / NAC）原来的流程是「整曲解码完 →
+  /// 写 WAV 缓存 → 播放」，NAC 要 1~2 分钟、360RA 要数十秒，这段时间
+  /// 完全没声。本方法改走流式管线：
+  ///
+  /// 1. 起一个临时文件，原生解码器**边解边写** PCM（流式 WAV 头）；
+  /// 2. 本机 HttpServer tail 该文件，把增量 PCM 推给播放器；
+  /// 3. 播放器拿到 `http://127.0.0.1:<port>/tx/<token>`，libmpv 收到
+  ///    多少算多少 → **首帧到达即出声**。
+  ///
+  /// [decode] 是解码器的流式入口（见各 `*_decoder.dart` 的
+  /// `decodeToStreamFile`），返回 0 表示成功。
+  ///
+  /// 返回播放 URL；失败返回 null（调用方回落整曲解码路径）。
+  Future<String?> _streamTranscode(
+    String key,
+    String notice,
+    Future<int> Function(String outPath) decode,
+  ) async {
+    final session = TxSession(File('${_streamTmpDir.path}${Platform.pathSeparator}$key.stream.wav'));
+    final url = await TranscodeStreamServer.instance.serve(session);
+
+    // 后台驱动解码：完成后通知服务端收尾。
+    unawaited(() async {
+      try {
+        final rc = await decode(session.file.path);
+        if (rc != 0) {
+          AppLog.w('PlayerController', '流式转码失败 rc=$rc（key=$key）');
+        }
+      } catch (e) {
+        AppLog.w('PlayerController', '流式转码异常（key=$key）: $e');
+      } finally {
+        if (!session.done.isCompleted) session.done.complete();
+      }
+    }());
+
+    if (!_noticeStream.isClosed) _noticeStream.add(notice);
+    AppLog.i('PlayerController', '流式转码开始（key=$key）');
+    return url;
+  }
+
+  /// 流式转码的临时文件目录。
+  ///
+  /// 放在**系统临时目录**而不是应用缓存目录：流式产物是一次性的（播完
+  /// 即弃），不该占用用户可管理的缓存空间；系统临时目录由系统自行回收。
+  Directory get _streamTmpDir {
+    final base = Directory('${Directory.systemTemp.path}${Platform.pathSeparator}baiji_stream');
+    if (!base.existsSync()) base.createSync(recursive: true);
+    return base;
+  }
+
+  /// 酷狗 360RA 空间音频解码（v2.5.8-fix2）。
+  ///
+  /// 酷狗服务端下发的 360RA 文件是 MPEG-H 3D Audio：mp4 容器的 stsd 里
+  /// fourcc 为 `mhm1`，`mhaC` 配置盒内联 `mpegh3daConfig`。media_kit 的
+  /// ffmpeg 白名单没有这个解码器，直链交给播放器必然报
+  /// `Failed to recognize file format.`。
+  ///
+  /// 该容器与 QQ 音乐 RA01-04（RA0x）同型，官方 QQ 解码器
+  /// `qm_native_decoder_360ra.so` 内置的 Sony SAL 与酷狗
+  /// `libkugouplayer.so` 静态集成的是同一套实现，其 mp4 解析器
+  /// `libextra_mp4_parser.so` 明确支持 `mhm1` / `mhaC`——因此直接复用
+  /// [Ra360Music] 这条原生管线即可，无需另写解码器。
+  ///
+  /// 缓存 key 带 `kg360ra` 前缀：QQ 与酷狗是**不同平台的同一首歌**，
+  /// mid 可能撞号，绝不能让酷狗的解码产物被 QQ 侧命中。
+  Future<String?> _decodeKugou360ra(Song song, String mp4Url) async {
+    final key = 'kg360ra_${song.mid}';
+    final wavPath = await Ra360Music.wavPathFor(key);
+
+    // 秒开：完整缓存直接播（跳过取流，绕开酷狗短时频控）。
+    if (await Ra360Music.hasCachedWav(key)) {
+      AppLog.i('PlayerController', '酷狗 360RA 缓存命中（key=$key）');
+      return Uri.file(wavPath).toString();
+    }
+
+    if (!Ra360Music.isSupported) {
+      AppLog.w('PlayerController', '本机无 360RA 解码库（非 arm64 或旧包）');
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('本机不支持 360RA 解码（非 arm64 设备），已跳过该音质');
+      }
+      return null;
+    }
+
+    final gen = _resolveGen;
+    if (!_noticeStream.isClosed) {
+      _noticeStream.add('酷狗 360RA 解码中，首次播放约需 10 秒…');
+    }
+    // v2.5.8-fix2：优先走流式（边转码边播放），失败再回落整曲解码。
+    final streamUrl = await _streamTranscode(
+      key,
+      '酷狗 360RA 边转码边播放中…',
+      (out) => Ra360Music.decodeToStreamFile(mp4Url, key, out),
+    );
+    if (streamUrl != null) {
+      if (gen != _resolveGen) return _resolveSuperseded;
+      AppLog.i('PlayerController', '酷狗 360RA 流式播放已启动');
+      return streamUrl;
+    }
+    final res = await Ra360Music.decodeToWav(mp4Url, key);
+    if (gen != _resolveGen) return _resolveSuperseded;
+    if (res == null) {
+      AppLog.w('PlayerController', '酷狗 360RA 解码失败');
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('360RA 解码失败，已降级到其它音质');
+      }
+      return null;
+    }
+    AppLog.i('PlayerController', '酷狗 360RA 解码完成: ${res.wavPath}');
+    if (!_noticeStream.isClosed) {
+      _noticeStream.add('360RA 解码完成 · 空间音频');
+    }
+    return Uri.file(res.wavPath).toString();
+  }
+
   /// 把升频异常翻译成用户能看懂、能行动的一句话。
-  String _viperFailureHint(Object e) {
-    final msg = e.toString();
+  String _viperFailureHint(Object e) {    final msg = e.toString();
     if (msg.contains('未找到 ffmpeg')) return '未找到解码引擎';
     if (msg.contains('ffmpeg 解码失败')) return '音频解码失败';
     if (msg.contains('s16le')) return '解码引擎不支持该输出格式';
