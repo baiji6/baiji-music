@@ -830,6 +830,9 @@ int nacglue_decode_stream(const char *wav_path,
     }
     /* 流式头：长度字段全 0xFFFFFFFF（未知总长）。 */
     wavWriteHeader(w, 0xFFFFFFFFu, g_hdr.sampleRate, CH);
+    /* 头立即刷盘：Dart 侧 tail/推送依赖它尽快读到 44 字节有效 WAV 头，
+     * 否则播放器会一直等不到可识别的格式。 */
+    fflush(w);
 
     /* Hann 窗（对称，与 np.hanning(512) 一致） */
     std::vector<float> win((size_t)NFFT);

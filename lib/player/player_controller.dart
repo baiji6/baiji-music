@@ -891,11 +891,32 @@ class PlayerController {
           final gen = _resolveGen;
           final wav = await _decodeKugou360ra(song, r.url);
           if (gen != _resolveGen) return _resolveSuperseded;
-          if (wav != null) return wav;
-          // 解码失败时诚实降级：直链交给播放器（多半播不出，但至少
-          // 不比现在更糟），并由上层记录失败原因。
-          AppLog.w('PlayerController', '酷狗 360RA 解码失败，回落直链');
-          return r.url;
+        if (wav != null) return wav;
+        // 360RA 解码不可用（缺少解码库或解码失败）：**不要**回落 mpegh_3d_audio
+        // 直链——ffmpeg 没有该解码器，必报 "Failed to initialize a decoder
+        // for codec 'mpegh_3d_audio'"。改降一档到可解码音质（无损 FLAC→320K），
+        // 保证歌曲至少能放出声，并给出准确提示。
+        if (!_noticeStream.isClosed) {
+          _noticeStream.add('本机暂不支持 360RA 空间音频解码，已切换到其他音质');
+        }
+        final fallback = await _fetch(song, effectiveQuality, effectiveNeteaseQuality,
+            kugou: KugouQuality.flac);
+        if (gen != _resolveGen) return _resolveSuperseded;
+        if (fallback.isNotEmpty) {
+          _applyActual(fallback);
+          _reportPlay(song, fallback);
+          return fallback.url;
+        }
+        final fallback2 = await _fetch(song, effectiveQuality, effectiveNeteaseQuality,
+            kugou: KugouQuality.k320);
+        if (gen != _resolveGen) return _resolveSuperseded;
+        if (fallback2.isNotEmpty) {
+          _applyActual(fallback2);
+          _reportPlay(song, fallback2);
+          return fallback2.url;
+        }
+        AppLog.w('PlayerController', '酷狗 360RA 不可用且 FLAC/320K 也取不到，放弃');
+        return '';
         }
         return r.url;
       }
@@ -1019,10 +1040,20 @@ class PlayerController {
             if (!_noticeStream.isClosed) _noticeStream.add('臻品 DTS:X 转码中，首次播放约需 10 秒…');
           }
           // v2.5.8-fix2：优先走流式（边转码边播放），失败再回落整曲解码。
+          final gen = _resolveGen;
           final streamUrl = await _streamTranscode(
             'dts_${song.mid}',
             '臻品 DTS:X 边转码边播放中…',
             (out) => DtsMusic.decodeToStreamFile(r.url, song.mid, out),
+            onDecodeFailed: () => _fallbackWholeDecode(
+              song,
+              gen,
+              null,
+              (u, k) => DtsMusic.decodeToWav(u, k),
+              null,
+              r.url,
+              song.mid,
+            ),
           );
           if (streamUrl != null) {
             _applyActual(r);
@@ -1051,10 +1082,20 @@ class PlayerController {
             if (!_noticeStream.isClosed) _noticeStream.add('索尼 360RA 转码中，首次播放约需 10 秒…');
           }
           // v2.5.8-fix2：优先走流式（边转码边播放），失败再回落整曲解码。
+          final gen = _resolveGen;
           final streamUrl = await _streamTranscode(
             'ra360_${song.mid}',
             '索尼 360RA 边转码边播放中…',
             (out) => Ra360Music.decodeToStreamFile(r.url, song.mid, out),
+            onDecodeFailed: () => _fallbackWholeDecode(
+              song,
+              gen,
+              null,
+              null,
+              (u, k) => Ra360Music.decodeToWav(u, k),
+              r.url,
+              song.mid,
+            ),
           );
           if (streamUrl != null) {
             _applyActual(r);
@@ -1084,10 +1125,20 @@ class PlayerController {
           }
           // v2.5.8-fix2：优先走流式（边转码边播放）——NAC 整曲解码要
           // 1~2 分钟，流式下首帧到达即出声。
+          final gen = _resolveGen;
           final streamUrl = await _streamTranscode(
             'nac_${song.mid}',
             'NAC 神经解码中，边转码边播放…',
             (out) => NacMusic.decodeToStreamFile(r.url, song.mid, out),
+            onDecodeFailed: () => _fallbackWholeDecode(
+              song,
+              gen,
+              (u, k) => NacMusic.decodeToWav(u, k),
+              null,
+              null,
+              r.url,
+              song.mid,
+            ),
           );
           if (streamUrl != null) {
             _applyActual(r);
@@ -1279,12 +1330,29 @@ class PlayerController {
   /// `decodeToStreamFile`），返回 0 表示成功。
   ///
   /// 返回播放 URL；失败返回 null（调用方回落整曲解码路径）。
+  ///
+  /// [onDecodeFailed]：流式解码**启动后**才被发现失败（返回 URL 时无法预知）
+  /// 的兜底——例如源文件损坏、解码器中途报错。此时播放器拿到的流已经断裂，
+  /// 由这里异步触发「整曲解码」重新取一条可播放的链接，避免停在报错页。
   Future<String?> _streamTranscode(
     String key,
     String notice,
-    Future<int> Function(String outPath) decode,
-  ) async {
+    Future<int> Function(String outPath) decode, {
+    void Function()? onDecodeFailed,
+  }) async {
     final session = TxSession(File('${_streamTmpDir.path}${Platform.pathSeparator}$key.stream.wav'));
+    // 关键修复（v2.5.8-fix3）：**预创建**输出文件再开流。
+    //
+    // 原生解码器先把源文件下载到别处，开始解码后才创建并写入本文件；而
+    // 播放器几乎在拿到 URL 的瞬间就来连 HttpServer。若文件此刻还不存在，
+    // `_pump` 的 `open()` 会抛 `FileSystemException` → 响应被关、零字节体 →
+    // mpv 报 `Failed to recognize file format.`。预创建空文件后 `open()` 永不
+    // 再因「文件尚未存在」而失败（`streamFileToSink` 内部也等文件出现兜底）。
+    try {
+      await session.file.create(recursive: true);
+    } catch (e) {
+      AppLog.w('PlayerController', '流式临时文件预创建失败（key=$key）: $e');
+    }
     final url = await TranscodeStreamServer.instance.serve(session);
 
     // 后台驱动解码：完成后通知服务端收尾。
@@ -1293,9 +1361,11 @@ class PlayerController {
         final rc = await decode(session.file.path);
         if (rc != 0) {
           AppLog.w('PlayerController', '流式转码失败 rc=$rc（key=$key）');
+          onDecodeFailed?.call();
         }
       } catch (e) {
         AppLog.w('PlayerController', '流式转码异常（key=$key）: $e');
+        onDecodeFailed?.call();
       } finally {
         if (!session.done.isCompleted) session.done.complete();
       }
@@ -1304,6 +1374,47 @@ class PlayerController {
     if (!_noticeStream.isClosed) _noticeStream.add(notice);
     AppLog.i('PlayerController', '流式转码开始（key=$key）');
     return url;
+  }
+
+  /// 流式解码失败后回落「整曲解码 + WAV 缓存」并重播。
+  ///
+  /// 仅当本首仍是当前取流请求（[gen] 仍是最新）时才重播，避免覆盖用户
+  /// 在等待期间发起的更新请求。
+  Future<void> _fallbackWholeDecode(
+    Song song,
+    int gen,
+    Future<NacDecodeResult?> Function(String, String)? nac,
+    Future<DtsDecodeResult?> Function(String, String)? dts,
+    Future<Ra360DecodeResult?> Function(String, String)? ra360,
+    String url,
+    String key,
+  ) async {
+    if (gen != _resolveGen) return;
+    final res = (nac != null)
+        ? await nac(url, key)
+        : (dts != null)
+            ? await dts(url, key)
+            : await ra360!(url, key);
+    if (gen != _resolveGen) return;
+    if (res == null) {
+      AppLog.w('PlayerController', '流式失败后整曲解码也失败（key=$key）');
+      if (!_errorStream.isClosed) {
+        _errorStream.add('该音质解码失败，暂无法播放');
+      }
+      if (!_playState.isClosed) _playState.add(false);
+      return;
+    }
+    final path = (res is NacDecodeResult)
+        ? res.wavPath
+        : (res is DtsDecodeResult)
+            ? res.wavPath
+            : (res as Ra360DecodeResult).wavPath;
+    AppLog.i('PlayerController', '流式失败，回落整曲解码重播: $path');
+    if (!_noticeStream.isClosed) {
+      _noticeStream.add('流式解码失败，已切换为整曲解码重播');
+    }
+    // 用整曲产物重新播放（media_kit 的 open 会替换当前（断裂的）流）。
+    await play(song, Uri.file(path).toString());
   }
 
   /// 流式转码的临时文件目录。
@@ -1342,10 +1453,13 @@ class PlayerController {
     }
 
     if (!Ra360Music.isSupported) {
-      AppLog.w('PlayerController', '本机无 360RA 解码库（非 arm64 或旧包）');
-      if (!_noticeStream.isClosed) {
-        _noticeStream.add('本机不支持 360RA 解码（非 arm64 设备），已跳过该音质');
-      }
+      // 注意：这里返回的 null 会被调用方（酷狗分支）接住并**降级到可解码
+      // 音质**，而不是直接把 mpegh_3d_audio 的 mp4 甩给播放器（后者必报
+      // "Failed to initialize a decoder for codec 'mpegh_3d_audio'"）。
+      // 设备其实是 arm64（NAC/DTS:X 能加载即证明），"不支持" 多半是解码
+      // 库缺失/加载失败，错误信息由 ra360glue_probe_detail 体现，不要再写
+      // 误导性的「非 arm64」。
+      AppLog.w('PlayerController', '本机无 360RA 解码库，回落可解码音质');
       return null;
     }
 
@@ -1354,10 +1468,20 @@ class PlayerController {
       _noticeStream.add('酷狗 360RA 解码中，首次播放约需 10 秒…');
     }
     // v2.5.8-fix2：优先走流式（边转码边播放），失败再回落整曲解码。
+    // 注：[gen] 已在上方（秒开判断之后、解码库判断之前）声明，此处不能重复声明。
     final streamUrl = await _streamTranscode(
       key,
       '酷狗 360RA 边转码边播放中…',
       (out) => Ra360Music.decodeToStreamFile(mp4Url, key, out),
+      onDecodeFailed: () => _fallbackWholeDecode(
+        song,
+        gen,
+        null,
+        null,
+        (u, k) => Ra360Music.decodeToWav(u, k),
+        mp4Url,
+        key,
+      ),
     );
     if (streamUrl != null) {
       if (gen != _resolveGen) return _resolveSuperseded;

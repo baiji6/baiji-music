@@ -343,6 +343,9 @@ int ra360glue_decode_stream(const char *wav_path,
     if (!w) { LOGE("wav open %s", wav_path); return -21; }
     /* 流式头：长度字段全 0xFFFFFFFF（未知总长）。 */
     wav_write_header(w, 0xFFFFFFFFu);
+    /* 头立即刷盘：Dart 侧 tail/推送依赖它尽快读到 44 字节有效 WAV 头，
+     * 否则播放器会一直等不到可识别的格式。 */
+    fflush(w);
 
     unsigned char *buf = (unsigned char *)malloc((size_t)g_minbuf);
     if (!buf) { fclose(w); return -21; }

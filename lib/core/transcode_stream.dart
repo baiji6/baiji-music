@@ -117,6 +117,74 @@ class TranscodeStreamServer {
     return 'http://127.0.0.1:$port/tx/$token';
   }
 
+  /// 把「增长中的文件」增量读出来并逐块交给 [emit]。
+  ///
+  /// 这是「边转码边播放」的核心读取机制，抽成静态方法以便单测直接验证
+  /// （不依赖真实 socket / HttpServer）。逻辑与原 `_pump` 一致：
+  ///
+  /// 1. 先等文件出现——原生解码器先把源文件下载到别处，开始解码后才
+  ///    创建并写入 [session.file]；播放器可能在此之前就连上来。若文件
+  ///    迟迟不出现且解码已结束，说明从头到尾没产出任何数据，直接收尾
+  ///    （不再向播放器发空响应——那会触发 `Failed to recognize file
+  ///    format.`）。
+  /// 2. 按「长度 + 定位读」取增量（不能用 `read()`，它在文件尾会等更多
+  ///    数据，与「文件还在增长」冲突）。
+  /// 3. 读的位置始终等于「已读到哪」，而不是「文件有多长」。
+  ///
+  /// [emit] 在每条增量上被调用；[poll] 为轮询间隔，[maxWaitMs] 为等待
+  /// 文件出现的最大时长（单测用；生产为 null = 不限）。
+  static Future<void> streamFileToSink(
+    TxSession session,
+    Future<void> Function(List<int>) emit, {
+    Duration poll = const Duration(milliseconds: 100),
+    int? maxWaitMs,
+  }) async {
+    // 1) 等文件出现（极端竞态兜底）。
+    final deadline = maxWaitMs == null
+        ? null
+        : DateTime.now().add(Duration(milliseconds: maxWaitMs));
+    while (!await session.file.exists()) {
+      if (session.done.isCompleted) return;
+      if (deadline != null && DateTime.now().isAfter(deadline)) return;
+      await Future<void>.delayed(poll);
+    }
+
+    // 2) 打开只读句柄（文件已存在，open 不会再因「文件不存在」抛错）。
+    RandomAccessFile raf;
+    try {
+      raf = await session.file.open(mode: FileMode.read);
+    } catch (e) {
+      AppLog.w('TxStream', '流式文件打开失败，放弃推送: $e');
+      return;
+    }
+
+    try {
+      while (true) {
+        final len = await session.file.length();
+        if (len > session.readPos) {
+          await raf.setPosition(session.readPos);
+          final chunk = await raf.read(len - session.readPos);
+          if (chunk.isNotEmpty) {
+            await emit(chunk);
+            session.readPos += chunk.length;
+          }
+          continue;
+        }
+        if (session.done.isCompleted) {
+          // 再等一拍，确认没有残留（解码刚完成时文件长度可能还在更新）。
+          await Future<void>.delayed(poll);
+          final finalLen = await session.file.length();
+          if (finalLen <= session.readPos) break;
+          continue;
+        }
+        await Future<void>.delayed(poll);
+      }
+      AppLog.i('TxStream', '流式推送完成，共 ${session.pushed} 字节');
+    } finally {
+      await raf.close();
+    }
+  }
+
   Future<void> _serve(HttpServer server) async {
     try {
       await for (final req in server) {
@@ -166,49 +234,18 @@ class TranscodeStreamServer {
   /// 首次进入时先发 44 字节 WAV 头（原生已写入，RIFF/data 长度是
   /// 0xFFFFFFFF = 未知总长）；之后持续读新追加的 PCM 推出去。
   Future<void> _pump(TxSession session, HttpResponse res) async {
-    final raf = await session.file.open(mode: FileMode.read);
-    try {
-      // 轮询间隔：解码每产出一段（360RA 64KB / NAC 32KB / DTS 一帧）
-      // 就会 flush 一次文件，120ms 的轮询足以做到「几乎实时」，同时不会
-      // 空转太频繁。
-      const poll = Duration(milliseconds: 100);
-
-      while (true) {
-        // 读「当前已有的全部内容」：用长度 + 定位读，**不能用 read()**——
-        // read() 在读到文件末尾时会等待更多数据，正好与「文件还在增长」
-        // 的场景冲突（会一直阻塞到解码结束）。
-        final len = await session.file.length();
-        if (len > session.readPos) {
-          await raf.setPosition(session.readPos);
-          final chunk = await raf.read(len - session.readPos);
-          if (chunk.isNotEmpty) {
-            // 首个 chunk 含 44 字节 WAV 头 + 起始 PCM，头直接透传（原生
-            // 写的流式头，RIFF/data 长度是 0xFFFFFFFF = 未知总长）。
-            res.add(chunk);
-            session.pushed += chunk.length;
-            session.readPos += chunk.length;
-            // 立刻 flush，让数据离开 Dart 缓冲区——否则「边转码边播」会
-            // 退化成「攒满一缓冲才发」。
-            await res.flush();
-          }
-          continue;
-        }
-
-        // 没有新数据：解码可能已结束。
-        if (session.done.isCompleted) {
-          // 再等一拍，确认没有残留（解码刚完成时文件长度可能还在更新）。
-          await Future<void>.delayed(poll);
-          final finalLen = await session.file.length();
-          if (finalLen <= session.readPos) break;
-          continue;
-        }
-
-        // 解码还在跑，等新数据。
-        await Future<void>.delayed(poll);
-      }
-      AppLog.i('TxStream', '流式推送完成，共 ${session.pushed} 字节');
-    } finally {
-      await raf.close();
-    }
+    await TranscodeStreamServer.streamFileToSink(
+      session,
+      (chunk) async {
+        // 首个 chunk 含 44 字节 WAV 头 + 起始 PCM，头直接透传（原生写的
+        // 流式头，RIFF/data 长度是 0xFFFFFFFF = 未知总长）。
+        res.add(chunk);
+        session.pushed += chunk.length;
+        // 立刻 flush，让数据离开 Dart 缓冲区——否则「边转码边播」会退化成
+        // 「攒满一缓冲才发」。res.add 接收的是 List<int>，这里统一转成
+        // 不可变视图；保持与原有行为一致。
+        await res.flush();
+      },
+    );
   }
 }

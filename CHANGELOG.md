@@ -6,6 +6,45 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.8-fix3
+
+> 正式修订版（tag `v2.5.8-fix3`）。修复 v2.5.8-fix2 的「边转码边播放」在真机上
+> 实际不可用：NAC / DTS:X / 360RA 三种格式播放失败（`Failed to recognize file
+> format.` / `Failed to initialize a decoder for codec 'mpegh_3d_audio'`）。
+
+### 🐛 边转码边播放：三种格式在真机全部播不出
+
+- v2.5.8-fix2 把 DTS:X / 360RA / NAC 改成「边解码边推送」，但实测三张故障截图
+  全部失败。三个独立根因，逐一修复：
+  1. **open 竞态（NAC / DTS:X 报 `Failed to recognize file format.`）**：播放器
+     几乎在拿到 URL 的瞬间就来连本机 HttpServer，而原生解码器先把源文件下载到
+     别处、开始解码后才创建并写入输出文件。此时 `_pump` 的 `open()` 抛
+     `FileSystemException` → 响应被关、零字节体 → libmpv 报「无法识别文件格式」。
+     - 修复：`_streamTranscode` **先预创建空输出文件再开流**；`streamFileToSink`
+       内部也等文件出现兜底（解码已结束且文件始终不出现则直接收尾，不发空响应）。
+  2. **原生侧缺 `fflush`（流式名存实亡）**：`dtsglue_decode_stream` / 
+     `nacglue_decode_stream` / `ra360glue_decode_stream` 原来只在 `fclose` 才把
+     PCM 落盘，解码期间文件一直是空的，Dart 侧 tail 不到数据。
+     - 修复：写完 44 字节流式 WAV 头后立即 `fflush`，每一帧 `fwrite` 后再 `fflush`
+       ——数据边解边落到磁盘，Dart 才能增量推、播放器首帧即出声。
+  3. **360RA 双重报错（酷狗《雨爱》）**：本机 360RA 解码不可用时仍把
+     `mpegh_3d_audio` 的 mp4 直链甩给播放器，触发第二条
+     `Failed to initialize a decoder for codec 'mpegh_3d_audio'`；且旧文案写
+     「非 arm64 设备」是误导（设备实为 arm64，NAC/DTS:X 能加载即证明，多半是
+     解码库缺失/加载失败）。
+     - 修复：解码不可用直接返回 `null`，由调用方诚实降级到 **FLAC → 320K**；
+       提示文案改为「本机暂不支持 360RA 空间音频解码，已切换到其他音质」。
+- 流式解码**启动后才被发现失败**（源损坏、解码器中途报错）的情况，新增
+  `onDecodeFailed` 兜底：异步触发「整曲解码 + WAV 缓存」重播，不再停在报错页。
+- 全量 **1213 项测试通过**（v2.5.8-fix2 为 1211 项）。
+
+### 🧪 回归测试
+
+- `test/transcode_stream_test.dart` 重写核心读取机制的直接验证：修复原首轮增量
+  断言把 44 字节 WAV 头算进首轮增量导致的误判；新增「文件晚出现（open 竞态回归）」
+  「文件始终不出现且解码已结束时不崩溃、不发送空响应」等用例，覆盖预创建 / 晚创建
+  / 增量读 / 收尾全链路。
+
 ## 2.5.8-fix2
 
 > 正式修订版（tag `v2.5.8-fix2`）。修复酷狗 360RA 无法解码，新增日志自定义

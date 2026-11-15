@@ -544,9 +544,17 @@ int dtsglue_decode_stream(const char *wav_path,
                 w = fopen(wav_path, "wb");
                 if (!w) { LOGE("wav open %s", wav_path); return -21; }
                 wav_write_header(w, 0xFFFFFFFFu, ch, rate);
+                /* 头立即刷盘：Dart 侧的 tail/推送依赖它尽快读到 44 字节
+                 * 有效 WAV 头，否则播放器会一直等不到可识别的格式。 */
+                fflush(w);
             }
             fwrite(fbuf, 2, (size_t)need, w);
             total_s16 += need * 2;
+            /* 每帧刷盘：让 Dart 侧能增量读到新 PCM，实现「边转码边播放」。
+             * 没有这一步，所有数据都攒在 libc 缓冲里，直到 fclose 才一次性
+             * 落盘——流式名存实亡，且播放器在等待期间容易因读不到数据而报
+             * "Failed to recognize file format."。 */
+            fflush(w);
             if (progress) progress(total_s16, user);
         } else {
             dropped++;
