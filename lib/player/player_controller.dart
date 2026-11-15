@@ -882,7 +882,7 @@ class PlayerController {
         // mp4 丢给播放器只会得到 "Failed to recognize file format"。
         //
         // 该容器与 QQ 音乐 RA01-04（RA0x）**同型**：官方 QQ 解码器
-        // `qm_native_decoder_360ra.so` 内置的 Sony SAL（sia_mhdr_* /
+        // `libqm_native_decoder_360ra.so` 内置的 Sony SAL（sia_mhdr_* /
         // sia_virtualizer_*）与酷狗 `libkugouplayer.so` 里静态集成的
         // 是同一套实现，其 mp4 解析器（libextra_mp4_parser.so）明确
         // 支持 `mhm1` / `mhaC`。因此酷狗档位可以直接复用同一条
@@ -1075,7 +1075,7 @@ class PlayerController {
         // 解码 → 48k/32bit WAV 缓存 → 本地播放。
         if (r.qq?.code.startsWith('RA0') == true) {
           if (!Ra360Music.isSupported) {
-            AppLog.i('PlayerController', '本机无 360RA 解码库（非 arm64 或旧包），跳过 RA0x 档');
+            AppLog.i('PlayerController', '本机无 360RA 解码库，跳过 RA0x 档（${Ra360Music.probeDetail}）');
             continue;
           }
           if (!_noticeStream.isClosed) {
@@ -1435,7 +1435,7 @@ class PlayerController {
   /// `Failed to recognize file format.`。
   ///
   /// 该容器与 QQ 音乐 RA01-04（RA0x）同型，官方 QQ 解码器
-  /// `qm_native_decoder_360ra.so` 内置的 Sony SAL 与酷狗
+  /// `libqm_native_decoder_360ra.so` 内置的 Sony SAL 与酷狗
   /// `libkugouplayer.so` 静态集成的是同一套实现，其 mp4 解析器
   /// `libextra_mp4_parser.so` 明确支持 `mhm1` / `mhaC`——因此直接复用
   /// [Ra360Music] 这条原生管线即可，无需另写解码器。
@@ -1456,10 +1456,11 @@ class PlayerController {
       // 注意：这里返回的 null 会被调用方（酷狗分支）接住并**降级到可解码
       // 音质**，而不是直接把 mpegh_3d_audio 的 mp4 甩给播放器（后者必报
       // "Failed to initialize a decoder for codec 'mpegh_3d_audio'"）。
-      // 设备其实是 arm64（NAC/DTS:X 能加载即证明），"不支持" 多半是解码
-      // 库缺失/加载失败，错误信息由 ra360glue_probe_detail 体现，不要再写
-      // 误导性的「非 arm64」。
-      AppLog.w('PlayerController', '本机无 360RA 解码库，回落可解码音质');
+      // 设备其实是 arm64（NAC/DTS:X 能加载即证明）；v2.5.8-fix4 已修正
+      // 360RA 库文件名（补 lib 前缀，否则 AGP 不打包、dlopen not found）。
+      // 若仍走到这里，[Ra360Music.probeDetail] 会带上真实 dlopen 原因，
+      // 不要再写误导性的「非 arm64」。
+      AppLog.w('PlayerController', '本机无 360RA 解码库，回落可解码音质（${Ra360Music.probeDetail}）');
       return null;
     }
 

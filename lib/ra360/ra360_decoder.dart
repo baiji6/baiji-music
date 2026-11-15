@@ -1,9 +1,14 @@
 /// QQ 音乐索尼 360RA（RA01-04）解码支持（v2.4.2-pre11）。
 ///
 /// 原生实现见 `android/app/src/main/cpp/ra360_glue.cpp`：
-/// dlopen 官方 qm_native_decoder_360ra.so（CDN 下发库，MD5 锚定于
+/// dlopen 官方 `libqm_native_decoder_360ra.so`（CDN 下发库，MD5 锚定于
 /// QQ 音乐 APK 内置 `assets/so_info.json`）→ setCoefPath 注入标准 BRIR
 /// 系数 → init(自实现 IDataSource) → decode 循环 → 48kHz/32bit/2ch WAV。
+///
+/// **文件名必须带 `lib` 前缀**（v2.5.8-fix4）：AGP 只打包 `jniLibs/<abi>/lib*.so`，
+/// 裸名 `qm_native_decoder_360ra.so` 会被静默丢弃，导致真机 `dlopen` 恒报
+/// `not found`、`isSupported=false`、360RA 从不走内置解码器。详见
+/// `test/native_lib_packaging_test.dart` 的打包契约回归测试。
 ///
 /// 系数链路（2026-10-31 全链路 QEMU 验证通过）：
 /// 1. BRIR riff 官方资产（`assets/ra360/brir_standard.riff`，QQ 音乐 CDN
@@ -49,6 +54,12 @@ class Ra360Music {
   static bool _probed = false;
   static bool _supported = false;
   static bool _coefReady = false;
+  static String _probeDetail = '未探测';
+
+  /// 最近一次原生链路探测的详情（探测失败时为真实原因，如 dlopen 找过的
+  /// 库名与错误信息）。供上层降级日志带上可诊断信息，避免「只说不支持、
+  /// 不说为什么」。
+  static String get probeDetail => _probeDetail;
 
   /// 进行中的解码任务（按歌曲 key 去重，同 [DtsMusic] 语义）。
   static final Map<String, Future<Ra360DecodeResult?>> _inflight = {};
@@ -58,6 +69,7 @@ class Ra360Music {
     if (_probed) return _supported;
     _probed = true;
     if (!Platform.isAndroid) {
+      _probeDetail = '非 Android 平台';
       AppLog.i('Ra360Music', '非 Android 平台，360RA 不可用');
       return _supported = false;
     }
@@ -68,14 +80,17 @@ class Ra360Music {
               'ra360glue_abi_available');
       _supported = abi() == 1;
       if (_supported) {
+        _probeDetail = '可用';
         AppLog.i('Ra360Music', '360RA 原生链路探测: 可用');
       } else {
         final detail = _lib!
             .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
                 'ra360glue_probe_detail')();
-        AppLog.w('Ra360Music', '360RA 原生链路探测失败: ${detail.toDartString()}');
+        _probeDetail = detail.toDartString();
+        AppLog.w('Ra360Music', '360RA 原生链路探测失败: $_probeDetail');
       }
     } catch (e) {
+      _probeDetail = 'libra360_glue.so 加载失败: $e';
       AppLog.w('Ra360Music', 'libra360_glue.so 加载失败（旧包或非官方 ABI）: $e');
       _supported = false;
     }

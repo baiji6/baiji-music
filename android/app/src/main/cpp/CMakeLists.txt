@@ -29,6 +29,8 @@ target_link_libraries(nac_glue
     dl        # dlopen / dlsym
 )
 
-# 官方 DTSPlaybackSDK.so / qm_native_decoder_360ra.so / libMNN_dl.so 等由
-# jniLibs 直接打包（预编译，不参与编译）。运行时 dlopen 会加载同一
-# nativeLibraryDir 的副本。
+# 官方 libDTSPlaybackSDK.so / libqm_native_decoder_360ra.so / libMNN_dl.so
+# 等由 jniLibs 直接打包（预编译，不参与编译）。⚠ 必须都带 `lib` 前缀：
+# AGP 只打包 jniLibs/<abi>/lib*.so，裸名文件会被静默丢弃（v2.5.8-fix4
+# 就因 360RA 库误用裸名导致真机 dlopen not found）。运行时 dlopen 会加载
+# 同一 nativeLibraryDir 的副本。

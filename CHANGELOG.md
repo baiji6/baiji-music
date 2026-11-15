@@ -6,6 +6,45 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.5.8-fix4
+
+> 正式修订版（tag `v2.5.8-fix4`）。修复 360RA **从不调用内置解码器**——真机
+> 上 `qm_native_decoder_360ra.so` 因文件名缺 `lib` 前缀未被打进 APK，导致
+> `dlopen` 恒报 `not found`、`isSupported=false`，QQ RA0x 与酷狗 360RA 全部
+> 静默降级到低音质。
+
+### 🐛 360RA 没有调用内置解码器
+
+- 现象：播放《雨爱》切到 360RA 时提示「本机暂不支持 360RA 空间音频解码，
+  已切换到其他音质」，日志出现
+  `dlopen failed: library "qm_native_decoder_360ra.so" not found`；但同一台
+  设备的 NAC / DTS:X 探测都「可用」，证明设备是 arm64、原生链路整体正常。
+- 根因：**一个被 AGP 静默吞掉的文件**。逐个 `readelf -d` 核对
+  `jniLibs/arm64-v8a/`：
+  - 能加载的库文件名与 SONAME 都带 `lib` 前缀（`libMNN_dl.so` /
+    `libDTSPlaybackSDK.so` / `libaudio_common.so` / `libextra_mp4_parser.so`）；
+  - 360RA 库文件被命名成**裸名** `qm_native_decoder_360ra.so`，`ra360_glue.cpp`
+    里两处 `dlopen` 也用这个裸名；
+  - 而该库自身的 **SONAME 其实是 `libqm_native_decoder_360ra.so`**（带前缀）；
+  - AGP 只把 `jniLibs/<abi>/lib*.so` 打进 APK 的 `lib/<abi>/`，裸名文件被
+    静默丢弃 → APK 里根本没有这个库 → 真机 `dlopen` 恒 `not found` →
+    `Ra360Music.isSupported=false` → 360RA 档位直接跳过/降级，从未走解码器。
+  - 库本身是好的（MD5 与 CDN 锚定值一致，5593 个导出符号、glue 需要的 5 个
+    全在），纯粹是打包事故，Dart 单测与编译期都不会报错。
+- 修复：
+  - 文件重命名为 `libqm_native_decoder_360ra.so`，让**文件名 / SONAME /
+    dlopen 名三者统一**，AGP 才会打包；
+  - `ra360_glue.cpp` 抽出 `ra360_open_decoder_lib()`，优先 dlopen 带前缀的
+    正式名、裸名仅作旧包兜底，把「尝试过的名字 + dlerror」写进
+    `ra360glue_probe_detail()`，日志不再是一句没头没尾的 `not found`；
+  - `Ra360Music.probeDetail` 暴露真实探测原因，降级日志带上它；QQ RA0x /
+    酷狗分支的「非 arm64 或旧包」误导文案一并去除。
+- 新增 `test/native_lib_packaging_test.dart` **打包契约回归测试**：锁定
+  「360RA 库必须带 lib 前缀、无裸名残留、所有 jniLibs .so 都以 lib 开头、
+  ELF SONAME 与文件名一致、NEEDED 依赖齐备、glue 的 dlopen 首选名与磁盘
+  文件名一致」——把这类「只有真机才暴露、CI 静默通过」的事故挡在 CI 里。
+- 全量 **1218 项测试通过**（v2.5.8-fix3 为 1213 项）。
+
 ## 2.5.8-fix3
 
 > 正式修订版（tag `v2.5.8-fix3`）。修复 v2.5.8-fix2 的「边转码边播放」在真机上

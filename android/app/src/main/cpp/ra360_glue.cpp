@@ -1,10 +1,11 @@
 /*
  * ra360_glue.cpp — baiji-music QQ 音乐索尼 360RA（RA01-04）解码原生模块
  *
- * 链路：dlopen 官方 qm_native_decoder_360ra.so（QQ 音乐 CDN 下发，
+ * 链路：dlopen 官方 libqm_native_decoder_360ra.so（QQ 音乐 CDN 下发，
  *       MD5 锚定 43a08ecaac99b81368934d150166421a；其 NEEDED 依赖
  *       libaudio_common.so / libextra_mp4_parser.so 由 jniLibs 一并打包，
  *       bionic dlopen 按 SONAME 自动加载，无需手动干预）
+ *
  *   → create_SonyIaNativeDecoder()
  *   → setCoefPath(appRoot, configRelPath, cpRelPath)
  *     * coefPath1 指向【config 文件】（非 hki 本体！），内容为 hki 的
@@ -15,6 +16,14 @@
  *
  * 输出：48kHz / 32-bit int / 双声道交错 PCM（binaural 渲染结果），
  *       与官方播放内核输出一致（QEMU 全曲验证 2026-10-31）。
+ *
+ * ⚠ 文件名必须带 `lib` 前缀（v2.5.8-fix4 修复）：AGP 只把
+ *   jniLibs/<abi>/lib*.so 打进 APK 的 lib/<abi>/，不带前缀的文件会被静默
+ *   丢弃。官方库自身 SONAME 就是 libqm_native_decoder_360ra.so，早前误把
+ *   文件命名成裸名 qm_native_decoder_360ra.so 并据此 dlopen，导致真机上
+ *   恒报 "library not found"、isSupported=false、360RA 从不走内置解码器。
+ *   现文件名 / SONAME / dlopen 三者统一为带前缀的名字；下方 helper 仍保留
+ *   裸名兜底（兼容旧渠道包），并把尝试过的名字写进 probe_detail 便于排查。
  *
  * C API（Dart FFI 见 lib/ra360/ra360_decoder.dart）：
  *   int  ra360glue_abi_available(void)                       探测三 so + 符号
@@ -111,6 +120,33 @@ static FnIntFn g_getMinBuf = NULL;
 static int g_minbuf = 0;
 static char g_probe_err[256];
 
+/* dlopen 官方 decoder：优先带 lib 前缀的正式名（与 SONAME、APK 内文件名
+ * 一致），裸名仅作旧包兜底。任一成功即返回句柄；全失败时把「尝试过的名字
+ * + 最后一次 dlerror」写进 g_probe_err，Dart 侧 ra360glue_probe_detail() 能
+ * 直接看到，避免再出现「只报 not found 却不知道找的是哪个名字」的黑盒。 */
+static void *ra360_open_decoder_lib(void)
+{
+    static const char *const kNames[] = {
+        "libqm_native_decoder_360ra.so",  /* 正式名：AGP 打包 + SONAME */
+        "qm_native_decoder_360ra.so",     /* 旧包裸名兜底 */
+    };
+    const char *last_err = "unknown";
+    for (size_t i = 0; i < sizeof(kNames) / sizeof(kNames[0]); i++) {
+        void *h = dlopen(kNames[i], RTLD_NOW | RTLD_LOCAL);
+        if (h) {
+            g_probe_err[0] = '\0';
+            return h;
+        }
+        const char *e = dlerror();
+        last_err = e ? e : "unknown";
+        LOGW("dlopen %s failed: %s", kNames[i], last_err);
+    }
+    snprintf(g_probe_err, sizeof(g_probe_err),
+             "dlopen: libqm_native_decoder_360ra.so / "
+             "qm_native_decoder_360ra.so 均未找到 (%s)", last_err);
+    return NULL;
+}
+
 /* ===================== WAV 写出 ===================== */
 
 static void put32(FILE *f, unsigned int v) { fwrite(&v, 4, 1, f); }
@@ -151,11 +187,9 @@ const char *ra360glue_probe_detail(void)
 int ra360glue_abi_available(void)
 {
     if (g_lib) return 1;
-    void *h = dlopen("qm_native_decoder_360ra.so", RTLD_NOW | RTLD_LOCAL);
+    void *h = ra360_open_decoder_lib();
     if (!h) {
-        const char *e = dlerror();
-        LOGW("probe dlopen failed: %s", e ? e : "(no dlerror)");
-        snprintf(g_probe_err, sizeof(g_probe_err), "dlopen: %s", e ? e : "unknown");
+        LOGW("probe dlopen failed: %s", g_probe_err);
         return 0;
     }
     int ok = dlsym(h, "create_SonyIaNativeDecoder") != NULL &&
@@ -180,9 +214,9 @@ int ra360glue_init(const char *app_root, const char *config_rel,
                    const char *cp_rel, const char *spk_rel)
 {
     if (g_dec) return 0; /* 进程内复用单实例 */
-    g_lib = dlopen("qm_native_decoder_360ra.so", RTLD_NOW | RTLD_LOCAL);
+    g_lib = ra360_open_decoder_lib();
     if (!g_lib) {
-        LOGE("dlopen 360ra: %s", dlerror());
+        LOGE("dlopen 360ra: %s", g_probe_err);
         return -1;
     }
     FnCreate create = (FnCreate)dlsym(g_lib, "create_SonyIaNativeDecoder");

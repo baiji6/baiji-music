@@ -9,7 +9,7 @@
 // 解码」。
 //
 // 该容器与 QQ 音乐 RA01-04（RA0x）同型，官方 QQ 解码器
-// `qm_native_decoder_360ra.so` 内置的 Sony SAL 与酷狗
+// `libqm_native_decoder_360ra.so` 内置的 Sony SAL 与酷狗
 // `libkugouplayer.so` 静态集成的是同一套实现，其 mp4 解析器
 // `libextra_mp4_parser.so` 明确支持 `mhm1` / `mhaC`（反汇编确认：
 // `find_stsd_in_stbl` 依次 strncmp 比较 `mha1` / `mhm1` / `mhaC`）。
