@@ -37,6 +37,8 @@ class LyricApi {
       if (song.isNetease) return await netease(song);
       if (song.isKuwo) return await kuwo(song);
       if (song.isKugou) return await kugou(song);
+      if (song.isMigu) return await migu(song);
+      if (song.isJoox) return await joox(song);
       return await qq(song);
     } catch (e) {
       AppLog.w('LyricApi', '获取歌词失败: $e');
@@ -85,6 +87,27 @@ class LyricApi {
     final l = await KugouApi.lyric(song.mid, song.name, song.singer);
     if (l.isNotEmpty) return l;
     return Lyrics.empty;
+  }
+
+  // ==================== 咪咕音乐 ====================
+
+  /// 咪咕歌词（v2.6.0）：[MusicApi.lyric] 取 lrcUrl 的纯 LRC 文本，
+  /// 交给 [LyricParser] 解析成逐行歌词。MRC 逐字歌词本期不做。
+  static Future<Lyrics> migu(Song song) async {
+    final raw = await MusicApi.lyric(song);
+    if (raw.trim().isEmpty) return Lyrics.empty;
+    return LyricParser.parse(raw);
+  }
+
+  // ==================== JOOX ====================
+
+  /// JOOX 歌词（v2.6.0）：[MusicApi.lyric] 返回 QRC 逐字（明文，已从 JOOX
+  /// 的 XML 中提取）或纯 LRC，交给 [LyricParser] 解析。QRC 格式与 QQ 相同，
+  /// LyricParser 的 `_looksLikeQrc` / `_parseQrc` 直接可用。
+  static Future<Lyrics> joox(Song song) async {
+    final raw = await MusicApi.lyric(song);
+    if (raw.trim().isEmpty) return Lyrics.empty;
+    return LyricParser.parse(raw);
   }
 
   // ==================== QQ 音乐 ====================

@@ -24,6 +24,8 @@ class DownloadManager {
   static const String _keyNe = 'download_ne_quality';
   static const String _keyKuwo = 'download_kuwo_quality';
   static const String _keyKugou = 'download_kugou_quality';
+  static const String _keyMigu = 'download_migu_quality';
+  static const String _keyJoox = 'download_joox_quality';
 
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 15),
@@ -106,12 +108,57 @@ class DownloadManager {
   Future<void> saveKugouQuality(KugouQuality q) =>
       KvStore.instance.setString('$_prefs:$_keyKugou', q.id);
 
+  /// 上次选择的咪咕下载音质（v2.6.0）；未选过则跟随播放器当前音质。
+  MiguQuality get miguQuality => MiguQuality.fromId(
+          KvStore.instance.getString('$_prefs:$_keyMigu')) ??
+      PlayerController.instance.currentMiguQuality;
+
+  Future<void> saveMiguQuality(MiguQuality q) =>
+      KvStore.instance.setString('$_prefs:$_keyMigu', q.id);
+
+  /// 上次选择的 JOOX 下载音质（v2.6.0）；未选过则跟随播放器当前音质。
+  JooxQuality get jooxQuality => JooxQuality.fromId(
+          KvStore.instance.getString('$_prefs:$_keyJoox')) ??
+      PlayerController.instance.currentJooxQuality;
+
+  Future<void> saveJooxQuality(JooxQuality q) =>
+      KvStore.instance.setString('$_prefs:$_keyJoox', q.id);
+
   /// 尝试为指定歌曲获取可用直链；当前音质不可用时沿降级链自动往下试。
   ///
   /// 返回直链 + 服务端**实际**音质；全部失败返回 [PlayUrlResult.empty]。
   Future<PlayUrlResult> resolveUrl(
       Song song, Quality qqQuality, NeteaseQuality neQuality,
-      {KuwoQuality? kuwoQuality, KugouQuality? kugouQuality}) async {
+      {KuwoQuality? kuwoQuality,
+      KugouQuality? kugouQuality,
+      MiguQuality? miguQuality,
+      JooxQuality? jooxQuality}) async {
+    if (song.isJoox) {
+      final start = jooxQuality ?? this.jooxQuality;
+      for (final q in MusicApi.jooxDowngradeChain(start)) {
+        try {
+          final r = await MusicApi.playUrlInfo(song, qqQuality, neQuality,
+              jooxQuality: q);
+          if (r.isNotEmpty) return r;
+        } catch (e) {
+          AppLog.w('DownloadManager', 'JOOX 取直链失败 ${q.label}: $e');
+        }
+      }
+      return PlayUrlResult.empty;
+    }
+    if (song.isMigu) {
+      final start = miguQuality ?? this.miguQuality;
+      for (final q in MusicApi.miguDowngradeChain(start)) {
+        try {
+          final r = await MusicApi.playUrlInfo(song, qqQuality, neQuality,
+              miguQuality: q);
+          if (r.isNotEmpty) return r;
+        } catch (e) {
+          AppLog.w('DownloadManager', '咪咕取直链失败 ${q.label}: $e');
+        }
+      }
+      return PlayUrlResult.empty;
+    }
     if (song.isKuwo) {
       try {
         final r = await MusicApi.playUrlInfo(song, qqQuality, neQuality,
@@ -179,6 +226,8 @@ class DownloadManager {
     required NeteaseQuality neQuality,
     KuwoQuality? kuwoQuality,
     KugouQuality? kugouQuality,
+    MiguQuality? miguQuality,
+    JooxQuality? jooxQuality,
     void Function(int downloaded, int total)? onProgress,
     CancelToken? cancelToken,
     String? partPath,
@@ -186,7 +235,10 @@ class DownloadManager {
   }) async {
     try {
       final resolved = await resolveUrl(song, qqQuality, neQuality,
-          kuwoQuality: kuwoQuality, kugouQuality: kugouQuality);
+          kuwoQuality: kuwoQuality,
+          kugouQuality: kugouQuality,
+          miguQuality: miguQuality,
+          jooxQuality: jooxQuality);
       if (resolved.isEmpty) {
         AppLog.e('DownloadManager', '无可用直链: ${song.name}');
         return null;

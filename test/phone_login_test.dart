@@ -106,4 +106,42 @@ void main() {
       expect(e.toString(), '验证码错误');
     });
   });
+
+  group('网易云手机号登录 uid 解析（parseLoginUid）', () {
+    // 回归：旧写法 `profile['userId'] ?? account is Map ? ... : ...`
+    // 因 ?? 优先级高于 ?: 被解析成 (userId ?? isMap) ? ... : ...，
+    // userId 是 int 时被当 bool 条件抛 _TypeError，导致登录接口明明返回
+    // 200 却整体失败。这里固化「不抛异常 + 正确取值」的契约。
+    test('profile.userId 为 int → 直接返回（旧写法会抛类型错误）', () {
+      expect(
+          NeteaseClient.parseLoginUid(
+              <String, dynamic>{'userId': 123, 'nickname': 'test'},
+              <String, dynamic>{'id': 999}),
+          123);
+    });
+
+    test('profile 缺 userId → 回退 account.id', () {
+      expect(
+          NeteaseClient.parseLoginUid(<String, dynamic>{'nickname': 'x'},
+              <String, dynamic>{'id': 999}),
+          999);
+    });
+
+    test('profile 为 null → 回退 account.id', () {
+      expect(NeteaseClient.parseLoginUid(null, <String, dynamic>{'id': 999}),
+          999);
+    });
+
+    test('profile/account 都为 null → 返回 null，不崩', () {
+      expect(NeteaseClient.parseLoginUid(null, null), isNull);
+    });
+
+    test('userId 为字符串数字 → 转为 int', () {
+      expect(
+          NeteaseClient.parseLoginUid(
+              <String, dynamic>{'userId': '456'},
+              <String, dynamic>{'id': 999}),
+          456);
+    });
+  });
 }

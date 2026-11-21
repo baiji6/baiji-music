@@ -58,6 +58,8 @@ class _SettingsPageState extends State<SettingsPage> {
   NeteaseQuality _neQuality = NeteaseQuality.playbackDefault;
   KuwoQuality _kuwoQuality = KuwoQuality.playbackDefault;
   KugouQuality _kugouQuality = KugouQuality.playbackDefault;
+  MiguQuality _miguQuality = MiguQuality.playbackDefault;
+  JooxQuality _jooxQuality = JooxQuality.playbackDefault;
   bool _checkingUpdate = false;
   bool _captureEnabled = false;
   String _captureProxy = '';
@@ -83,6 +85,8 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _showNeteaseQualitySheet = false;
   bool _showKuwoQualitySheet = false;
   bool _showKugouQualitySheet = false;
+  bool _showMiguQualitySheet = false;
+  bool _showJooxQualitySheet = false;
   bool _showCacheLimitSheet = false;
   bool _showBackupDialog = false;
   bool _showBackupImportConfirm = false;
@@ -139,6 +143,8 @@ class _SettingsPageState extends State<SettingsPage> {
       _neQuality = player.currentNeteaseQuality;
       _kuwoQuality = player.currentKuwoQuality;
       _kugouQuality = player.currentKugouQuality;
+      _miguQuality = player.currentMiguQuality;
+      _jooxQuality = player.currentJooxQuality;
       _captureEnabled = CaptureTrust.enabled;
       _captureProxy = CaptureTrust.proxy;
       _lyricMode = DownloadExtras.lyricMode;
@@ -345,6 +351,22 @@ class _SettingsPageState extends State<SettingsPage> {
         ? '（本地升频，首次播放需转换，结果会缓存）'
         : '';
     _showSnack('酷狗音质已设为 ${q.label}$extra');
+  }
+
+  /// v2.6.0：咪咕默认播放音质。
+  void _selectMiguQuality(MiguQuality q) {
+    setState(() => _showMiguQualitySheet = false);
+    PlayerController.instance.saveMiguQuality(q);
+    setState(() => _miguQuality = q);
+    _showSnack('咪咕音质已设为 ${q.label}');
+  }
+
+  /// v2.6.0：JOOX 默认播放音质。
+  void _selectJooxQuality(JooxQuality q) {
+    setState(() => _showJooxQualitySheet = false);
+    PlayerController.instance.saveJooxQuality(q);
+    setState(() => _jooxQuality = q);
+    _showSnack('JOOX 音质已设为 ${q.label}');
   }
 
   Future<void> _resetDownloadDir() async {
@@ -674,6 +696,25 @@ class _SettingsPageState extends State<SettingsPage> {
                         color: AppColors.accentAlt, size: 22),
                     onClick: () =>
                         setState(() => _showKugouQualitySheet = true),
+                  ),
+                  // v2.6.0：咪咕 + JOOX 默认音质。
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '咪咕音乐播放音质',
+                    summary: _miguQuality.label,
+                    startAction: Icon(Icons.equalizer_rounded,
+                        color: const Color(0xFFE60012), size: 22),
+                    onClick: () =>
+                        setState(() => _showMiguQualitySheet = true),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: 'JOOX 播放音质',
+                    summary: _jooxQuality.label,
+                    startAction: Icon(Icons.equalizer_rounded,
+                        color: const Color(0xFF1DB954), size: 22),
+                    onClick: () =>
+                        setState(() => _showJooxQualitySheet = true),
                   ),
                 ],
               ),
@@ -1524,6 +1565,34 @@ MiuixArrowPreference(
             label: (q) =>
                 q.aiTag.isEmpty ? q.label : '${q.label} · ${q.aiTag}',
             onSelect: _selectKugouQuality,
+          ),
+        ),
+        // 咪咕音质（v2.6.0）
+        MiuixOverlayBottomSheet(
+          show: _showMiguQualitySheet,
+          title: '咪咕音乐播放音质',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showMiguQualitySheet = false),
+          content: _QualitySheet<MiguQuality>(
+            options: MiguQuality.playbackOptions,
+            current: _miguQuality,
+            label: (q) => q.label,
+            onSelect: _selectMiguQuality,
+          ),
+        ),
+        // JOOX 音质（v2.6.0）
+        MiuixOverlayBottomSheet(
+          show: _showJooxQualitySheet,
+          title: 'JOOX 播放音质',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showJooxQualitySheet = false),
+          content: _QualitySheet<JooxQuality>(
+            options: JooxQuality.playbackOptions,
+            current: _jooxQuality,
+            label: (q) => q.label,
+            onSelect: _selectJooxQuality,
           ),
         ),
         // 内存缓存上限

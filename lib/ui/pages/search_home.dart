@@ -387,30 +387,33 @@ class _SearchHomeState extends State<SearchHome> {
     final Quality qq;
     final NeteaseQuality ne;
     final KuwoQuality? kw;
+    final KugouQuality? kg;
+    final MiguQuality? mg;
+    final JooxQuality? jx;
     if (song.isKuwo) {
       final q = picked as KuwoQuality;
       await dm.saveKuwoQuality(q);
-      qq = dm.qqQuality;
-      ne = dm.neQuality;
-      kw = q;
+      qq = dm.qqQuality; ne = dm.neQuality; kw = q; kg = null; mg = null; jx = null;
     } else if (song.isKugou) {
       final q = picked as KugouQuality;
       await dm.saveKugouQuality(q);
-      qq = dm.qqQuality;
-      ne = dm.neQuality;
-      kw = null;
+      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = q; mg = null; jx = null;
+    } else if (song.isMigu) {
+      final q = picked as MiguQuality;
+      await dm.saveMiguQuality(q);
+      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = null; mg = q; jx = null;
+    } else if (song.isJoox) {
+      final q = picked as JooxQuality;
+      await dm.saveJooxQuality(q);
+      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = null; mg = null; jx = q;
     } else if (song.isNetease) {
       final q = picked as NeteaseQuality;
       await dm.saveNeQuality(q);
-      qq = dm.qqQuality;
-      ne = q;
-      kw = null;
+      qq = dm.qqQuality; ne = q; kw = null; kg = null; mg = null; jx = null;
     } else {
       final q = picked as Quality;
       await dm.saveQqQuality(q);
-      qq = q;
-      ne = dm.neQuality;
-      kw = null;
+      qq = q; ne = dm.neQuality; kw = null; kg = null; mg = null; jx = null;
     }
 
     _showSnack('已加入下载队列');
@@ -419,6 +422,9 @@ class _SearchHomeState extends State<SearchHome> {
       qqQuality: qq,
       neQuality: ne,
       kuwoQuality: kw,
+      kugouQuality: kg,
+      miguQuality: mg,
+      jooxQuality: jx,
       lyricMode: lyric,
     );
     if (!mounted) return;
@@ -516,16 +522,22 @@ class _SearchHomeState extends State<SearchHome> {
     final codes = song?.qualityCodes ?? const <String>{};
     final kuwo = song != null && song.isKuwo;
     final kugou = song != null && song.isKugou;
+    final migu = song != null && song.isMigu;
+    final joox = song != null && song.isJoox;
     final netease = song != null && song.isNetease;
     return MiuixOverlayBottomSheet(
       show: _showDownloadSheet && song != null,
       title: kugou
           ? '下载 · 酷狗音乐'
-          : kuwo
-              ? '下载 · 酷我音乐'
-              : netease
-                  ? '下载 · 网易云音乐'
-                  : '下载 · QQ 音乐',
+          : migu
+              ? '下载 · 咪咕音乐'
+              : joox
+                  ? '下载 · JOOX'
+                  : kuwo
+                      ? '下载 · 酷我音乐'
+                      : netease
+                          ? '下载 · 网易云音乐'
+                          : '下载 · QQ 音乐',
       backgroundColor: AppColors.bg2,
       onDismissRequest: () => setState(() {
         _showDownloadSheet = false;
@@ -553,7 +565,43 @@ class _SearchHomeState extends State<SearchHome> {
                 if (s != null) _downloadLyricOnly(s, mode);
               },
             )
-          : kuwo
+          : migu
+              ? DownloadOptionsSheet<MiguQuality>(
+                  options: filterQualityOptions(
+                      codes, MiguQuality.downloadOptions, (q) => q.id),
+                  current: DownloadManager.instance.miguQuality,
+                  label: (q) => q.label,
+                  subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
+                  lyricMode: DownloadExtras.lyricMode,
+                  onConfirm: _onDownloadPicked,
+                  onLyricOnly: (mode) {
+                    final s = _pendingDownloadSong;
+                    setState(() {
+                      _showDownloadSheet = false;
+                      _pendingDownloadSong = null;
+                    });
+                    if (s != null) _downloadLyricOnly(s, mode);
+                  },
+                )
+              : joox
+                  ? DownloadOptionsSheet<JooxQuality>(
+                      options: filterQualityOptions(
+                          codes, JooxQuality.downloadOptions, (q) => q.id),
+                      current: DownloadManager.instance.jooxQuality,
+                      label: (q) => q.label,
+                      subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
+                      lyricMode: DownloadExtras.lyricMode,
+                      onConfirm: _onDownloadPicked,
+                      onLyricOnly: (mode) {
+                        final s = _pendingDownloadSong;
+                        setState(() {
+                          _showDownloadSheet = false;
+                          _pendingDownloadSong = null;
+                        });
+                        if (s != null) _downloadLyricOnly(s, mode);
+                      },
+                    )
+                  : kuwo
               ? DownloadOptionsSheet<KuwoQuality>(
                   options: filterQualityOptions(
                       codes, KuwoQuality.downloadOptions, (q) => q.id),

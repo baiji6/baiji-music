@@ -54,6 +54,8 @@ class _PlayerPageState extends State<PlayerPage> {
   NeteaseQuality? _actualNe;
   KuwoQuality? _actualKuwo;
   KugouQuality? _actualKugou;
+  MiguQuality? _actualMigu;
+  JooxQuality? _actualJoox;
   bool _playing = false;
   bool _fav = false;
 
@@ -89,6 +91,8 @@ class _PlayerPageState extends State<PlayerPage> {
   StreamSubscription<NeteaseQuality?>? _neQualitySub;
   StreamSubscription<KuwoQuality?>? _kuwoQualitySub;
   StreamSubscription<KugouQuality?>? _kugouQualitySub;
+  StreamSubscription<MiguQuality?>? _miguQualitySub;
+  StreamSubscription<JooxQuality?>? _jooxQualitySub;
   StreamSubscription<bool>? _playSub;
   StreamSubscription<double>? _rateSub;
 
@@ -107,6 +111,8 @@ class _PlayerPageState extends State<PlayerPage> {
     _actualNe = _player.actualNeteaseQuality;
     _actualKuwo = _player.actualKuwoQuality;
     _actualKugou = _player.actualKugouQuality;
+    _actualMigu = _player.actualMiguQuality;
+    _actualJoox = _player.actualJooxQuality;
     _playing = _player.isPlaying;
     _rate = _player.rate;
     _syncFavorite();
@@ -127,6 +133,8 @@ class _PlayerPageState extends State<PlayerPage> {
         _actualNe = null;
         _actualKuwo = null;
         _actualKugou = null;
+        _actualMigu = null;
+        _actualJoox = null;
       });
       _syncFavorite();
       _loadLyrics();
@@ -156,6 +164,18 @@ class _PlayerPageState extends State<PlayerPage> {
       setState(() => _actualKugou = q);
     });
 
+    // 自动降级时同步"实际音质"角标（咪咕）
+    _miguQualitySub = _player.onMiguQualityChanged.listen((q) {
+      if (!mounted) return;
+      setState(() => _actualMigu = q);
+    });
+
+    // 自动降级时同步"实际音质"角标（JOOX）
+    _jooxQualitySub = _player.onJooxQualityChanged.listen((q) {
+      if (!mounted) return;
+      setState(() => _actualJoox = q);
+    });
+
     _playSub = _player.onPlayStateChanged.listen((playing) {
       if (!mounted) return;
       setState(() => _playing = playing);
@@ -174,6 +194,8 @@ class _PlayerPageState extends State<PlayerPage> {
     _neQualitySub?.cancel();
     _kuwoQualitySub?.cancel();
     _kugouQualitySub?.cancel();
+    _miguQualitySub?.cancel();
+    _jooxQualitySub?.cancel();
     _playSub?.cancel();
     _rateSub?.cancel();
     _taskSub?.cancel();
@@ -303,6 +325,18 @@ class _PlayerPageState extends State<PlayerPage> {
     _refreshQuality();
   }
 
+  Future<void> _pickMiguQuality(MiguQuality q) async {
+    _showSnack('正在切换到 ${q.label}…');
+    await _player.switchMiguQuality(q);
+    _refreshQuality();
+  }
+
+  Future<void> _pickJooxQuality(JooxQuality q) async {
+    _showSnack('正在切换到 ${q.label}…');
+    await _player.switchJooxQuality(q);
+    _refreshQuality();
+  }
+
   void _refreshQuality() {
     if (!mounted) return;
     setState(() {
@@ -310,6 +344,8 @@ class _PlayerPageState extends State<PlayerPage> {
       _actualNe = _player.actualNeteaseQuality;
       _actualKuwo = _player.actualKuwoQuality;
       _actualKugou = _player.actualKugouQuality;
+      _actualMigu = _player.actualMiguQuality;
+      _actualJoox = _player.actualJooxQuality;
       _playing = _player.isPlaying;
     });
   }
@@ -358,7 +394,18 @@ class _PlayerPageState extends State<PlayerPage> {
     } else if (s.isKugou) {
       final q = picked as KugouQuality;
       await dm.saveKugouQuality(q);
-      await _runDownload(s, qq: dm.qqQuality, ne: dm.neQuality, lyric: lyric);
+      await _runDownload(s, qq: dm.qqQuality, ne: dm.neQuality,
+          kugou: q, lyric: lyric);
+    } else if (s.isMigu) {
+      final q = picked as MiguQuality;
+      await dm.saveMiguQuality(q);
+      await _runDownload(s, qq: dm.qqQuality, ne: dm.neQuality,
+          migu: q, lyric: lyric);
+    } else if (s.isJoox) {
+      final q = picked as JooxQuality;
+      await dm.saveJooxQuality(q);
+      await _runDownload(s, qq: dm.qqQuality, ne: dm.neQuality,
+          joox: q, lyric: lyric);
     } else if (s.isNetease) {
       final q = picked as NeteaseQuality;
       await dm.saveNeQuality(q);
@@ -377,6 +424,9 @@ class _PlayerPageState extends State<PlayerPage> {
     required Quality qq,
     required NeteaseQuality ne,
     KuwoQuality? kuwo,
+    KugouQuality? kugou,
+    MiguQuality? migu,
+    JooxQuality? joox,
     LyricDownloadMode? lyric,
   }) async {
     if (!mounted) return;
@@ -386,6 +436,9 @@ class _PlayerPageState extends State<PlayerPage> {
       qqQuality: qq,
       neQuality: ne,
       kuwoQuality: kuwo,
+      kugouQuality: kugou,
+      miguQuality: migu,
+      jooxQuality: joox,
       lyricMode: lyric,
     );
     if (!mounted) return;
@@ -526,11 +579,15 @@ class _PlayerPageState extends State<PlayerPage> {
           show: _showDownloadQualitySheet,
           title: song != null && song.isKugou
               ? '下载 · 酷狗音乐'
-              : (song != null && song.isNetease
-                  ? '下载 · 网易云音乐'
-                  : (song != null && song.isKuwo
-                      ? '下载 · 酷我音乐'
-                      : '下载 · QQ 音乐')),
+              : (song != null && song.isMigu
+                  ? '下载 · 咪咕音乐'
+                  : (song != null && song.isJoox
+                      ? '下载 · JOOX'
+                      : (song != null && song.isNetease
+                          ? '下载 · 网易云音乐'
+                          : (song != null && song.isKuwo
+                              ? '下载 · 酷我音乐'
+                              : '下载 · QQ 音乐')))),
           backgroundColor: AppColors.bg2,
           onDismissRequest: () => setState(() {
             _showDownloadQualitySheet = false;
@@ -550,7 +607,31 @@ class _PlayerPageState extends State<PlayerPage> {
                   onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
                   onLyricOnly: _onLyricOnlyPicked,
                 )
-              : song != null && song.isKuwo
+              : song != null && song.isMigu
+                  ? DownloadOptionsSheet<MiguQuality>(
+                      options: filterQualityOptions(
+                          dlCodes, MiguQuality.downloadOptions, (q) => q.id),
+                      current: DownloadManager.instance.miguQuality,
+                      label: (q) => q.label,
+                      subtitle: (q) => q.ext.replaceFirst('.', '').toUpperCase(),
+                      lyricMode: DownloadExtras.lyricMode,
+                      onConfirm: (q, lyric) => _onDownloadQualityPicked(q, lyric),
+                      onLyricOnly: _onLyricOnlyPicked,
+                    )
+                  : song != null && song.isJoox
+                      ? DownloadOptionsSheet<JooxQuality>(
+                          options: filterQualityOptions(
+                              dlCodes, JooxQuality.downloadOptions, (q) => q.id),
+                          current: DownloadManager.instance.jooxQuality,
+                          label: (q) => q.label,
+                          subtitle: (q) =>
+                              q.ext.replaceFirst('.', '').toUpperCase(),
+                          lyricMode: DownloadExtras.lyricMode,
+                          onConfirm: (q, lyric) =>
+                              _onDownloadQualityPicked(q, lyric),
+                          onLyricOnly: _onLyricOnlyPicked,
+                        )
+                      : song != null && song.isKuwo
                   ? DownloadOptionsSheet<KuwoQuality>(
                       options: filterQualityOptions(
                           dlCodes, KuwoQuality.downloadOptions, (q) => q.id),
@@ -605,11 +686,15 @@ class _PlayerPageState extends State<PlayerPage> {
           show: _showPlayQualitySheet,
           title: song != null && song.isKugou
               ? '酷狗音乐 · 播放音质'
-              : (song != null && song.isNetease
-                  ? '网易云音乐 · 播放音质'
-                  : (song != null && song.isKuwo
-                      ? '酷我音乐 · 播放音质'
-                      : 'QQ 音乐 · 播放音质')),
+              : (song != null && song.isMigu
+                  ? '咪咕音乐 · 播放音质'
+                  : (song != null && song.isJoox
+                      ? 'JOOX · 播放音质'
+                      : (song != null && song.isNetease
+                          ? '网易云音乐 · 播放音质'
+                          : (song != null && song.isKuwo
+                              ? '酷我音乐 · 播放音质'
+                              : 'QQ 音乐 · 播放音质')))),
           backgroundColor: AppColors.bg2,
           onDismissRequest: () => setState(() => _showPlayQualitySheet = false),
           content: song != null && song.isKugou
@@ -626,7 +711,29 @@ class _PlayerPageState extends State<PlayerPage> {
                     _pickKugouQuality(q);
                   },
                 )
-              : song != null && song.isKuwo
+              : song != null && song.isMigu
+                  ? _QualitySheet<MiguQuality>(
+                      options: filterQualityOptions(
+                          pqCodes, MiguQuality.playbackOptions, (q) => q.id),
+                      current: _player.effectiveMiguQuality,
+                      label: (q) => q.label,
+                      onSelect: (q) {
+                        setState(() => _showPlayQualitySheet = false);
+                        _pickMiguQuality(q);
+                      },
+                    )
+                  : song != null && song.isJoox
+                      ? _QualitySheet<JooxQuality>(
+                          options: filterQualityOptions(
+                              pqCodes, JooxQuality.playbackOptions, (q) => q.id),
+                          current: _player.effectiveJooxQuality,
+                          label: (q) => q.label,
+                          onSelect: (q) {
+                            setState(() => _showPlayQualitySheet = false);
+                            _pickJooxQuality(q);
+                          },
+                        )
+                      : song != null && song.isKuwo
                   ? _QualitySheet<KuwoQuality>(
                       options: filterQualityOptions(
                           pqCodes, KuwoQuality.playbackOptions, (q) => q.id),
@@ -787,6 +894,8 @@ class _PlayerPageState extends State<PlayerPage> {
             actualNe: _actualNe,
             actualKuwo: _actualKuwo,
             actualKugou: _actualKugou,
+            actualMigu: _actualMigu,
+            actualJoox: _actualJoox,
             onOpenSheet: () {
               setState(() => _showPlayQualitySheet = true);
               final s = _song;
@@ -1167,6 +1276,12 @@ class _SourceChip extends StatelessWidget {
   /// 酷狗品牌绿（与 `platform_picker.dart` 的平台色一致，v2.5.0）。
   static const Color _kugouBrand = Color(0xFF1EC17D);
 
+  /// 咪咕品牌红（v2.6.0）。
+  static const Color _miguBrand = Color(0xFFE60012);
+
+  /// JOOX 品牌绿（v2.6.0）。
+  static const Color _jooxBrand = Color(0xFF1DB954);
+
   @override
   Widget build(BuildContext context) {
     // v2.4.0-fix2：原来是 `ne ? 网易云 : QQ 音乐`，酷我歌曲会落到
@@ -1176,6 +1291,12 @@ class _SourceChip extends StatelessWidget {
     if (song.isKugou) {
       label = '酷狗音乐';
       color = _kugouBrand;
+    } else if (song.isMigu) {
+      label = '咪咕音乐';
+      color = _miguBrand;
+    } else if (song.isJoox) {
+      label = 'JOOX';
+      color = _jooxBrand;
     } else if (song.isKuwo) {
       label = '酷我音乐';
       color = _kuwoBrand;
@@ -1620,6 +1741,8 @@ class _QualityButton extends StatelessWidget {
     required this.onOpenSheet,
     this.actualKuwo,
     this.actualKugou,
+    this.actualMigu,
+    this.actualJoox,
   });
 
   final Song? song;
@@ -1631,6 +1754,12 @@ class _QualityButton extends StatelessWidget {
 
   /// 酷狗实际音质（v2.5.0）。
   final KugouQuality? actualKugou;
+
+  /// 咪咕实际音质（v2.6.0）。
+  final MiguQuality? actualMigu;
+
+  /// JOOX 实际音质（v2.6.0）。
+  final JooxQuality? actualJoox;
 
   /// 点击胶囊：打开「播放音质」Miuix 弹层（由页面状态驱动显隐）。
   final VoidCallback onOpenSheet;
@@ -1644,6 +1773,8 @@ class _QualityButton extends StatelessWidget {
     }
     if (s.isKuwo) return _kuwoMenu();
     if (s.isKugou) return _kugouMenu();
+    if (s.isMigu) return _miguMenu();
+    if (s.isJoox) return _jooxMenu();
     return s.isNetease ? _neteaseMenu() : _qqMenu();
   }
 
@@ -1712,6 +1843,40 @@ class _QualityButton extends StatelessWidget {
         label: effective.label,
         downgraded: downgraded,
         accent: _SourceChip._kugouBrand,
+      ),
+    );
+  }
+
+  Widget _miguMenu() {
+    final player = PlayerController.instance;
+    final requested = player.currentMiguQuality;
+    final effective = actualMigu ?? requested;
+    final downgraded = actualMigu != null && actualMigu!.id != requested.id;
+
+    return MiuixPressable(
+      onPressed: onOpenSheet,
+      borderRadius: BorderRadius.circular(19),
+      child: _pill(
+        label: effective.label,
+        downgraded: downgraded,
+        accent: _SourceChip._miguBrand,
+      ),
+    );
+  }
+
+  Widget _jooxMenu() {
+    final player = PlayerController.instance;
+    final requested = player.currentJooxQuality;
+    final effective = actualJoox ?? requested;
+    final downgraded = actualJoox != null && actualJoox!.id != requested.id;
+
+    return MiuixPressable(
+      onPressed: onOpenSheet,
+      borderRadius: BorderRadius.circular(19),
+      child: _pill(
+        label: effective.label,
+        downgraded: downgraded,
+        accent: _SourceChip._jooxBrand,
       ),
     );
   }

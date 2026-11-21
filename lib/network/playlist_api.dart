@@ -21,6 +21,9 @@ import 'package:baiji_music/network/kuwo/kuwo_auth.dart';
 import 'package:baiji_music/network/kugou/kugou_playlist_api.dart';
 import 'package:baiji_music/network/netease/netease_client.dart';
 import 'package:baiji_music/network/music_api.dart';
+import 'package:baiji_music/network/migu/migu_api.dart' show MiguSong;
+import 'package:baiji_music/network/migu/migu_playlist_api.dart'
+    show MiguPlaylistApi;
 
 /// 一个歌单的详情。
 class PlaylistDetail {
@@ -289,15 +292,60 @@ abstract final class PlaylistApi {
     if (source == Source.kugou) {
       return kugou(id, fallbackName: fallbackName, fallbackCover: fallbackCover);
     }
+    if (source == Source.migu) {
+      return migu(id, fallbackName: fallbackName, fallbackCover: fallbackCover);
+    }
     return null;
   }
+
+  /// 咪咕音乐歌单详情（v2.6.0）：元信息 + 歌曲列表（分页取多页）。
+  static Future<PlaylistDetail?> migu(String id,
+      {String fallbackName = '', String fallbackCover = ''}) async {
+    try {
+      final meta = await MiguPlaylistApi.playlistMeta(id);
+      final songs = <Song>[];
+      for (var page = 1; page <= 2; page++) {
+        final batch = await MiguPlaylistApi.playlistSongs(id, page: page);
+        if (batch.isEmpty) break;
+        songs.addAll(batch.map(_miguSongToSong));
+      }
+      if (songs.isEmpty && meta == null) return null;
+      return PlaylistDetail(
+        id: id,
+        name: (meta?.name ?? fallbackName).isNotEmpty
+            ? (meta?.name ?? fallbackName)
+            : '咪咕歌单',
+        cover: meta?.cover ?? fallbackCover,
+        creator: meta?.creator ?? '',
+        desc: meta?.desc ?? '',
+        songs: songs,
+      );
+    } catch (e) {
+      AppLog.w('PlaylistApi', '咪咕歌单详情失败 id=$id: $e');
+      return null;
+    }
+  }
+
+  static Song _miguSongToSong(MiguSong s) => Song(
+        mid: s.songId,
+        songId: int.tryParse(s.songId) ?? 0,
+        name: s.name,
+        singer: s.singer,
+        album: s.album,
+        albumMid: s.albumId,
+        duration: s.durationSeconds * 1000,
+        cover: s.cover,
+        source: Source.migu,
+        mvId: s.mvId,
+      );
 
   /// 该平台是否支持打开歌单（取得到歌曲列表）。
   static bool canOpen(String source) =>
       source == Source.qq ||
       source == Source.netease ||
       source == Source.kuwo ||
-      source == Source.kugou;
+      source == Source.kugou ||
+      source == Source.migu;
 
   // ================= 我的歌单（v2.4.2 #145） =================
   //

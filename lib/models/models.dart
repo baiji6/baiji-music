@@ -19,6 +19,20 @@ class Source {
   /// 酷狗音乐（v2.5.0 新增平台，抄 HotDownloader）。
   static const String kugou = 'kugou';
 
+  /// 咪咕音乐（v2.6.0 新增平台）。
+  ///
+  /// 搜索走洛雪同源的 jadeite v3 接口，取流走官方 listen-url/v2.4 +
+  /// 路径替换派生音质；各档实际可用性由探针（Range 请求）探测。
+  static const String migu = 'migu';
+
+  /// JOOX（腾讯海外音乐平台，v2.6.0 新增平台）。
+  ///
+  /// 搜索走 JOOX 官方 avatar.api.joox.com/commonCgi/search/get，
+  /// 取流走 molan 网关的 joox_express.php（X-API-key 必带），
+  /// 歌词走 JOOX 官方 track 接口（QRC 与 QQ 同款）；
+  /// 封面用搜索/track 返回的 image.joox.com 直链。
+  static const String joox = 'joox';
+
   /// 本地文件（扫描本机磁盘得到，不走任何网络接口）。
   static const String local = 'local';
 }
@@ -359,6 +373,146 @@ class KugouQuality {
 
   @override
   String toString() => 'KugouQuality($id,$label)';
+}
+
+// ==================== 咪咕音质枚举 ====================
+
+/// 咪咕音乐音质枚举（v2.6.0 新增平台，音质档位按「小熙」插件 mg 配置）。
+///
+/// 咪咕的取流是「官方 listen-url/v2.4 拿 128k 基础直链 → 按档位替换 URL
+/// 路径派生」：每档对应基础直链路径里的一个 [replacePath] 段与 [ext]。
+/// 插件 mg 全集 7 档（见附件 JS 的 MUSIC_QUALITY.mg / MG_QUALITY）：
+/// 128k / 320k / flac / flac24bit / hires / atmos / master。
+///
+/// **实际可用性由探针探测**（`MiguApi.probeQualityCodes`）：派生 URL 未必
+/// 存在（实测 flac 以上常返回 404），[Song.qualityCodes] 只写探针确认的
+/// 档位；本类的 options 是「全集」，UI 经 `filterQualityOptions` 按探针结果
+/// 收敛。hires 与 flac24bit 派生路径相同（同为 24bit flac），探针同进同出。
+class MiguQuality {
+  /// 音质 id（持久化约定，与插件档位名一致，不可随意变更）。
+  final String id;
+
+  /// 展示名。
+  final String label;
+
+  /// 容器格式（mp3 / flac / wav）。
+  final String format;
+
+  /// 落盘扩展名。
+  final String ext;
+
+  /// 派生取流 URL 时替换进去的路径段（相对 128k 基础直链的目录）。
+  final String replacePath;
+
+  const MiguQuality(this.id, this.label, this.format, this.ext, this.replacePath);
+
+  /// 标准 128K（基础直链本身）。
+  static const k128 = MiguQuality(
+      '128k', '标准 128K', 'mp3', '.mp3', '标清高清/MP3_128_16_Stero');
+
+  /// 高清 320K。
+  static const k320 = MiguQuality(
+      '320k', '高清 320K', 'mp3', '.mp3', '标清高清/MP3_320_16_Stero');
+
+  /// 无损 FLAC。
+  static const flac =
+      MiguQuality('flac', '无损 FLAC', 'flac', '.flac', '歌曲下载/flac');
+
+  /// 24bit 无损。
+  static const flac24bit = MiguQuality(
+      'flac24bit', '24bit 无损', 'flac', '.flac', '歌曲下载/flac_24bit');
+
+  /// Hi-Res（与 24bit 无损同源，插件单列的一档）。
+  static const hires =
+      MiguQuality('hires', 'Hi-Res', 'flac', '.flac', '歌曲下载/flac_24bit');
+
+  /// 杜比全景声（wav 3D）。
+  static const atmos =
+      MiguQuality('atmos', '杜比全景声', 'wav', '.wav', '歌曲下载/wav_3d');
+
+  /// 臻品母带（wav 32bit）。
+  static const master =
+      MiguQuality('master', '臻品母带', 'wav', '.wav', '歌曲下载/wav_32bit');
+
+  /// 下载可选音质（高 → 低）。
+  static const downloadOptions = [
+    master,
+    atmos,
+    hires,
+    flac24bit,
+    flac,
+    k320,
+    k128,
+  ];
+
+  /// 播放可选音质（高 → 低），同下载全集。
+  static const playbackOptions = downloadOptions;
+
+  /// 播放默认音质（128k 基础直链，最稳）。
+  static const playbackDefault = k128;
+
+  static MiguQuality? fromId(String? id) {
+    if (id == null) return null;
+    for (final q in playbackOptions) {
+      if (q.id == id) return q;
+    }
+    return null;
+  }
+
+  @override
+  String toString() => 'MiguQuality($id,$label)';
+}
+
+// ==================== JOOX 音质枚举 ====================
+
+/// JOOX 音质枚举（v2.6.0 新增平台）。
+///
+/// 档位 id 即 joox_express.php 的 `quality` 参数；`code` 是返回的 filename
+/// 前缀（如 AIM0），仅用于解析/校验，取流只传 id。`atmos`/`master` 服务端
+/// 直接返回 flac（不是 mflac，无需解密），因此 ext 都是 .flac。
+class JooxQuality {
+  final String id;
+  final String label;
+  final String format;
+  final String ext;
+
+  /// 取流返回的 filename 前缀（用于辨识/日志）。
+  final String code;
+
+  const JooxQuality(this.id, this.label, this.format, this.ext, this.code);
+
+  static const k128 = JooxQuality('128k', '标准 128K', 'mp3', '.mp3', 'M500');
+  static const k320 = JooxQuality('320k', '高清 320K', 'mp3', '.mp3', 'M800');
+  static const flac = JooxQuality('flac', '无损 FLAC', 'flac', '.flac', 'F000');
+  static const hires = JooxQuality('hires', 'Hi-Res', 'flac', '.flac', 'RS01');
+
+  /// 杜比全景声：服务端直接返回 flac，无需解密（无 atmos_plus 档）。
+  static const atmos =
+      JooxQuality('atmos', '杜比全景声', 'flac', '.flac', 'Q0M0');
+
+  /// 臻品母带：服务端直接返回 flac，无需解密。
+  static const master =
+      JooxQuality('master', '臻品母带', 'flac', '.flac', 'AIM0');
+
+  /// 下载可选音质（高 → 低）。
+  static const downloadOptions = [master, atmos, hires, flac, k320, k128];
+
+  /// 播放可选音质（高 → 低），同下载全集。
+  static const playbackOptions = downloadOptions;
+
+  /// 播放默认音质（128k 最稳）。
+  static const playbackDefault = k128;
+
+  static JooxQuality? fromId(String? id) {
+    if (id == null) return null;
+    for (final q in playbackOptions) {
+      if (q.id == id) return q;
+    }
+    return null;
+  }
+
+  @override
+  String toString() => 'JooxQuality($id,$label)';
 }
 
 // ==================== QQ 音质枚举 ====================
@@ -844,7 +998,13 @@ class Song {
   /// 是否酷狗歌曲（v2.5.0）。
   bool get isKugou => source == Source.kugou;
 
-  /// 平台短名（列表角标用）：网易云 / 酷我 / 酷狗 / QQ / 本地。
+  /// 是否咪咕歌曲（v2.6.0）。
+  bool get isMigu => source == Source.migu;
+
+  /// 是否 JOOX 歌曲（v2.6.0）。
+  bool get isJoox => source == Source.joox;
+
+  /// 平台短名（列表角标用）：网易云 / 酷我 / 酷狗 / 咪咕 / JOOX / QQ / 本地。
   ///
   /// v2.4.0-fix2 之前各页面都写成 `isNetease ? '网易云' : 'QQ'`，
   /// 酷我歌曲会显示成「QQ」。统一走这个 getter。
@@ -852,15 +1012,19 @@ class Song {
     if (isLocal) return '本地';
     if (isKugou) return '酷狗';
     if (isKuwo) return '酷我';
+    if (isMigu) return '咪咕';
+    if (isJoox) return 'JOOX';
     if (isNetease) return '网易云';
     return 'QQ';
   }
 
-  /// 平台全名（弹层标题用）：网易云音乐 / 酷我音乐 / 酷狗音乐 / QQ 音乐。
+  /// 平台全名（弹层标题用）：网易云音乐 / 酷我音乐 / 酷狗音乐 / 咪咕音乐 / JOOX / QQ 音乐。
   String get sourceFull {
     if (isLocal) return '本地音乐';
     if (isKugou) return '酷狗音乐';
     if (isKuwo) return '酷我音乐';
+    if (isMigu) return '咪咕音乐';
+    if (isJoox) return 'JOOX';
     if (isNetease) return '网易云音乐';
     return 'QQ 音乐';
   }

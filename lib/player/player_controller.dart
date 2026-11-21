@@ -55,6 +55,8 @@ class PlayerController {
   static const String _neteaseQualityKey = 'default_netease_quality';
   static const String _kuwoQualityKey = 'default_kuwo_quality';
   static const String _kugouQualityKey = 'default_kugou_quality';
+  static const String _miguQualityKey = 'default_migu_quality';
+  static const String _jooxQualityKey = 'default_joox_quality';
   static const String _playModeKey = 'play_mode';
   static const String _rateKey = 'play_rate';
 
@@ -81,6 +83,12 @@ class PlayerController {
   /// 酷狗当前音质（v2.5.0）。
   KugouQuality currentKugouQuality = KugouQuality.playbackDefault;
 
+  /// 咪咕当前音质（v2.6.0）。
+  MiguQuality currentMiguQuality = MiguQuality.playbackDefault;
+
+  /// JOOX 当前音质（v2.6.0）。
+  JooxQuality currentJooxQuality = JooxQuality.playbackDefault;
+
   // ===== 临时音质（v2.4.2 #141）=====
   //
   // 从**播放页**切音质只作用于当前这一首，不写偏好、不影响下一首；
@@ -98,6 +106,12 @@ class PlayerController {
   /// 酷狗临时音质（v2.5.0）。
   KugouQuality? _tempKugouQuality;
 
+  /// 咪咕临时音质（v2.6.0）。
+  MiguQuality? _tempMiguQuality;
+
+  /// JOOX 临时音质（v2.6.0）。
+  JooxQuality? _tempJooxQuality;
+
   /// 取流真正使用的 QQ 音质（临时覆盖优先于偏好）。
   Quality get effectiveQuality => _tempQuality ?? currentQuality;
 
@@ -113,12 +127,22 @@ class PlayerController {
   KugouQuality get effectiveKugouQuality =>
       _tempKugouQuality ?? currentKugouQuality;
 
+  /// 取流真正使用的咪咕音质（v2.6.0）。
+  MiguQuality get effectiveMiguQuality =>
+      _tempMiguQuality ?? currentMiguQuality;
+
+  /// 取流真正使用的 JOOX 音质（v2.6.0）。
+  JooxQuality get effectiveJooxQuality =>
+      _tempJooxQuality ?? currentJooxQuality;
+
   void _clearTempQuality() {
     _tempSong = null;
     _tempQuality = null;
     _tempNeteaseQuality = null;
     _tempKuwoQuality = null;
     _tempKugouQuality = null;
+    _tempMiguQuality = null;
+    _tempJooxQuality = null;
   }
 
   /// 当前曲目实际生效的 QQ 音质（可能与请求音质不同：服务端降级或本地自动降级）。
@@ -140,6 +164,16 @@ class PlayerController {
   KugouQuality? _actualKugouQuality;
 
   KugouQuality? get actualKugouQuality => _actualKugouQuality;
+
+  /// 当前曲目实际生效的咪咕音质（v2.6.0）。
+  MiguQuality? _actualMiguQuality;
+
+  MiguQuality? get actualMiguQuality => _actualMiguQuality;
+
+  /// 当前曲目实际生效的 JOOX 音质（v2.6.0）。
+  JooxQuality? _actualJooxQuality;
+
+  JooxQuality? get actualJooxQuality => _actualJooxQuality;
 
   PlayMode _playMode = PlayMode.sequential;
   PlayMode get playMode => _playMode;
@@ -276,6 +310,16 @@ class PlayerController {
   final StreamController<KugouQuality?> _kugouQualityStream =
       StreamController.broadcast();
   Stream<KugouQuality?> get onKugouQualityChanged => _kugouQualityStream.stream;
+
+  /// 咪咕音质实际生效值变化（v2.6.0）。
+  final StreamController<MiguQuality?> _miguQualityStream =
+      StreamController.broadcast();
+  Stream<MiguQuality?> get onMiguQualityChanged => _miguQualityStream.stream;
+
+  /// JOOX 音质实际生效值变化（v2.6.0）。
+  final StreamController<JooxQuality?> _jooxQualityStream =
+      StreamController.broadcast();
+  Stream<JooxQuality?> get onJooxQualityChanged => _jooxQualityStream.stream;
 
   /// 播放模式变化。
   final StreamController<PlayMode> _modeStream = StreamController.broadcast();
@@ -775,6 +819,8 @@ class PlayerController {
     _neQualityStream.close();
     _kuwoQualityStream.close();
     _kugouQualityStream.close();
+    _miguQualityStream.close();
+    _jooxQualityStream.close();
     _modeStream.close();
   }
 
@@ -849,6 +895,47 @@ class PlayerController {
         return r.url;
       }
       _clearActual();
+      return '';
+    }
+
+    // 咪咕（v2.6.0）：按当前音质取流，失败沿 miguDowngradeChain 逐级降级。
+    // 咪咕直链不加密、无需本地解码，派生 URL 是否存在由探针在打开音质弹层
+    // 时探测；这里若 404 则由降级链往下兜底到 128k。
+    if (song.isMigu) {
+      final chain = MusicApi.miguDowngradeChain(effectiveMiguQuality);
+      for (final q in chain) {
+        final r = await _fetch(song, effectiveQuality, effectiveNeteaseQuality,
+            migu: q);
+        if (r.isNotEmpty) {
+          _applyActual(r);
+          _reportPlay(song, r);
+          return r.url;
+        }
+      }
+      _clearActual();
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('咪咕该音质暂不可用，请切换其它音质重试');
+      }
+      return '';
+    }
+
+    // JOOX（v2.6.0）：按当前音质走 molan express 取流，失败沿
+    // jooxDowngradeChain 逐级降级兜底到 128k。直链不加密、无需本地解码。
+    if (song.isJoox) {
+      final chain = MusicApi.jooxDowngradeChain(effectiveJooxQuality);
+      for (final q in chain) {
+        final r = await _fetch(song, effectiveQuality, effectiveNeteaseQuality,
+            joox: q);
+        if (r.isNotEmpty) {
+          _applyActual(r);
+          _reportPlay(song, r);
+          return r.url;
+        }
+      }
+      _clearActual();
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('JOOX 该音质暂不可用，请切换其它音质重试');
+      }
       return '';
     }
 
@@ -1208,10 +1295,14 @@ class PlayerController {
     _actualNeQuality = null;
     _actualKuwoQuality = null;
     _actualKugouQuality = null;
+    _actualMiguQuality = null;
+    _actualJooxQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
+    if (!_miguQualityStream.isClosed) _miguQualityStream.add(null);
+    if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(null);
   }
 
   /// 广播「实际生效音质 = 360RA [q]」（缓存直通路径没有取流结果可依）。
@@ -1220,10 +1311,14 @@ class PlayerController {
     _actualNeQuality = null;
     _actualKuwoQuality = null;
     _actualKugouQuality = null;
+    _actualMiguQuality = null;
+    _actualJooxQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
+    if (!_miguQualityStream.isClosed) _miguQualityStream.add(null);
+    if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(null);
   }
 
   /// 广播「实际生效音质 = NAC（TL01）」（缓存直通路径没有取流结果可依）。
@@ -1232,10 +1327,14 @@ class PlayerController {
     _actualNeQuality = null;
     _actualKuwoQuality = null;
     _actualKugouQuality = null;
+    _actualMiguQuality = null;
+    _actualJooxQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
+    if (!_miguQualityStream.isClosed) _miguQualityStream.add(null);
+    if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(null);
   }
 
   /// 蝰蛇母带本地升频管线（v2.5.2）。
@@ -1521,10 +1620,16 @@ class PlayerController {
 
   /// 单次取流，异常统一吞掉（降级链需要继续往下走）。
   Future<PlayUrlResult> _fetch(Song song, Quality qq, NeteaseQuality ne,
-      {KuwoQuality? kuwo, KugouQuality? kugou}) async {
+      {KuwoQuality? kuwo,
+      KugouQuality? kugou,
+      MiguQuality? migu,
+      JooxQuality? joox}) async {
     try {
       return await MusicApi.playUrlInfo(song, qq, ne,
-          kuwoQuality: kuwo, kugouQuality: kugou);
+          kuwoQuality: kuwo,
+          kugouQuality: kugou,
+          miguQuality: migu,
+          jooxQuality: joox);
     } catch (e) {
       AppLog.w('PlayerController', '取流异常: $e');
       return PlayUrlResult.empty;
@@ -1545,10 +1650,14 @@ class PlayerController {
     _actualNeQuality = r.ne;
     _actualKuwoQuality = r.kuwo;
     _actualKugouQuality = r.kugou;
+    _actualMiguQuality = r.migu;
+    _actualJooxQuality = r.joox;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(_actualNeQuality);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(_actualKuwoQuality);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(_actualKugouQuality);
+    if (!_miguQualityStream.isClosed) _miguQualityStream.add(_actualMiguQuality);
+    if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(_actualJooxQuality);
   }
 
   void _clearActual() {
@@ -1556,10 +1665,14 @@ class PlayerController {
     _actualNeQuality = null;
     _actualKuwoQuality = null;
     _actualKugouQuality = null;
+    _actualMiguQuality = null;
+    _actualJooxQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(null);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
+    if (!_miguQualityStream.isClosed) _miguQualityStream.add(null);
+    if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(null);
   }
 
   // ===== 播放页切音质（v2.4.2 #141：只作用于当前曲目，不写偏好）=====
@@ -1593,6 +1706,20 @@ class PlayerController {
   Future<void> switchKugouQuality(KugouQuality q) async {
     _tempSong = _currentSong;
     _tempKugouQuality = q;
+    await _reResolve(q.label);
+  }
+
+  /// 播放页切换咪咕音质并重新取流（保留播放位置，v2.6.0）。
+  Future<void> switchMiguQuality(MiguQuality q) async {
+    _tempSong = _currentSong;
+    _tempMiguQuality = q;
+    await _reResolve(q.label);
+  }
+
+  /// 播放页切换 JOOX 音质并重新取流（保留播放位置，v2.6.0）。
+  Future<void> switchJooxQuality(JooxQuality q) async {
+    _tempSong = _currentSong;
+    _tempJooxQuality = q;
     await _reResolve(q.label);
   }
 
@@ -1693,6 +1820,12 @@ class PlayerController {
     final savedKugou = KvStore.instance.getString(_kugouQualityKey);
     currentKugouQuality =
         KugouQuality.fromId(savedKugou) ?? KugouQuality.playbackDefault;
+    final savedMigu = KvStore.instance.getString(_miguQualityKey);
+    currentMiguQuality =
+        MiguQuality.fromId(savedMigu) ?? MiguQuality.playbackDefault;
+    final savedJoox = KvStore.instance.getString(_jooxQualityKey);
+    currentJooxQuality =
+        JooxQuality.fromId(savedJoox) ?? JooxQuality.playbackDefault;
 
     final savedMode = KvStore.instance.getString(_playModeKey);
     if (savedMode != null) {
@@ -1738,6 +1871,20 @@ class PlayerController {
     currentKugouQuality = quality;
     _tempKugouQuality = null;
     KvStore.instance.setString(_kugouQualityKey, quality.id);
+  }
+
+  /// 设置页保存咪咕默认音质偏好（v2.6.0）。
+  void saveMiguQuality(MiguQuality quality) {
+    currentMiguQuality = quality;
+    _tempMiguQuality = null;
+    KvStore.instance.setString(_miguQualityKey, quality.id);
+  }
+
+  /// 设置页保存 JOOX 默认音质偏好（v2.6.0）。
+  void saveJooxQuality(JooxQuality quality) {
+    currentJooxQuality = quality;
+    _tempJooxQuality = null;
+    KvStore.instance.setString(_jooxQualityKey, quality.id);
   }
 }
 

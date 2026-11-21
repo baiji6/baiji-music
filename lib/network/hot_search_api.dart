@@ -11,6 +11,8 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:fast_gbk/fast_gbk.dart';
 
+import 'migu/migu_playlist_api.dart' show MiguPlaylistApi;
+
 /// gzip 安全解码: 命中 gzip 魔数(1f 8b)则先解压
 List<int> maybeGunzip(List<int> bytes) =>
     (bytes.length >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b)
@@ -182,6 +184,17 @@ class HotPlaylist {
         creator: (j['nickname'] ?? '').toString(),
         playCount: (j['total_play_count'] ?? j['play_count'])?.toString(),
         trackCount: (j['song_count'] as num?)?.toInt(),
+      );
+
+  /// 咪咕歌单（`resId` / `txt` / `img` / `txt2`）。
+  ///
+  /// v2.6.0 新增。咪咕歌单字段与 QQ/网易/酷我/酷狗又不同，单列工厂。
+  factory HotPlaylist.fromMigu(Map<String, dynamic> j) => HotPlaylist(
+        id: (j['resId'] ?? j['id'] ?? '').toString(),
+        name: (j['txt'] ?? j['name'] ?? j['title'] ?? '').toString(),
+        cover: _httpsCover((j['img'] ?? j['cover'] ?? j['imageUrl'] ?? '').toString()),
+        creator: (j['ownerName'] ?? j['uname'] ?? '').toString(),
+        playCount: (j['txt2'] ?? j['playCount'])?.toString(),
       );
 }
 
@@ -407,9 +420,35 @@ class KugouHot {
   }
 }
 
+/// 咪咕音乐热门（v2.6.0）。
+///
+/// 咪咕没有稳定的公开热搜词接口，与酷狗一样退化为「用推荐歌单名当热搜词」，
+/// 热门歌单直接走官方推荐接口。
+class MiguHot {
+  static Future<List<HotKeyword>> hotSearch({int limit = 20}) async {
+    try {
+      final lists = await MiguPlaylistApi.recommend();
+      return [for (final p in lists) HotKeyword(p.name, p.playCount)]
+          .take(limit)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Future<List<HotPlaylist>> hotPlaylists({int limit = 30}) async {
+    try {
+      final lists = await MiguPlaylistApi.recommend();
+      return MiguPlaylistApi.toHotPlaylists(lists).take(limit).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+}
+
 /// 统一入口：按音源标识取热搜词。
 ///
-/// [source] 为 `qq` / `netease` / `kuwo` / `kugou`。
+/// [source] 为 `qq` / `netease` / `kuwo` / `kugou` / `migu`。
 Future<List<HotKeyword>> hotKeywordsOf(String source, {int limit = 20}) async {
   switch (source) {
     case 'netease':
@@ -418,6 +457,11 @@ Future<List<HotKeyword>> hotKeywordsOf(String source, {int limit = 20}) async {
       return KuwoHot.hotSearch(limit: limit);
     case 'kugou':
       return KugouHot.hotSearch(limit: limit);
+    case 'migu':
+      return MiguHot.hotSearch(limit: limit);
+    case 'joox':
+      // JOOX 暂无公开热搜词接口，返回空避免误用 QQ 数据。
+      return const <HotKeyword>[];
     default:
       return QqHot.hotSearch(limit: limit);
   }
@@ -433,6 +477,11 @@ Future<List<HotPlaylist>> hotPlaylistsOf(String source, {int limit = 30}) async 
     case 'kugou':
       // v2.5.4：补上酷狗分支。此前酷狗落到 default 静默返回 QQ 数据。
       return KugouHot.hotPlaylists(limit: limit);
+    case 'migu':
+      return MiguHot.hotPlaylists(limit: limit);
+    case 'joox':
+      // JOOX 暂无公开歌单接口，返回空避免误用 QQ 数据。
+      return const <HotPlaylist>[];
     default:
       return QqHot.hotPlaylists(limit: limit);
   }

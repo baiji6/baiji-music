@@ -3,6 +3,8 @@ import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/kuwo/kuwo_api.dart';
 import 'package:baiji_music/network/kugou/kugou_api.dart';
 import 'package:baiji_music/network/kugou/kugou_auth.dart';
+import 'package:baiji_music/network/migu/migu_api.dart';
+import 'package:baiji_music/network/joox/joox_api.dart';
 import '../decrypt/qmc.dart';
 import '../lyrics/lyric_model.dart';
 import '../decrypt/qmc_ekey.dart';
@@ -25,6 +27,10 @@ class AppServices {
   bool isLoggedIn(String source) {
     if (source == Source.kuwo) return KuwoAuth.isLoggedIn;
     if (source == Source.kugou) return KugouAuth.isLoggedIn;
+    // 咪咕走匿名取流，无账号体系（v2.6.0）。
+    if (source == Source.migu) return false;
+    // JOOX 走匿名取流（molan 网关 key 内置），无账号体系（v2.6.0）。
+    if (source == Source.joox) return false;
     return source == Source.netease ? netease.isLoggedIn() : qq.isLoggedIn();
   }
 }
@@ -48,6 +54,12 @@ class PlayUrlResult {
   /// 酷狗实际音质（酷狗歌曲才有，其余为 null）。
   final KugouQuality? kugou;
 
+  /// 咪咕实际音质（咪咕歌曲才有，v2.6.0）。
+  final MiguQuality? migu;
+
+  /// JOOX 实际音质（JOOX 歌曲才有，v2.6.0）。
+  final JooxQuality? joox;
+
   /// 覆盖扩展名（网易云响应里的真实 `type`）；为空时按音质枚举推断。
   final String? _extOverride;
 
@@ -55,7 +67,12 @@ class PlayUrlResult {
   final String ekey;
 
   const PlayUrlResult._(this.url, this.qq, this.ne,
-      [this._extOverride, this.kuwo, this.ekey = '', this.kugou]);
+      [this._extOverride,
+      this.kuwo,
+      this.ekey = '',
+      this.kugou,
+      this.migu,
+      this.joox]);
 
   static const empty = PlayUrlResult._('', null, null);
 
@@ -63,10 +80,23 @@ class PlayUrlResult {
   bool get isNotEmpty => url.isNotEmpty;
 
   /// 落盘扩展名。
-  String get ext => _extOverride ?? kuwo?.ext ?? kugou?.ext ?? ne?.ext ?? qq?.ext ?? '.mp3';
+  String get ext => _extOverride ??
+      kuwo?.ext ??
+      kugou?.ext ??
+      migu?.ext ??
+      joox?.ext ??
+      ne?.ext ??
+      qq?.ext ??
+      '.mp3';
 
   /// 音质标签；无则空串。
-  String get label => kuwo?.label ?? kugou?.label ?? qq?.label ?? ne?.label ?? '';
+  String get label => kuwo?.label ??
+      kugou?.label ??
+      migu?.label ??
+      joox?.label ??
+      qq?.label ??
+      ne?.label ??
+      '';
 
   @override
   String toString() => 'PlayUrlResult($label)';
@@ -103,9 +133,65 @@ class MusicApi {
     if (source == Source.kugou) {
       return searchKugou(keyword, page: page, num: num);
     }
+    if (source == Source.migu) {
+      return searchMigu(keyword, page: page, num: num);
+    }
+    if (source == Source.joox) {
+      return searchJoox(keyword, page: page, num: num);
+    }
     return AppServices.instance.qq.search.searchByType(keyword,
         page: page, num: num);
   }
+
+  /// JOOX 搜索（v2.6.0，官方 avatar.api.joox.com 接口）。
+  static Future<List<Song>> searchJoox(String keyword,
+      {int page = 1, int num = 20}) async {
+    final list = await JooxApi.search(keyword, page: page, num: num);
+    return list.map(jooxSongToSong).toList();
+  }
+
+  /// JOOX 歌曲 → 通用 [Song]。
+  ///
+  /// mid 用字符串 songmid（取流 key），songId 用数字（歌词 track key 也
+  /// 可从 mid 反查，这里存数字备用）。qualityCodes 留空，由探针探测。
+  static Song jooxSongToSong(JooxSong s) => Song(
+        mid: s.songMid,
+        songId: int.tryParse(s.songId) ?? 0,
+        name: s.name,
+        singer: s.singer,
+        album: s.album,
+        albumMid: '',
+        duration: s.durationSeconds * 1000,
+        cover: s.cover,
+        source: Source.joox,
+        mvId: s.mvId,
+      );
+
+  /// 咪咕搜索（v2.6.0，洛雪同源 jadeite v3 接口 + MD5 签名）。
+  static Future<List<Song>> searchMigu(String keyword,
+      {int page = 1, int num = 20}) async {
+    final list = await MiguApi.search(keyword, page: page, num: num);
+    return list.map(miguSongToSong).toList();
+  }
+
+  /// 咪咕歌曲 → 通用 [Song]。
+  ///
+  /// 咪咕用 songId 做取流主键，塞进 [Song.mid]；albumId 放到 [albumMid]，
+  /// 播放时用于 listen-url 的 `albumId` 参数。`qualityCodes` 留空——咪咕
+  /// 音质由探针探测（见 [MiguApi.probeQualityCodes] / [ensureQualityCodes]），
+  /// 而非搜索响应里的 audioFormats。
+  static Song miguSongToSong(MiguSong s) => Song(
+        mid: s.songId,
+        songId: int.tryParse(s.songId) ?? 0,
+        name: s.name,
+        singer: s.singer,
+        album: s.album,
+        albumMid: s.albumId,
+        duration: s.durationSeconds * 1000,
+        cover: s.cover,
+        source: Source.migu,
+        mvId: s.mvId,
+      );
 
   /// 酷我搜索（v2.4.0 新增平台）。
   ///
@@ -211,6 +297,14 @@ class MusicApi {
             codes = list.first.qualities.map((q) => q.id).toSet();
           }
         }
+      } else if (song.isMigu) {
+        // v2.6.0：咪咕音质靠探针逐档 Range 探测派生 URL 是否存在，
+        // 探测时机就在这里（打开音质弹层 / 首次播放），避免搜索风暴。
+        codes = await MiguApi.probeQualityCodes(song.mid,
+            albumId: song.albumMid);
+      } else if (song.isJoox) {
+        // v2.6.0：JOOX 音质逐档请求 molan express 接口探测实际可用性。
+        codes = await JooxApi.probeQualityCodes(song.mid);
       } else {
         final track = await AppServices.instance.qq.song.getDetail(song.mid);
         if (track != null) codes = Quality.availableCodesFrom(track['file']);
@@ -253,7 +347,24 @@ class MusicApi {
   /// - 网易云：直接取响应里的 `level` 字段。
   static Future<PlayUrlResult> playUrlInfo(
     Song song, Quality qqQuality, NeteaseQuality neQuality,
-    {KuwoQuality? kuwoQuality, KugouQuality? kugouQuality}) async {
+    {KuwoQuality? kuwoQuality,
+    KugouQuality? kugouQuality,
+    MiguQuality? miguQuality,
+    JooxQuality? jooxQuality}) async {
+    if (song.isJoox) {
+      final q = jooxQuality ?? JooxQuality.playbackDefault;
+      final info = await JooxApi.getExpress(song.mid, q);
+      if (info.url.isEmpty) return PlayUrlResult.empty;
+      return PlayUrlResult._(info.url, null, null, null, null, '', null, null, q);
+    }
+    if (song.isMigu) {
+      final q = miguQuality ?? MiguQuality.playbackDefault;
+      final listen = await MiguApi.getListenUrl(song.mid, albumId: song.albumMid);
+      if (listen.url.isEmpty) return PlayUrlResult.empty;
+      // 128k 基础直链直接去掉签名 query 即可用；其它档按路径替换派生。
+      final url = MiguApi.deriveUrl(listen.url, q);
+      return PlayUrlResult._(url, null, null, null, null, '', null, q);
+    }
     if (song.isKugou) {
       final r = await KugouApi.playUrlWithFallback(
         song.mid, song.name, song.singer,
@@ -370,11 +481,50 @@ class MusicApi {
     return i < 0 ? all : all.sublist(i);
   }
 
+  /// 咪咕音质降级链（v2.6.0）：[from] 起向下，末档兜底 128k。
+  static List<MiguQuality> miguDowngradeChain(MiguQuality from) {
+    final all = MiguQuality.downloadOptions;
+    final i = all.indexWhere((q) => q.id == from.id);
+    final rest = i < 0 ? all : all.sublist(i);
+    final chain = <MiguQuality>[...rest];
+    if (!chain.any((q) => q.id == MiguQuality.k128.id)) chain.add(MiguQuality.k128);
+    return chain;
+  }
+
+  /// JOOX 音质降级链（v2.6.0）：[from] 起向下，末档兜底 128k。
+  static List<JooxQuality> jooxDowngradeChain(JooxQuality from) {
+    final all = JooxQuality.downloadOptions;
+    final i = all.indexWhere((q) => q.id == from.id);
+    final rest = i < 0 ? all : all.sublist(i);
+    final chain = <JooxQuality>[...rest];
+    if (!chain.any((q) => q.id == JooxQuality.k128.id)) chain.add(JooxQuality.k128);
+    return chain;
+  }
+
   /// 按来源取歌词。
   static Future<String> lyric(Song song) async {
     if (song.isKugou) {
       final l = await KugouApi.lyric(song.mid, song.name, song.singer);
       return l.isEmpty ? '' : _kugouLyricsToRaw(l);
+    }
+    if (song.isMigu) {
+      final cached = MiguApi.cachedSong(song.mid);
+      final ms = cached ??
+          MiguSong(
+            songId: song.mid,
+            copyrightId: '',
+            albumId: song.albumMid,
+            name: song.name,
+            singer: song.singer,
+            album: song.album,
+          );
+      return MiguApi.lyric(ms);
+    }
+    if (song.isJoox) {
+      // JOOX QRC 逐字（已从明文 XML 提取）优先；没有则回退 LRC。
+      // songId 存的是数字 id（歌词 track 接口的 key）。
+      final info = await JooxApi.lyric('${song.songId}');
+      return info.qrc.isNotEmpty ? info.qrc : info.lrc;
     }
     if (song.isKuwo) {
       return KuwoApi.lyric(song.mid);

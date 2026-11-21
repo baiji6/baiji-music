@@ -228,6 +228,19 @@ class NeteaseClient {
     return map.entries.map((e) => '${e.key}=${e.value}').join('; ');
   }
 
+  /// 从登录响应的 profile / account 里解析 uid（纯函数，可单测）。
+  ///
+  /// profile 通常带 `userId`；缺失时回退 account.id；两者都没有返回 null。
+  static int? parseLoginUid(dynamic profile, dynamic account) {
+    final raw = profile is Map<String, dynamic>
+        ? (profile['userId'] ??
+            (account is Map<String, dynamic> ? account['id'] : null))
+        : (account is Map<String, dynamic> ? account['id'] : null);
+    if (raw == null) return null;
+    if (raw is num) return raw.toInt();
+    return int.tryParse(raw.toString());
+  }
+
   /// 当前 Cookie 里的 `__csrf`（weapi 请求必带，登录后由网易云下发）。
   String get csrfToken {
     final map = <String, String>{};
@@ -290,14 +303,8 @@ class NeteaseClient {
     if (!setCookie.contains('MUSIC_U=')) {
       throw const NeteaseLoginException(-1, '登录成功但未取到登录态 Cookie');
     }
-    final account = r.body['account'];
     final profile = r.body['profile'];
-    final uid = profile is Map<String, dynamic>
-        ? ((profile['userId'] ?? account is Map<String, dynamic>
-                ? (account as Map<String, dynamic>)['id']
-                : null) as num?)
-            ?.toInt()
-        : null;
+    final uid = parseLoginUid(profile, r.body['account']);
     return NeteasePhoneLogin(
       cookie: setCookie,
       userId: uid ?? 0,
