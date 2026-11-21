@@ -6,6 +6,7 @@ import 'package:baiji_music/network/kugou/kugou_auth.dart';
 import 'package:baiji_music/network/migu/migu_api.dart';
 import 'package:baiji_music/network/joox/joox_api.dart';
 import 'package:baiji_music/network/qishui/qishui_api.dart';
+import 'package:baiji_music/network/qishui/qishui_relay.dart';
 import '../decrypt/qmc.dart';
 import '../lyrics/lyric_model.dart';
 import '../decrypt/qmc_ekey.dart';
@@ -127,6 +128,10 @@ class MusicApi {
     return _qqRelay = server;
   }
 
+  /// 汽水 CENC 加密档的本地解密中继（v2.6.2，全音质）。
+  /// 单例常驻；真正的 bind 由 [QishuiCencRelayServer.serve] 幂等完成。
+  static QishuiCencRelayServer get _qishuiRelay => QishuiCencRelayServer.instance;
+
   static bool isLoggedIn(String source) => AppServices.instance.isLoggedIn(source);
 
   /// 按来源搜索。
@@ -164,7 +169,8 @@ class MusicApi {
 
   /// 汽水歌曲 → 通用 [Song]。
   ///
-  /// mid 用字符串 itemId（取流/歌词共用），仅 medium 单档故 qualityCodes 固定。
+  /// mid 用字符串 itemId（取流/歌词共用）；音质靠 qishui2.php 探测，留空由
+  /// [ensureQualityCodes] 按实际可用档位补全（v2.6.2）。
   static Song qishuiSongToSong(QishuiSong s) => Song(
         mid: s.itemId,
         songId: int.tryParse(s.itemId) ?? 0,
@@ -175,7 +181,6 @@ class MusicApi {
         duration: s.durationSeconds * 1000,
         cover: s.cover,
         source: Source.qishui,
-        qualityCodes: const <String>{'medium'},
       );
 
   /// JOOX 搜索（v2.6.0，官方 avatar.api.joox.com 接口）。
@@ -341,8 +346,8 @@ class MusicApi {
         // v2.6.0：JOOX 音质逐档请求 molan express 接口探测实际可用性。
         codes = await JooxApi.probeQualityCodes(song.mid);
       } else if (song.isQishui) {
-        // v2.6.1：汽水匿名通道只有 medium 单档，无需探测。
-        codes = const <String>{'medium'};
+        // v2.6.2：qishui2.php 一次返回全 14 档，按 Q 编号映射实际可用档位。
+        codes = await QishuiApi.probeQualityCodes(song.mid);
       } else {
         final track = await AppServices.instance.qq.song.getDetail(song.mid);
         if (track != null) codes = Quality.availableCodesFrom(track['file']);
@@ -391,11 +396,21 @@ class MusicApi {
     JooxQuality? jooxQuality,
     QishuiQuality? qishuiQuality}) async {
     if (song.isQishui) {
-      // 汽水匿名通道恒 medium，quality 参数传 higher 也会降级回来。
-      final info = await QishuiApi.getStream(song.mid);
-      if (info.url.isEmpty) return PlayUrlResult.empty;
-      return PlayUrlResult._(info.url, null, null, null, null, '', null, null,
-          null, QishuiQuality.medium);
+      // v2.6.2：按档位名请求 qishui2.php；命中加密档（hi_res/spatial/
+      // lowest 或降级落到加密份）时用本地 CENC 中继解密成可播直链。
+      final q = qishuiQuality ?? QishuiQuality.playbackDefault;
+      final info = await QishuiApi.getStream(song.mid, quality: q.id);
+      if (!info.isUsable) return PlayUrlResult.empty;
+      var playUrl = info.url;
+      if (info.encrypted) {
+        final ext = info.outputExt.replaceFirst('.', '');
+        playUrl = await _qishuiRelay.serve(info.url, info.spadeA, ext: ext);
+        AppLog.d('MusicApi',
+            '汽水加密档 ${info.actualCode} 走本地 CENC 解密中继（ext=$ext）');
+      }
+      final actual = info.quality ?? q;
+      return PlayUrlResult._(playUrl, null, null, info.outputExt, null, '',
+          null, null, null, actual);
     }
     if (song.isJoox) {
       final q = jooxQuality ?? JooxQuality.playbackDefault;
@@ -547,9 +562,17 @@ class MusicApi {
     return chain;
   }
 
-  /// 汽水音质降级链（v2.6.1）：匿名通道仅 medium 单档。
-  static List<QishuiQuality> qishuiDowngradeChain(QishuiQuality from) =>
-      QishuiQuality.downloadOptions;
+  /// 汽水音质降级链（v2.6.2）：[from] 起向下，末档兜底 medium（明文、最稳）。
+  static List<QishuiQuality> qishuiDowngradeChain(QishuiQuality from) {
+    final all = QishuiQuality.downloadOptions;
+    final i = all.indexWhere((q) => q.id == from.id);
+    final rest = i < 0 ? all : all.sublist(i);
+    final chain = <QishuiQuality>[...rest];
+    if (!chain.any((q) => q.id == QishuiQuality.medium.id)) {
+      chain.add(QishuiQuality.medium);
+    }
+    return chain;
+  }
 
   /// 按来源取歌词。
   static Future<String> lyric(Song song) async {

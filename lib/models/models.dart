@@ -36,7 +36,8 @@ class Source {
   /// 汽水音乐（字节跳动旗下，v2.6.1 新增平台）。
   ///
   /// 搜索走匿名 api-vehicle /v2/search/type（qishui+music），
-  /// 取流走 molan 网关的 qishui.php（key: molan 必带），仅 medium 单档明文；
+  /// 取流走 molan 网关的 qishui2.php（key: molan 必带，全 14 档，
+  /// 明文直解 / CENC 加密档本地解密，见 v2.6.2）；
   /// 歌词复用取流响应的 data.lyric（标准 LRC），兜底 seo_track 的 krc；
   /// 封面用搜索返回的 p3-luna.douyinpic.com 直链。
   static const String qishui = 'qishui';
@@ -523,24 +524,93 @@ class JooxQuality {
   String toString() => 'JooxQuality($id,$label)';
 }
 
-/// 汽水音乐音质枚举（v2.6.1 新增平台，匿名通道仅 medium 单档）。
+/// 汽水音乐音质枚举（v2.6.2 升级为全音质，qishui2.php 网关）。
 ///
-/// molan qishui.php 匿名通道固定返回 medium（约 65kbps AAC/M4A 明文），
-/// quality 参数即使传 higher/highest 也如实回报降级到 medium，故仅一档。
+/// qishui2.php 一次返回全部 14 份流（稳定编号 Q01–Q14），每份是
+/// 「档位名 + 明文/加密」的组合（如 Q02=lossless 明文、Q03=lossless 加密）。
+/// 同一个「档位」的明文/加密两份内容完全一致，只是加密份需本地 CENC 解密，
+/// 因此 UI 只暴露 9 个逻辑档位；请求用档位名（网关会解析 Q06a/Q06b 等后缀，
+/// 比直接传裸编号稳健），实际命中哪一份、是否需要解密由响应的
+/// `actual_code` / `encrypted` / `spade_a` 决定。
 class QishuiQuality {
+  /// 请求参数 / 档位名（如 'lossless'、'hi_res'）。
   final String id;
   final String label;
   final String format;
   final String ext;
 
-  const QishuiQuality(this.id, this.label, this.format, this.ext);
+  /// 该档位对应的代表编号（文档里的 Qxx），仅作展示与文档对照。
+  final String code;
 
-  /// 标准 medium（唯一档）。
-  static const medium = QishuiQuality('medium', '标准', 'm4a', '.m4a');
+  /// 该档位是否仅存在加密源（网关只有 cenc 份，需本地解密）。
+  final bool encryptedOnly;
 
-  static const downloadOptions = [medium];
+  const QishuiQuality(
+    this.id,
+    this.label,
+    this.format,
+    this.ext,
+    this.code,
+    this.encryptedOnly,
+  );
+
+  /// 原声母带（Q01，实测 flac；文档标 WAV，以响应 vtype 为准）。
+  static const original =
+      QishuiQuality('original', '原声母带', 'flac', '.flac', 'Q01', false);
+
+  /// 无损（Q02 明文 / Q03 加密）。
+  static const lossless =
+      QishuiQuality('lossless', '无损', 'flac', '.flac', 'Q02/Q03', false);
+
+  /// Hi-Res 录音室（Q04，仅加密）。
+  static const hiRes =
+      QishuiQuality('hi_res', 'Hi-Res', 'm4a', '.m4a', 'Q04', true);
+
+  /// 全景声（Q05，仅加密）。
+  static const spatial =
+      QishuiQuality('spatial', '全景声', 'm4a', '.m4a', 'Q05', true);
+
+  /// 超高（Q06 明文 / Q07 加密）。
+  static const highest =
+      QishuiQuality('highest', '超高', 'm4a', '.m4a', 'Q06/Q07', false);
+
+  /// 较高（Q08 明文 / Q09 加密）。
+  static const higher =
+      QishuiQuality('higher', '较高', 'm4a', '.m4a', 'Q08/Q09', false);
+
+  /// 标准（Q10 明文 / Q11 加密）。
+  static const medium =
+      QishuiQuality('medium', '标准', 'm4a', '.m4a', 'Q10/Q11', false);
+
+  /// 低（Q12 明文 / Q13 加密）。
+  static const low =
+      QishuiQuality('low', '低', 'm4a', '.m4a', 'Q12/Q13', false);
+
+  /// 最低（Q14，仅加密）。
+  static const lowest =
+      QishuiQuality('lowest', '最低', 'm4a', '.m4a', 'Q14', true);
+
+  /// 下载可选音质（高 → 低，按码率排序）。
+  static const downloadOptions = [
+    original,
+    lossless,
+    hiRes,
+    spatial,
+    highest,
+    higher,
+    medium,
+    low,
+    lowest,
+  ];
+
+  /// 播放可选音质（高 → 低），同下载全集。
   static const playbackOptions = downloadOptions;
+
+  /// 播放默认音质：保持 medium（最稳、全曲必有），不因升级改动默认行为。
   static const playbackDefault = medium;
+
+  /// 该档位所需的全部 Q 编号（供 UI 展示缺档 / 探测用）。
+  List<String> get codes => code.split('/');
 
   static QishuiQuality? fromId(String? id) {
     if (id == null) return null;
