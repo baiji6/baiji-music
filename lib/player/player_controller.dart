@@ -57,6 +57,7 @@ class PlayerController {
   static const String _kugouQualityKey = 'default_kugou_quality';
   static const String _miguQualityKey = 'default_migu_quality';
   static const String _jooxQualityKey = 'default_joox_quality';
+  static const String _qishuiQualityKey = 'default_qishui_quality';
   static const String _playModeKey = 'play_mode';
   static const String _rateKey = 'play_rate';
 
@@ -89,6 +90,9 @@ class PlayerController {
   /// JOOX 当前音质（v2.6.0）。
   JooxQuality currentJooxQuality = JooxQuality.playbackDefault;
 
+  /// 汽水当前音质（v2.6.1，匿名通道仅 medium 单档）。
+  QishuiQuality currentQishuiQuality = QishuiQuality.playbackDefault;
+
   // ===== 临时音质（v2.4.2 #141）=====
   //
   // 从**播放页**切音质只作用于当前这一首，不写偏好、不影响下一首；
@@ -111,6 +115,9 @@ class PlayerController {
 
   /// JOOX 临时音质（v2.6.0）。
   JooxQuality? _tempJooxQuality;
+
+  /// 汽水临时音质（v2.6.1）。
+  QishuiQuality? _tempQishuiQuality;
 
   /// 取流真正使用的 QQ 音质（临时覆盖优先于偏好）。
   Quality get effectiveQuality => _tempQuality ?? currentQuality;
@@ -135,6 +142,10 @@ class PlayerController {
   JooxQuality get effectiveJooxQuality =>
       _tempJooxQuality ?? currentJooxQuality;
 
+  /// 取流真正使用的汽水音质（v2.6.1）。
+  QishuiQuality get effectiveQishuiQuality =>
+      _tempQishuiQuality ?? currentQishuiQuality;
+
   void _clearTempQuality() {
     _tempSong = null;
     _tempQuality = null;
@@ -143,6 +154,7 @@ class PlayerController {
     _tempKugouQuality = null;
     _tempMiguQuality = null;
     _tempJooxQuality = null;
+    _tempQishuiQuality = null;
   }
 
   /// 当前曲目实际生效的 QQ 音质（可能与请求音质不同：服务端降级或本地自动降级）。
@@ -174,6 +186,11 @@ class PlayerController {
   JooxQuality? _actualJooxQuality;
 
   JooxQuality? get actualJooxQuality => _actualJooxQuality;
+
+  /// 当前曲目实际生效的汽水音质（v2.6.1）。
+  QishuiQuality? _actualQishuiQuality;
+
+  QishuiQuality? get actualQishuiQuality => _actualQishuiQuality;
 
   PlayMode _playMode = PlayMode.sequential;
   PlayMode get playMode => _playMode;
@@ -320,6 +337,12 @@ class PlayerController {
   final StreamController<JooxQuality?> _jooxQualityStream =
       StreamController.broadcast();
   Stream<JooxQuality?> get onJooxQualityChanged => _jooxQualityStream.stream;
+
+  /// 汽水音质实际生效值变化（v2.6.1）。
+  final StreamController<QishuiQuality?> _qishuiQualityStream =
+      StreamController.broadcast();
+  Stream<QishuiQuality?> get onQishuiQualityChanged =>
+      _qishuiQualityStream.stream;
 
   /// 播放模式变化。
   final StreamController<PlayMode> _modeStream = StreamController.broadcast();
@@ -821,6 +844,7 @@ class PlayerController {
     _kugouQualityStream.close();
     _miguQualityStream.close();
     _jooxQualityStream.close();
+    _qishuiQualityStream.close();
     _modeStream.close();
   }
 
@@ -935,6 +959,25 @@ class PlayerController {
       _clearActual();
       if (!_noticeStream.isClosed) {
         _noticeStream.add('JOOX 该音质暂不可用，请切换其它音质重试');
+      }
+      return '';
+    }
+
+    // 汽水（v2.6.1）：匿名通道恒 medium 单档明文，无需本地解码。
+    if (song.isQishui) {
+      final chain = MusicApi.qishuiDowngradeChain(effectiveQishuiQuality);
+      for (final q in chain) {
+        final r = await _fetch(song, effectiveQuality, effectiveNeteaseQuality,
+            qishui: q);
+        if (r.isNotEmpty) {
+          _applyActual(r);
+          _reportPlay(song, r);
+          return r.url;
+        }
+      }
+      _clearActual();
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('汽水取流失败，请稍后重试');
       }
       return '';
     }
@@ -1297,12 +1340,14 @@ class PlayerController {
     _actualKugouQuality = null;
     _actualMiguQuality = null;
     _actualJooxQuality = null;
+    _actualQishuiQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
     if (!_miguQualityStream.isClosed) _miguQualityStream.add(null);
     if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(null);
+    if (!_qishuiQualityStream.isClosed) _qishuiQualityStream.add(null);
   }
 
   /// 广播「实际生效音质 = 360RA [q]」（缓存直通路径没有取流结果可依）。
@@ -1313,12 +1358,14 @@ class PlayerController {
     _actualKugouQuality = null;
     _actualMiguQuality = null;
     _actualJooxQuality = null;
+    _actualQishuiQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
     if (!_miguQualityStream.isClosed) _miguQualityStream.add(null);
     if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(null);
+    if (!_qishuiQualityStream.isClosed) _qishuiQualityStream.add(null);
   }
 
   /// 广播「实际生效音质 = NAC（TL01）」（缓存直通路径没有取流结果可依）。
@@ -1329,12 +1376,14 @@ class PlayerController {
     _actualKugouQuality = null;
     _actualMiguQuality = null;
     _actualJooxQuality = null;
+    _actualQishuiQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
     if (!_miguQualityStream.isClosed) _miguQualityStream.add(null);
     if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(null);
+    if (!_qishuiQualityStream.isClosed) _qishuiQualityStream.add(null);
   }
 
   /// 蝰蛇母带本地升频管线（v2.5.2）。
@@ -1623,13 +1672,15 @@ class PlayerController {
       {KuwoQuality? kuwo,
       KugouQuality? kugou,
       MiguQuality? migu,
-      JooxQuality? joox}) async {
+      JooxQuality? joox,
+      QishuiQuality? qishui}) async {
     try {
       return await MusicApi.playUrlInfo(song, qq, ne,
           kuwoQuality: kuwo,
           kugouQuality: kugou,
           miguQuality: migu,
-          jooxQuality: joox);
+          jooxQuality: joox,
+          qishuiQuality: qishui);
     } catch (e) {
       AppLog.w('PlayerController', '取流异常: $e');
       return PlayUrlResult.empty;
@@ -1652,12 +1703,16 @@ class PlayerController {
     _actualKugouQuality = r.kugou;
     _actualMiguQuality = r.migu;
     _actualJooxQuality = r.joox;
+    _actualQishuiQuality = r.qishui;
     if (!_qualityStream.isClosed) _qualityStream.add(_actualQqQuality);
     if (!_neQualityStream.isClosed) _neQualityStream.add(_actualNeQuality);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(_actualKuwoQuality);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(_actualKugouQuality);
     if (!_miguQualityStream.isClosed) _miguQualityStream.add(_actualMiguQuality);
     if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(_actualJooxQuality);
+    if (!_qishuiQualityStream.isClosed) {
+      _qishuiQualityStream.add(_actualQishuiQuality);
+    }
   }
 
   void _clearActual() {
@@ -1667,12 +1722,14 @@ class PlayerController {
     _actualKugouQuality = null;
     _actualMiguQuality = null;
     _actualJooxQuality = null;
+    _actualQishuiQuality = null;
     if (!_qualityStream.isClosed) _qualityStream.add(null);
     if (!_neQualityStream.isClosed) _neQualityStream.add(null);
     if (!_kuwoQualityStream.isClosed) _kuwoQualityStream.add(null);
     if (!_kugouQualityStream.isClosed) _kugouQualityStream.add(null);
     if (!_miguQualityStream.isClosed) _miguQualityStream.add(null);
     if (!_jooxQualityStream.isClosed) _jooxQualityStream.add(null);
+    if (!_qishuiQualityStream.isClosed) _qishuiQualityStream.add(null);
   }
 
   // ===== 播放页切音质（v2.4.2 #141：只作用于当前曲目，不写偏好）=====
@@ -1720,6 +1777,13 @@ class PlayerController {
   Future<void> switchJooxQuality(JooxQuality q) async {
     _tempSong = _currentSong;
     _tempJooxQuality = q;
+    await _reResolve(q.label);
+  }
+
+  /// 播放页切换汽水音质并重新取流（v2.6.1，仅 medium 单档）。
+  Future<void> switchQishuiQuality(QishuiQuality q) async {
+    _tempSong = _currentSong;
+    _tempQishuiQuality = q;
     await _reResolve(q.label);
   }
 
@@ -1826,6 +1890,9 @@ class PlayerController {
     final savedJoox = KvStore.instance.getString(_jooxQualityKey);
     currentJooxQuality =
         JooxQuality.fromId(savedJoox) ?? JooxQuality.playbackDefault;
+    final savedQishui = KvStore.instance.getString(_qishuiQualityKey);
+    currentQishuiQuality =
+        QishuiQuality.fromId(savedQishui) ?? QishuiQuality.playbackDefault;
 
     final savedMode = KvStore.instance.getString(_playModeKey);
     if (savedMode != null) {
@@ -1885,6 +1952,13 @@ class PlayerController {
     currentJooxQuality = quality;
     _tempJooxQuality = null;
     KvStore.instance.setString(_jooxQualityKey, quality.id);
+  }
+
+  /// 设置页保存汽水默认音质偏好（v2.6.1，仅 medium 单档）。
+  void saveQishuiQuality(QishuiQuality quality) {
+    currentQishuiQuality = quality;
+    _tempQishuiQuality = null;
+    KvStore.instance.setString(_qishuiQualityKey, quality.id);
   }
 }
 

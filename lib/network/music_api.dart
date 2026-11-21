@@ -5,6 +5,7 @@ import 'package:baiji_music/network/kugou/kugou_api.dart';
 import 'package:baiji_music/network/kugou/kugou_auth.dart';
 import 'package:baiji_music/network/migu/migu_api.dart';
 import 'package:baiji_music/network/joox/joox_api.dart';
+import 'package:baiji_music/network/qishui/qishui_api.dart';
 import '../decrypt/qmc.dart';
 import '../lyrics/lyric_model.dart';
 import '../decrypt/qmc_ekey.dart';
@@ -31,6 +32,8 @@ class AppServices {
     if (source == Source.migu) return false;
     // JOOX 走匿名取流（molan 网关 key 内置），无账号体系（v2.6.0）。
     if (source == Source.joox) return false;
+    // 汽水走匿名取流（molan 网关 key 内置），无账号体系（v2.6.1）。
+    if (source == Source.qishui) return false;
     return source == Source.netease ? netease.isLoggedIn() : qq.isLoggedIn();
   }
 }
@@ -60,6 +63,9 @@ class PlayUrlResult {
   /// JOOX 实际音质（JOOX 歌曲才有，v2.6.0）。
   final JooxQuality? joox;
 
+  /// 汽水实际音质（汽水歌曲才有，v2.6.1，仅 medium 单档）。
+  final QishuiQuality? qishui;
+
   /// 覆盖扩展名（网易云响应里的真实 `type`）；为空时按音质枚举推断。
   final String? _extOverride;
 
@@ -72,7 +78,8 @@ class PlayUrlResult {
       this.ekey = '',
       this.kugou,
       this.migu,
-      this.joox]);
+      this.joox,
+      this.qishui]);
 
   static const empty = PlayUrlResult._('', null, null);
 
@@ -85,6 +92,7 @@ class PlayUrlResult {
       kugou?.ext ??
       migu?.ext ??
       joox?.ext ??
+      qishui?.ext ??
       ne?.ext ??
       qq?.ext ??
       '.mp3';
@@ -94,6 +102,7 @@ class PlayUrlResult {
       kugou?.label ??
       migu?.label ??
       joox?.label ??
+      qishui?.label ??
       qq?.label ??
       ne?.label ??
       '';
@@ -139,9 +148,35 @@ class MusicApi {
     if (source == Source.joox) {
       return searchJoox(keyword, page: page, num: num);
     }
+    if (source == Source.qishui) {
+      return searchQishui(keyword, page: page, num: num);
+    }
     return AppServices.instance.qq.search.searchByType(keyword,
         page: page, num: num);
   }
+
+  /// 汽水搜索（v2.6.1，匿名 api-vehicle /v2/search/type）。
+  static Future<List<Song>> searchQishui(String keyword,
+      {int page = 1, int num = 20}) async {
+    final list = await QishuiApi.search(keyword, page: page, num: num);
+    return list.map(qishuiSongToSong).toList();
+  }
+
+  /// 汽水歌曲 → 通用 [Song]。
+  ///
+  /// mid 用字符串 itemId（取流/歌词共用），仅 medium 单档故 qualityCodes 固定。
+  static Song qishuiSongToSong(QishuiSong s) => Song(
+        mid: s.itemId,
+        songId: int.tryParse(s.itemId) ?? 0,
+        name: s.name,
+        singer: s.singer,
+        album: s.album,
+        albumMid: '',
+        duration: s.durationSeconds * 1000,
+        cover: s.cover,
+        source: Source.qishui,
+        qualityCodes: const <String>{'medium'},
+      );
 
   /// JOOX 搜索（v2.6.0，官方 avatar.api.joox.com 接口）。
   static Future<List<Song>> searchJoox(String keyword,
@@ -305,6 +340,9 @@ class MusicApi {
       } else if (song.isJoox) {
         // v2.6.0：JOOX 音质逐档请求 molan express 接口探测实际可用性。
         codes = await JooxApi.probeQualityCodes(song.mid);
+      } else if (song.isQishui) {
+        // v2.6.1：汽水匿名通道只有 medium 单档，无需探测。
+        codes = const <String>{'medium'};
       } else {
         final track = await AppServices.instance.qq.song.getDetail(song.mid);
         if (track != null) codes = Quality.availableCodesFrom(track['file']);
@@ -350,7 +388,15 @@ class MusicApi {
     {KuwoQuality? kuwoQuality,
     KugouQuality? kugouQuality,
     MiguQuality? miguQuality,
-    JooxQuality? jooxQuality}) async {
+    JooxQuality? jooxQuality,
+    QishuiQuality? qishuiQuality}) async {
+    if (song.isQishui) {
+      // 汽水匿名通道恒 medium，quality 参数传 higher 也会降级回来。
+      final info = await QishuiApi.getStream(song.mid);
+      if (info.url.isEmpty) return PlayUrlResult.empty;
+      return PlayUrlResult._(info.url, null, null, null, null, '', null, null,
+          null, QishuiQuality.medium);
+    }
     if (song.isJoox) {
       final q = jooxQuality ?? JooxQuality.playbackDefault;
       final info = await JooxApi.getExpress(song.mid, q);
@@ -501,6 +547,10 @@ class MusicApi {
     return chain;
   }
 
+  /// 汽水音质降级链（v2.6.1）：匿名通道仅 medium 单档。
+  static List<QishuiQuality> qishuiDowngradeChain(QishuiQuality from) =>
+      QishuiQuality.downloadOptions;
+
   /// 按来源取歌词。
   static Future<String> lyric(Song song) async {
     if (song.isKugou) {
@@ -525,6 +575,13 @@ class MusicApi {
       // songId 存的是数字 id（歌词 track 接口的 key）。
       final info = await JooxApi.lyric('${song.songId}');
       return info.qrc.isNotEmpty ? info.qrc : info.lrc;
+    }
+    if (song.isQishui) {
+      // 汽水 krc（已转成项目 YRC 逐字格式）；失败时取流响应自带的 LRC 兜底。
+      final yrc = await QishuiApi.lyric(song.mid);
+      if (yrc.isNotEmpty) return yrc;
+      final info = await QishuiApi.getStream(song.mid);
+      return info.lrc;
     }
     if (song.isKuwo) {
       return KuwoApi.lyric(song.mid);

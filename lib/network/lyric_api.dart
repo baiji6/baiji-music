@@ -39,6 +39,7 @@ class LyricApi {
       if (song.isKugou) return await kugou(song);
       if (song.isMigu) return await migu(song);
       if (song.isJoox) return await joox(song);
+      if (song.isQishui) return await qishui(song);
       return await qq(song);
     } catch (e) {
       AppLog.w('LyricApi', '获取歌词失败: $e');
@@ -105,6 +106,16 @@ class LyricApi {
   /// 的 XML 中提取）或纯 LRC，交给 [LyricParser] 解析。QRC 格式与 QQ 相同，
   /// LyricParser 的 `_looksLikeQrc` / `_parseQrc` 直接可用。
   static Future<Lyrics> joox(Song song) async {
+    final raw = await MusicApi.lyric(song);
+    if (raw.trim().isEmpty) return Lyrics.empty;
+    return LyricParser.parse(raw);
+  }
+
+  // ==================== 汽水音乐 ====================
+
+  /// 汽水歌词（v2.6.1）：[MusicApi.lyric] 返回 krc 转成的 YRC 逐字
+  /// （或取流响应自带的 LRC），交给 [LyricParser] 统一解析。
+  static Future<Lyrics> qishui(Song song) async {
     final raw = await MusicApi.lyric(song);
     if (raw.trim().isEmpty) return Lyrics.empty;
     return LyricParser.parse(raw);

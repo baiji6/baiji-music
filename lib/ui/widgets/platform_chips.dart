@@ -73,6 +73,7 @@ class PlatformChips extends StatelessWidget {
     if (id == Source.kugou) return '酷狗';
     if (id == Source.migu) return '咪咕';
     if (id == Source.joox) return 'JOOX';
+    if (id == Source.qishui) return '汽水';
     return 'QQ';
   }
 }

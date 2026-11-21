@@ -26,6 +26,7 @@ class DownloadManager {
   static const String _keyKugou = 'download_kugou_quality';
   static const String _keyMigu = 'download_migu_quality';
   static const String _keyJoox = 'download_joox_quality';
+  static const String _keyQishui = 'download_qishui_quality';
 
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 15),
@@ -124,6 +125,14 @@ class DownloadManager {
   Future<void> saveJooxQuality(JooxQuality q) =>
       KvStore.instance.setString('$_prefs:$_keyJoox', q.id);
 
+  /// 上次选择的汽水下载音质（v2.6.1）；未选过则跟随播放器当前音质。
+  QishuiQuality get qishuiQuality => QishuiQuality.fromId(
+          KvStore.instance.getString('$_prefs:$_keyQishui')) ??
+      PlayerController.instance.currentQishuiQuality;
+
+  Future<void> saveQishuiQuality(QishuiQuality q) =>
+      KvStore.instance.setString('$_prefs:$_keyQishui', q.id);
+
   /// 尝试为指定歌曲获取可用直链；当前音质不可用时沿降级链自动往下试。
   ///
   /// 返回直链 + 服务端**实际**音质；全部失败返回 [PlayUrlResult.empty]。
@@ -132,7 +141,21 @@ class DownloadManager {
       {KuwoQuality? kuwoQuality,
       KugouQuality? kugouQuality,
       MiguQuality? miguQuality,
-      JooxQuality? jooxQuality}) async {
+      JooxQuality? jooxQuality,
+      QishuiQuality? qishuiQuality}) async {
+    if (song.isQishui) {
+      final start = qishuiQuality ?? this.qishuiQuality;
+      for (final q in MusicApi.qishuiDowngradeChain(start)) {
+        try {
+          final r = await MusicApi.playUrlInfo(song, qqQuality, neQuality,
+              qishuiQuality: q);
+          if (r.isNotEmpty) return r;
+        } catch (e) {
+          AppLog.w('DownloadManager', '汽水取直链失败 ${q.label}: $e');
+        }
+      }
+      return PlayUrlResult.empty;
+    }
     if (song.isJoox) {
       final start = jooxQuality ?? this.jooxQuality;
       for (final q in MusicApi.jooxDowngradeChain(start)) {
@@ -228,6 +251,7 @@ class DownloadManager {
     KugouQuality? kugouQuality,
     MiguQuality? miguQuality,
     JooxQuality? jooxQuality,
+    QishuiQuality? qishuiQuality,
     void Function(int downloaded, int total)? onProgress,
     CancelToken? cancelToken,
     String? partPath,
@@ -238,7 +262,8 @@ class DownloadManager {
           kuwoQuality: kuwoQuality,
           kugouQuality: kugouQuality,
           miguQuality: miguQuality,
-          jooxQuality: jooxQuality);
+          jooxQuality: jooxQuality,
+          qishuiQuality: qishuiQuality);
       if (resolved.isEmpty) {
         AppLog.e('DownloadManager', '无可用直链: ${song.name}');
         return null;

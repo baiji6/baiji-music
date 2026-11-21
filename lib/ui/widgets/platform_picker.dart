@@ -32,6 +32,7 @@ class PlatformPicker extends StatelessWidget {
         (id: Source.kugou, label: '酷狗', color: const Color(0xFF1EC17D)),
         (id: Source.migu, label: '咪咕', color: const Color(0xFFE60012)),
         (id: Source.joox, label: 'JOOX', color: const Color(0xFF1DB954)),
+        (id: Source.qishui, label: '汽水', color: const Color(0xFF00C2B8)),
       ];
 
   static ({String label, Color color}) infoOf(String source) {

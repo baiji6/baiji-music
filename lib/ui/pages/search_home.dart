@@ -390,30 +390,35 @@ class _SearchHomeState extends State<SearchHome> {
     final KugouQuality? kg;
     final MiguQuality? mg;
     final JooxQuality? jx;
+    final QishuiQuality? qs;
     if (song.isKuwo) {
       final q = picked as KuwoQuality;
       await dm.saveKuwoQuality(q);
-      qq = dm.qqQuality; ne = dm.neQuality; kw = q; kg = null; mg = null; jx = null;
+      qq = dm.qqQuality; ne = dm.neQuality; kw = q; kg = null; mg = null; jx = null; qs = null;
     } else if (song.isKugou) {
       final q = picked as KugouQuality;
       await dm.saveKugouQuality(q);
-      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = q; mg = null; jx = null;
+      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = q; mg = null; jx = null; qs = null;
     } else if (song.isMigu) {
       final q = picked as MiguQuality;
       await dm.saveMiguQuality(q);
-      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = null; mg = q; jx = null;
+      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = null; mg = q; jx = null; qs = null;
     } else if (song.isJoox) {
       final q = picked as JooxQuality;
       await dm.saveJooxQuality(q);
-      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = null; mg = null; jx = q;
+      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = null; mg = null; jx = q; qs = null;
+    } else if (song.isQishui) {
+      final q = picked as QishuiQuality;
+      await dm.saveQishuiQuality(q);
+      qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = null; mg = null; jx = null; qs = q;
     } else if (song.isNetease) {
       final q = picked as NeteaseQuality;
       await dm.saveNeQuality(q);
-      qq = dm.qqQuality; ne = q; kw = null; kg = null; mg = null; jx = null;
+      qq = dm.qqQuality; ne = q; kw = null; kg = null; mg = null; jx = null; qs = null;
     } else {
       final q = picked as Quality;
       await dm.saveQqQuality(q);
-      qq = q; ne = dm.neQuality; kw = null; kg = null; mg = null; jx = null;
+      qq = q; ne = dm.neQuality; kw = null; kg = null; mg = null; jx = null; qs = null;
     }
 
     _showSnack('已加入下载队列');
@@ -425,6 +430,7 @@ class _SearchHomeState extends State<SearchHome> {
       kugouQuality: kg,
       miguQuality: mg,
       jooxQuality: jx,
+      qishuiQuality: qs,
       lyricMode: lyric,
     );
     if (!mounted) return;
@@ -524,6 +530,7 @@ class _SearchHomeState extends State<SearchHome> {
     final kugou = song != null && song.isKugou;
     final migu = song != null && song.isMigu;
     final joox = song != null && song.isJoox;
+    final qishui = song != null && song.isQishui;
     final netease = song != null && song.isNetease;
     return MiuixOverlayBottomSheet(
       show: _showDownloadSheet && song != null,
@@ -533,7 +540,9 @@ class _SearchHomeState extends State<SearchHome> {
               ? '下载 · 咪咕音乐'
               : joox
                   ? '下载 · JOOX'
-                  : kuwo
+                  : qishui
+                      ? '下载 · 汽水音乐'
+                      : kuwo
                       ? '下载 · 酷我音乐'
                       : netease
                           ? '下载 · 网易云音乐'
@@ -601,7 +610,26 @@ class _SearchHomeState extends State<SearchHome> {
                         if (s != null) _downloadLyricOnly(s, mode);
                       },
                     )
-                  : kuwo
+                  : qishui
+                      ? DownloadOptionsSheet<QishuiQuality>(
+                          options: filterQualityOptions(
+                              codes, QishuiQuality.downloadOptions, (q) => q.id),
+                          current: DownloadManager.instance.qishuiQuality,
+                          label: (q) => q.label,
+                          subtitle: (q) =>
+                              q.ext.replaceFirst('.', '').toUpperCase(),
+                          lyricMode: DownloadExtras.lyricMode,
+                          onConfirm: _onDownloadPicked,
+                          onLyricOnly: (mode) {
+                            final s = _pendingDownloadSong;
+                            setState(() {
+                              _showDownloadSheet = false;
+                              _pendingDownloadSong = null;
+                            });
+                            if (s != null) _downloadLyricOnly(s, mode);
+                          },
+                        )
+                      : kuwo
               ? DownloadOptionsSheet<KuwoQuality>(
                   options: filterQualityOptions(
                       codes, KuwoQuality.downloadOptions, (q) => q.id),

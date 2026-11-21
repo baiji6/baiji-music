@@ -462,6 +462,9 @@ Future<List<HotKeyword>> hotKeywordsOf(String source, {int limit = 20}) async {
     case 'joox':
       // JOOX 暂无公开热搜词接口，返回空避免误用 QQ 数据。
       return const <HotKeyword>[];
+    case 'qishui':
+      // 汽水暂无公开热搜词接口，返回空避免误用 QQ 数据。
+      return const <HotKeyword>[];
     default:
       return QqHot.hotSearch(limit: limit);
   }
@@ -481,6 +484,9 @@ Future<List<HotPlaylist>> hotPlaylistsOf(String source, {int limit = 30}) async 
       return MiguHot.hotPlaylists(limit: limit);
     case 'joox':
       // JOOX 暂无公开歌单接口，返回空避免误用 QQ 数据。
+      return const <HotPlaylist>[];
+    case 'qishui':
+      // 汽水暂无公开歌单接口，返回空避免误用 QQ 数据。
       return const <HotPlaylist>[];
     default:
       return QqHot.hotPlaylists(limit: limit);

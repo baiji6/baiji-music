@@ -60,6 +60,7 @@ class _SettingsPageState extends State<SettingsPage> {
   KugouQuality _kugouQuality = KugouQuality.playbackDefault;
   MiguQuality _miguQuality = MiguQuality.playbackDefault;
   JooxQuality _jooxQuality = JooxQuality.playbackDefault;
+  QishuiQuality _qishuiQuality = QishuiQuality.playbackDefault;
   bool _checkingUpdate = false;
   bool _captureEnabled = false;
   String _captureProxy = '';
@@ -87,6 +88,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _showKugouQualitySheet = false;
   bool _showMiguQualitySheet = false;
   bool _showJooxQualitySheet = false;
+  bool _showQishuiQualitySheet = false;
   bool _showCacheLimitSheet = false;
   bool _showBackupDialog = false;
   bool _showBackupImportConfirm = false;
@@ -145,6 +147,7 @@ class _SettingsPageState extends State<SettingsPage> {
       _kugouQuality = player.currentKugouQuality;
       _miguQuality = player.currentMiguQuality;
       _jooxQuality = player.currentJooxQuality;
+      _qishuiQuality = player.currentQishuiQuality;
       _captureEnabled = CaptureTrust.enabled;
       _captureProxy = CaptureTrust.proxy;
       _lyricMode = DownloadExtras.lyricMode;
@@ -367,6 +370,14 @@ class _SettingsPageState extends State<SettingsPage> {
     PlayerController.instance.saveJooxQuality(q);
     setState(() => _jooxQuality = q);
     _showSnack('JOOX 音质已设为 ${q.label}');
+  }
+
+  /// v2.6.1：汽水默认播放音质（仅 medium 单档）。
+  void _selectQishuiQuality(QishuiQuality q) {
+    setState(() => _showQishuiQualitySheet = false);
+    PlayerController.instance.saveQishuiQuality(q);
+    setState(() => _qishuiQuality = q);
+    _showSnack('汽水音质已设为 ${q.label}');
   }
 
   Future<void> _resetDownloadDir() async {
@@ -715,6 +726,15 @@ class _SettingsPageState extends State<SettingsPage> {
                         color: const Color(0xFF1DB954), size: 22),
                     onClick: () =>
                         setState(() => _showJooxQualitySheet = true),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '汽水音乐播放音质',
+                    summary: _qishuiQuality.label,
+                    startAction: Icon(Icons.equalizer_rounded,
+                        color: const Color(0xFF00C2B8), size: 22),
+                    onClick: () =>
+                        setState(() => _showQishuiQualitySheet = true),
                   ),
                 ],
               ),
@@ -1593,6 +1613,20 @@ MiuixArrowPreference(
             current: _jooxQuality,
             label: (q) => q.label,
             onSelect: _selectJooxQuality,
+          ),
+        ),
+        // 汽水音质（v2.6.1）
+        MiuixOverlayBottomSheet(
+          show: _showQishuiQualitySheet,
+          title: '汽水音乐播放音质',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showQishuiQualitySheet = false),
+          content: _QualitySheet<QishuiQuality>(
+            options: QishuiQuality.playbackOptions,
+            current: _qishuiQuality,
+            label: (q) => q.label,
+            onSelect: _selectQishuiQuality,
           ),
         ),
         // 内存缓存上限

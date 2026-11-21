@@ -439,6 +439,7 @@ Future<String?> runManagedDownload(
   KugouQuality? kugouQuality,
   MiguQuality? miguQuality,
   JooxQuality? jooxQuality,
+  QishuiQuality? qishuiQuality,
   LyricDownloadMode? lyricMode,
   String? resumeTaskId,
 }) async {
@@ -484,6 +485,7 @@ Future<String?> runManagedDownload(
       kugouQuality: kugouQuality,
       miguQuality: miguQuality,
       jooxQuality: jooxQuality,
+      qishuiQuality: qishuiQuality,
       onProgress: markProgress,
       cancelToken: token,
       partPath: resumePart.isEmpty ? null : resumePart,

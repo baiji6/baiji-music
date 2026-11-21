@@ -6,6 +6,21 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.6.1
+
+> 正式版（tag `v2.6.1`）。新增**汽水音乐**音源，搜索页平台选择器升到七平台。
+
+### 🎵 新增汽水音乐
+
+- 搜索走匿名 `api-vehicle /v2/search/type`（`search_source=qishui` +
+  `search_type=music`，零签名零登录），返回歌名 / 歌手 / 时长 / 封面。
+- 取流走 molan 网关 `qishui.php`（header `key: molan` 必带），匿名通道固定
+  **medium 单档**（约 65kbps M4A 明文），无需本地解密。
+- 歌词优先取 seo_track 的 krc 逐字，服务端转成项目 YRC 格式后由 LyricParser
+  统一解析（实测逐字正常）；失败回退取流响应自带的 LRC。
+- 封面用搜索返回的 `p3-luna.douyinpic.com` 直链（末尾 `:0:N` 可调尺寸）。
+- 播放 / 下载 / 设置页接入汽水音质偏好；因仅 medium 单档不做音质探测。
+
 ## 2.6.0
 
 > 正式版（tag `v2.6.0`）。新增**咪咕音乐**与 **JOOX** 两大音源，搜索页平台

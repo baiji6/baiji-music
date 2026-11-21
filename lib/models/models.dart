@@ -33,6 +33,14 @@ class Source {
   /// 封面用搜索/track 返回的 image.joox.com 直链。
   static const String joox = 'joox';
 
+  /// 汽水音乐（字节跳动旗下，v2.6.1 新增平台）。
+  ///
+  /// 搜索走匿名 api-vehicle /v2/search/type（qishui+music），
+  /// 取流走 molan 网关的 qishui.php（key: molan 必带），仅 medium 单档明文；
+  /// 歌词复用取流响应的 data.lyric（标准 LRC），兜底 seo_track 的 krc；
+  /// 封面用搜索返回的 p3-luna.douyinpic.com 直链。
+  static const String qishui = 'qishui';
+
   /// 本地文件（扫描本机磁盘得到，不走任何网络接口）。
   static const String local = 'local';
 }
@@ -513,6 +521,37 @@ class JooxQuality {
 
   @override
   String toString() => 'JooxQuality($id,$label)';
+}
+
+/// 汽水音乐音质枚举（v2.6.1 新增平台，匿名通道仅 medium 单档）。
+///
+/// molan qishui.php 匿名通道固定返回 medium（约 65kbps AAC/M4A 明文），
+/// quality 参数即使传 higher/highest 也如实回报降级到 medium，故仅一档。
+class QishuiQuality {
+  final String id;
+  final String label;
+  final String format;
+  final String ext;
+
+  const QishuiQuality(this.id, this.label, this.format, this.ext);
+
+  /// 标准 medium（唯一档）。
+  static const medium = QishuiQuality('medium', '标准', 'm4a', '.m4a');
+
+  static const downloadOptions = [medium];
+  static const playbackOptions = downloadOptions;
+  static const playbackDefault = medium;
+
+  static QishuiQuality? fromId(String? id) {
+    if (id == null) return null;
+    for (final q in playbackOptions) {
+      if (q.id == id) return q;
+    }
+    return null;
+  }
+
+  @override
+  String toString() => 'QishuiQuality($id,$label)';
 }
 
 // ==================== QQ 音质枚举 ====================
@@ -1004,7 +1043,10 @@ class Song {
   /// 是否 JOOX 歌曲（v2.6.0）。
   bool get isJoox => source == Source.joox;
 
-  /// 平台短名（列表角标用）：网易云 / 酷我 / 酷狗 / 咪咕 / JOOX / QQ / 本地。
+  /// 是否汽水音乐歌曲（v2.6.1）。
+  bool get isQishui => source == Source.qishui;
+
+  /// 平台短名（列表角标用）：网易云 / 酷我 / 酷狗 / 咪咕 / JOOX / 汽水 / QQ / 本地。
   ///
   /// v2.4.0-fix2 之前各页面都写成 `isNetease ? '网易云' : 'QQ'`，
   /// 酷我歌曲会显示成「QQ」。统一走这个 getter。
@@ -1014,17 +1056,19 @@ class Song {
     if (isKuwo) return '酷我';
     if (isMigu) return '咪咕';
     if (isJoox) return 'JOOX';
+    if (isQishui) return '汽水';
     if (isNetease) return '网易云';
     return 'QQ';
   }
 
-  /// 平台全名（弹层标题用）：网易云音乐 / 酷我音乐 / 酷狗音乐 / 咪咕音乐 / JOOX / QQ 音乐。
+  /// 平台全名（弹层标题用）：网易云音乐 / 酷我音乐 / 酷狗音乐 / 咪咕音乐 / JOOX / 汽水音乐 / QQ 音乐。
   String get sourceFull {
     if (isLocal) return '本地音乐';
     if (isKugou) return '酷狗音乐';
     if (isKuwo) return '酷我音乐';
     if (isMigu) return '咪咕音乐';
     if (isJoox) return 'JOOX';
+    if (isQishui) return '汽水音乐';
     if (isNetease) return '网易云音乐';
     return 'QQ 音乐';
   }
