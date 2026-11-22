@@ -98,39 +98,64 @@ double fillOffsetToPixel(double charOffset, List<double> charEndX) {
   return a + (b - a) * frac;
 }
 
-/// 播放位置的**平滑时钟**（v2.6.3-fix1）。
+/// 播放位置的**平滑时钟**（v2.6.4）。
 ///
 /// 为什么需要它：`media_kit` 的 `player.state.position` 来自原生层的位置事件，
 /// 实测约每 180~250ms 才更新一次（不是每帧）。直接拿它算逐字填充，扫光边界
 /// 会「停 5 帧、跳 20px」，真机观感就是一卡一卡。
 ///
-/// 做法与 BaiMusic 一致：本地用单调时钟按倍速外推（每帧连续），播放器上报的
-/// 真实位置只用于**柔性校准**——漂移小于 [softDriftMs] 忽略，小于 [hardDriftMs]
-/// 按 [correction] 逐步收敛，超过阈值（seek / 切歌）硬对齐。
+/// 做法：本地用帧时间按倍速外推（每帧连续），播放器上报只做**大偏差兜底**。
+///
+/// v2.6.4 的关键修正——**不再按比例「柔性校准」小漂移**：
+/// 上报值本身就是「若干毫秒前的位置」，两次上报之间外推值必然线性领先于
+/// 上报值（形成 -0~-200ms 的锯齿）。上一版对 >45ms 的漂移每次吸收 35%，
+/// 等于每 200ms 把扫光往回拽一次——这才是「还是一卡一卡」的真凶。
+/// 现在 ±[ignoreDriftMs] 内一律视为上报相位噪声、完全不动，外推即绝对平滑；
+/// 中等偏差（卡顿恢复）用限速追赶摊平到十几帧，超大偏差（seek/切歌）硬对齐。
 class SmoothPlaybackClock {
-  Duration _anchor = Duration.zero;
-  int _anchorUs = 0;
+  Duration _pos = Duration.zero;
+  int _lastUs = 0;
   bool _playing = false;
   bool _primed = false;
   double _rate = 1.0;
 
-  /// 视为「同一位置、仅噪声」的漂移阈值（毫秒）。
-  static const int softDriftMs = 45;
+  /// 待消化的位置偏差（毫秒，正 = 外推落后于上报）。
+  double _catchUpMs = 0;
 
-  /// 视为 seek / 切歌、需要硬对齐的漂移阈值（毫秒）。
-  static const int hardDriftMs = 400;
+  /// 视为「上报相位噪声」、完全忽略的漂移阈值（毫秒）。
+  ///
+  /// 必须大于播放器的位置上报周期（实测 180~250ms），否则每个上报周期都会
+  /// 触发一次修正，重新引入周期性回拽。
+  static const int ignoreDriftMs = 260;
 
-  /// 每次校准吸收的漂移比例（0~1，越小越平滑、越大越跟手）。
-  static const double correction = 0.35;
+  /// 视为 seek / 切歌、直接硬对齐的漂移阈值（毫秒）。
+  static const int hardDriftMs = 900;
+
+  /// 追赶中等偏差时允许的最大速度调整比例（1.0 = ±100%）。
+  static const double catchUpRatio = 0.25;
 
   bool get playing => _playing;
 
-  /// 当前平滑位置。
+  /// 当前平滑位置（每帧调用一次，内部按帧间隔推进）。
   Duration positionAt(int nowUs) {
-    if (!_playing) return _anchor;
-    final dt = nowUs - _anchorUs;
-    if (dt <= 0) return _anchor;
-    return _anchor + Duration(microseconds: (dt * _rate).round());
+    if (!_primed) return Duration.zero;
+    if (!_playing) return _pos;
+    final dtUs = nowUs - _lastUs;
+    if (dtUs <= 0) return _pos;
+    _lastUs = nowUs;
+    final baseMs = dtUs / 1000.0 * _rate;
+    var advance = baseMs;
+    if (_catchUpMs != 0) {
+      // 限速消化：每帧最多改动 25% 的播放速度，视觉上不可察觉；
+      // clamp 到 ±60% base 保证 net 前进量恒为正（位置绝不回退）。
+      final maxFix = math.max(baseMs * catchUpRatio, 0.05);
+      final fix = _catchUpMs.clamp(-maxFix, maxFix);
+      advance += fix;
+      _catchUpMs -= fix;
+      if (_catchUpMs.abs() < 0.05) _catchUpMs = 0;
+    }
+    _pos += Duration(microseconds: (advance * 1000).round());
+    return _pos;
   }
 
   /// 用播放器上报的真实位置校准。
@@ -145,37 +170,39 @@ class SmoothPlaybackClock {
   }) {
     _rate = rate <= 0 ? 1.0 : rate;
     if (!_primed || hard || playing != _playing) {
-      _anchor = actual;
-      _anchorUs = nowUs;
+      _pos = actual;
+      _lastUs = nowUs;
       _playing = playing;
       _primed = true;
+      _catchUpMs = 0;
       return;
     }
     if (!playing) {
-      _anchor = actual;
-      _anchorUs = nowUs;
+      _pos = actual;
+      _lastUs = nowUs;
+      _catchUpMs = 0;
       return;
     }
-    final driftUs = (actual - positionAt(nowUs)).inMicroseconds;
-    final driftMs = driftUs / 1000;
+    final driftMs = (actual - _pos).inMicroseconds / 1000.0;
     if (driftMs.abs() >= hardDriftMs) {
-      _anchor = actual;
-      _anchorUs = nowUs;
-    } else if (driftMs.abs() >= softDriftMs) {
-      _anchor = positionAt(nowUs) +
-          Duration(microseconds: (driftUs * correction).round());
-      _anchorUs = nowUs;
+      _pos = actual;
+      _lastUs = nowUs;
+      _catchUpMs = 0;
+    } else if (driftMs.abs() > ignoreDriftMs) {
+      // 卡顿恢复等中等偏差：交给 positionAt 限速消化，不瞬间跳。
+      _catchUpMs = driftMs;
     }
-    // 漂移在噪声范围内：保持本地连续时钟，不做任何跳动。
+    // ±ignoreDriftMs 内：上报相位锯齿，保持本地连续时钟，一个字节都不动。
   }
 
   /// 丢弃全部状态（切歌 / 重新加载时调用）。
   void reset() {
-    _anchor = Duration.zero;
-    _anchorUs = 0;
+    _pos = Duration.zero;
+    _lastUs = 0;
     _playing = false;
     _primed = false;
     _rate = 1.0;
+    _catchUpMs = 0;
   }
 }
 

@@ -1,18 +1,24 @@
-// 轻量歌词视图（v2.6.3-fix1，BaiMusic 架构的 Flutter 移植）。
+// 轻量歌词视图（v2.6.4，BaiMusic 架构的 Flutter 移植）。
 //
 // 彻底自绘（不用 ListView / ScrollView），对齐 BaiMusic 4.7 的 LyricPane：
 //
 //   1. 一个 Ticker 每帧读一次播放位置，经 [SmoothPlaybackClock] 外推成
 //      **每帧连续的时钟**（media_kit 的 position 约 200ms 才上报一次，直接用
-//      会让逐字扫光「停几帧、跳一格」——这是上一版仍然卡顿的真因）；
-//   2. 一个 CustomPaint 画整个视口，每帧只画可见的 8~10 行；逐字扫光 =
-//      clipRect + 预建好的已唱色 TextPainter，无 saveLayer、无逐帧 TextPainter
-//      分配、无 widget 重建；
-//   3. 滚动用指数逼近（时间常数约等于 140ms 缓动）逐帧收敛，无跳变；
-//      当前行严格垂直居中（[centeredScrollOffset]），水平按对齐方式精确居中；
-//   4. 拖动即接管、松手 4s 回弹；点击某行跳转到该行起点。
+//      会让逐字扫光「停几帧、跳一格」）；
+//   2. 整个视口分**两层**绘制（v2.6.4 的关键性能改造）：
+//        - 静态层：所有非当前行，绘制一次后只在切行/样式变化时重画，
+//          滚动由 widget 层的 Positioned 位移完成（GPU 平移，零重栅格化）；
+//        - 活跃层：只有当前行，逐字扫光每帧重画。
+//      上一版每帧都要重画全部 8~10 行（只为让一行的扫光前进），
+//      低端机光栅化直接吃掉一帧预算；分层后每帧只重画一行。
+//   3. 逐字扫光 = clipRect + 预建好的已唱色 TextPainter，无 saveLayer、
+//      无逐帧 TextPainter 分配、无 widget 重建；
+//   4. 滚动用指数逼近（时间常数 ≈ 300ms）逐帧收敛，无跳变；当前行严格
+//      垂直居中（[centeredScrollOffset]），水平按对齐方式精确居中；
+//   5. 拖动即接管、松手 4s 回弹；点击某行跳转到该行起点。
 //
-// 视觉与设置完全沿用 LyricSettings（三色 / 字号 / 字重 / 对齐 / 译文）。
+// 视觉与设置完全沿用 LyricSettings（三色 / 字号 / 字重 / 对齐 / 译文 /
+// 繁转简）。
 library;
 
 import 'dart:async';
@@ -21,6 +27,7 @@ import 'dart:math' as math;
 import 'package:baiji_music/core/lyric_settings.dart';
 import 'package:baiji_music/lyrics/lite_lyric_math.dart';
 import 'package:baiji_music/lyrics/lyric_model.dart';
+import 'package:baiji_music/lyrics/trad_to_simp.dart';
 import 'package:baiji_music/player/player_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
@@ -52,11 +59,15 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   /// 左右安全边距（居中计算与超长省略都基于 `宽 - 2*sidePad`）。
   static const double sidePad = 24.0;
 
-  /// 指数逼近的时间常数（秒）。约 140ms 收敛 85%，对齐 BaiMusic tween(140ms)。
-  static const double _followTau = 0.075;
+  /// 指数逼近的时间常数（秒）。约 300ms 收敛 90%：比上一版 140ms 更柔和，
+  /// 切行时整块歌词是「滑过去」而不是「弹过去」。
+  static const double _followTau = 0.13;
 
   /// 松手后恢复跟随的等待时长。
   static const int _resumeDelayUs = 4000000;
+
+  /// 静态层上下各多画几行（滚动缓冲，越大切窗口越少、单次重画越多）。
+  static const int _windowBuffer = 3;
 
   late final Ticker _ticker;
   final SmoothPlaybackClock _clock = SmoothPlaybackClock();
@@ -67,17 +78,29 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   int _nowUs = 0;
   Duration _lastElapsed = Duration.zero;
 
-  /// 每帧递增，驱动 CustomPaint 重绘（painter 通过它拿到重画时机）。
+  /// 每帧递增，驱动活跃层重绘。
   final ValueNotifier<int> _repaint = ValueNotifier<int>(0);
+
+  /// 滚动偏移（驱动静态层的布局位移）。
+  final ValueNotifier<double> _scrollN = ValueNotifier<double>(0);
+
+  /// 静态层重绘信号：切行时旧行要变回暗色、新行要让位给活跃层，
+  /// 但滚动帧绝不能连带重画（否则分层就没有意义了）。
+  final ValueNotifier<int> _staticRepaint = ValueNotifier<int>(0);
 
   StreamSubscription<void>? _seekSub;
   StreamSubscription<bool>? _playSub;
 
-  /// 行视觉缓存，key = `行号|是否活跃|样式版本`。
-  final Map<String, _LineVisual> _cache = <String, _LineVisual>{};
+  /// 行视觉缓存：下标 `i*2`（非活跃）/ `i*2+1`（活跃）。
+  final List<_LineVisual?> _visuals = <_LineVisual?>[];
 
   /// painter 读取的可变帧数据（State 与 painter 共享同一实例）。
   final _PaintFrame _frame = _PaintFrame();
+
+  /// 当前实际渲染的歌词（可能是繁转简后的副本）。
+  Lyrics _lyrics = Lyrics.empty;
+  Lyrics? _simpSource;
+  Lyrics? _simpResult;
 
   double _scroll = 0; // 内容坐标 → 视口顶部
   double _target = 0;
@@ -99,7 +122,10 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   @override
   void initState() {
     super.initState();
+    _lyrics = widget.lyrics;
     _ticker = createTicker(_onTick);
+    // 样式面板 / 设置页改动（字号、三色、繁转简开关…）即时生效。
+    LyricSettings.instance.addListener(_onSettingsChanged);
     if (widget.positionProvider == null) {
       _seekSub = PlayerController.instance.onSeekOccurred.listen((_) {
         _hardSync = true;
@@ -116,19 +142,31 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   void didUpdateWidget(covariant LiteLyricsView old) {
     super.didUpdateWidget(old);
     if (!identical(old.lyrics, widget.lyrics)) {
-      _cache.clear();
+      _simpSource = null;
+      _simpResult = null;
+      _lyrics = widget.lyrics;
+      _clearVisuals();
       _lastIdx = -2;
       _activeIdx = -1;
       _fill = 0;
       _hardSync = true;
       _scroll = 0;
       _target = 0;
+      _scrollN.value = 0;
       _browsing = false;
       _browseEndUs = null;
       _startTicker();
       _syncFrame();
       _requestRepaint();
     }
+  }
+
+  void _onSettingsChanged() {
+    if (_disposed || !mounted) return;
+    setState(() {});
+    // 字号/对齐变化会改滚动目标；暂停时 ticker 可能已休眠，这里唤醒它
+    // 把新目标平滑滚过去（否则要等下次播放才会动）。
+    _startTicker();
   }
 
   void _startTicker() {
@@ -149,8 +187,8 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   /// 把 State 的最新状态写进共享帧数据（painter 在 paint 时读取）。
   void _syncFrame() {
     _frame
-      ..lyrics = widget.lyrics
-      ..cache = _cache
+      ..lyrics = _lyrics
+      ..visuals = _visuals
       ..styleVersion = _styleVersion
       ..extent = _extent
       ..scroll = _scroll
@@ -173,8 +211,7 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   /// 每帧：推进平滑时钟 → 算活跃行与逐字填充 → 指数逼近滚动目标。
   void _onTick(Duration elapsed) {
     if (_disposed) return;
-    final lyrics = widget.lyrics;
-    if (lyrics.isEmpty) {
+    if (_lyrics.isEmpty) {
       // 无歌词时没有任何可推进的状态，直接休眠（切歌后 didUpdateWidget 重启）。
       _stopTicker();
       return;
@@ -200,11 +237,15 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
       );
       _hardSync = false;
     }
-    final posMs = (provider?.call() ?? _clock.positionAt(us)).inMilliseconds;
+    // 注入的 provider 也走一次推进，保证每帧位置连续。
+    final posMs = provider != null
+        ? provider().inMilliseconds
+        : _clock.positionAt(us).inMilliseconds;
 
     var changed = false;
+    var scrolled = false;
 
-    final idx = activeIndexAt(lyrics, posMs);
+    final idx = activeIndexAt(_lyrics, posMs);
     if (idx != _lastIdx) {
       _lastIdx = idx;
       _activeIdx = idx;
@@ -212,9 +253,10 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
         _target = centeredScrollOffset(idx, _extent, _viewportH);
       }
       changed = true;
+      _staticRepaint.value++; // 旧活跃行要画回静态层、新行要让位
     }
     if (idx >= 0) {
-      final f = computeFillOffset(lyrics.lines[idx], posMs);
+      final f = computeFillOffset(_lyrics.lines[idx], posMs);
       if ((f - _fill).abs() > 1e-4) {
         _fill = f;
         changed = true;
@@ -223,7 +265,10 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
 
     // 松手 4s 后恢复跟随当前行。
     final endUs = _browseEndUs;
-    if (_browsing && !_dragging && endUs != null && (us - endUs) > _resumeDelayUs) {
+    if (_browsing &&
+        !_dragging &&
+        endUs != null &&
+        (us - endUs) > _resumeDelayUs) {
       _browsing = false;
       _browseEndUs = null;
       if (_lastIdx >= 0) {
@@ -239,12 +284,15 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
         _scroll += diff * k;
         if ((_target - _scroll).abs() < 0.05) _scroll = _target;
         changed = true;
+        scrolled = true;
       } else if (_scroll != _target) {
         _scroll = _target;
         changed = true;
+        scrolled = true;
       }
     }
 
+    if (scrolled) _scrollN.value = _scroll;
     if (changed) {
       _syncFrame();
       _requestRepaint();
@@ -253,7 +301,7 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   }
 
   double get _minScroll {
-    final n = widget.lyrics.length;
+    final n = _lyrics.length;
     if (n <= 0) return 0;
     final first = centeredScrollOffset(0, _extent, _viewportH);
     final last = centeredScrollOffset(n - 1, _extent, _viewportH);
@@ -261,7 +309,7 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   }
 
   double get _maxScroll {
-    final n = widget.lyrics.length;
+    final n = _lyrics.length;
     if (n <= 0) return 0;
     final first = centeredScrollOffset(0, _extent, _viewportH);
     final last = centeredScrollOffset(n - 1, _extent, _viewportH);
@@ -269,10 +317,9 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   }
 
   void _handleTap(double localY) {
-    final i =
-        lineIndexAtScroll(_scroll, localY, _extent, widget.lyrics.length);
+    final i = lineIndexAtScroll(_scroll, localY, _extent, _lyrics.length);
     if (i < 0) return;
-    final line = widget.lyrics.lines[i];
+    final line = _lyrics.lines[i];
     unawaited(widget.onSeek(Duration(milliseconds: line.startMs)));
   }
 
@@ -286,6 +333,7 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   void _onDragUpdate(DragUpdateDetails d) {
     _scroll = (_scroll - d.delta.dy).clamp(_minScroll, _maxScroll);
     _target = _scroll;
+    _scrollN.value = _scroll;
     _browseEndUs = null;
     _syncFrame();
     _requestRepaint();
@@ -304,25 +352,43 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
     return mainH + subH + s.fontSize * 0.8;
   }
 
+  void _clearVisuals() {
+    // TextPainter 交给 GC；当帧 dispose 有被复用的风险。
+    _visuals.clear();
+  }
+
+  /// 解析当前应渲染的歌词：开启「繁转简」时做一次带缓存的转换。
+  Lyrics _resolveLyrics() {
+    final src = widget.lyrics;
+    if (!LyricSettings.instance.simplifyChinese) return src;
+    if (identical(src, _simpSource) && _simpResult != null) return _simpResult!;
+    _simpSource = src;
+    _simpResult = tradToSimpLyrics(src);
+    return _simpResult!;
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    LyricSettings.instance.removeListener(_onSettingsChanged);
     _ticker.dispose();
     _seekSub?.cancel();
     _playSub?.cancel();
     _repaint.dispose();
-    for (final v in _cache.values) {
-      v.dispose();
-    }
-    _cache.clear();
+    _scrollN.dispose();
+    _staticRepaint.dispose();
+    _clearVisuals();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final s = LyricSettings.instance;
+    final resolved = _resolveLyrics();
+    final changedLyrics = !identical(resolved, _lyrics);
+    _lyrics = resolved;
     final hasTrans =
-        widget.lyrics.hasTranslation || widget.lyrics.hasRomanization;
+        _lyrics.hasTranslation || _lyrics.hasRomanization;
 
     final version = Object.hash(
       s.fontSize,
@@ -336,7 +402,14 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
     );
     if (version != _styleVersion) {
       _styleVersion = version;
-      _cache.clear(); // TextPainter 交给 GC；当帧 dispose 有被复用的风险
+      _clearVisuals();
+    }
+    if (changedLyrics) {
+      _lastIdx = -2;
+      _activeIdx = -1;
+      _fill = 0;
+      _hardSync = true;
+      _startTicker();
     }
     final nextExtent = _computeExtent(s, hasTrans);
     if (nextExtent != _extent) {
@@ -352,14 +425,18 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
         if (w > 0 && h > 0) {
-          if ((w - _viewportW).abs() > 0.5 || (h - _viewportH).abs() > 0.5) {
+          if ((w - _viewportW).abs() > 0.5 ||
+              (h - _viewportH).abs() > 0.5) {
             _viewportW = w;
             _viewportH = h;
-            final n = widget.lyrics.length;
+            final n = _lyrics.length;
             if (n > 0) {
               final idx = _lastIdx < 0 ? 0 : _lastIdx;
               _target = centeredScrollOffset(idx, _extent, h);
-              if (_lastIdx < 0) _scroll = _target; // 首帧直接就位，避免从头滚
+              if (_lastIdx < 0) {
+                _scroll = _target; // 首帧直接就位，避免从头滚
+                _scrollN.value = _scroll;
+              }
               _startTicker();
             }
           }
@@ -372,17 +449,73 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
           onVerticalDragStart: _onDragStart,
           onVerticalDragUpdate: _onDragUpdate,
           onVerticalDragEnd: _onDragEnd,
-          child: SizedBox.expand(
-            // 逐字扫光每帧都会 markNeedsPaint：用 RepaintBoundary 把它隔离成
-            // 独立图层，避免把整页（封面模糊、控制栏）一起重绘。
-            child: RepaintBoundary(
-              child: CustomPaint(
-                painter: _LyricsPainter(_frame, repaint: _repaint),
+          child: ClipRect(
+            child: SizedBox.expand(
+              child: ValueListenableBuilder<double>(
+                valueListenable: _scrollN,
+                builder: (context, scroll, _) {
+                  return Stack(
+                    children: [
+                      _buildStaticLayer(scroll, w, h),
+                      // 活跃行：逐帧重绘，用 RepaintBoundary 与静态层隔离。
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: RepaintBoundary(
+                            child: CustomPaint(
+                              painter: _ActiveLinePainter(
+                                _frame,
+                                repaint: _repaint,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ),
         );
       },
+    );
+  }
+
+  /// 静态层：非当前行画一次，滚动只改 widget 位置（GPU 平移，不重画）。
+  Widget _buildStaticLayer(double scroll, double w, double h) {
+    final n = _lyrics.length;
+    if (n <= 0) return const SizedBox.shrink();
+    final extent = _extent;
+    if (extent <= 0) return const SizedBox.shrink();
+
+    // 可视窗口 + 上下缓冲；缓冲足够大时，普通切行滚动不会触发重画。
+    var start = (scroll / extent).floor() - _windowBuffer;
+    var end = ((scroll + h) / extent).ceil() + _windowBuffer + 1;
+    start = start.clamp(0, n - 1);
+    end = end.clamp(start + 1, n);
+
+    return Positioned(
+      left: 0,
+      right: 0,
+      top: start * extent - scroll,
+      height: (end - start) * extent,
+      child: RepaintBoundary(
+        child: CustomPaint(
+          painter: _StaticLinesPainter(
+            _frame,
+            repaint: _staticRepaint,
+            start: start,
+            count: end - start,
+            width: w,
+            snapshot: _LayerSnapshot(
+              lyrics: _lyrics,
+              styleVersion: _styleVersion,
+              extent: extent,
+              activeIdx: _activeIdx,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -394,7 +527,7 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
 /// 这里让 State 持有唯一实例并原地更新，painter 每帧都读到最新值。
 class _PaintFrame {
   Lyrics lyrics = Lyrics.empty;
-  Map<String, _LineVisual> cache = <String, _LineVisual>{};
+  List<_LineVisual?> visuals = <_LineVisual?>[];
   int styleVersion = -1;
   double extent = 64;
   double scroll = 0;
@@ -402,9 +535,78 @@ class _PaintFrame {
   double fill = 0;
 }
 
-/// 整个歌词视口的绘制器：每帧只画可见行。
-class _LyricsPainter extends CustomPainter {
-  _LyricsPainter(this.frame, {required Listenable repaint})
+/// 静态层的重绘判据（painter 不可变，必须把关键值快照进构造参数）。
+class _LayerSnapshot {
+  const _LayerSnapshot({
+    required this.lyrics,
+    required this.styleVersion,
+    required this.extent,
+    required this.activeIdx,
+  });
+
+  final Lyrics lyrics;
+  final int styleVersion;
+  final double extent;
+  final int activeIdx;
+}
+
+/// 静态层：所有非当前行。只在切行 / 样式 / 行高变化时重画。
+class _StaticLinesPainter extends CustomPainter {
+  _StaticLinesPainter(
+    this.frame, {
+    required Listenable repaint,
+    required this.start,
+    required this.count,
+    required this.width,
+    required this.snapshot,
+  }) : super(repaint: repaint);
+
+  final _PaintFrame frame;
+  final int start;
+  final int count;
+  final double width;
+  final _LayerSnapshot snapshot;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final lyrics = frame.lyrics;
+    final extent = frame.extent;
+    if (lyrics.isEmpty || extent <= 0 || width <= 0) return;
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    for (var i = 0; i < count; i++) {
+      final idx = start + i;
+      if (idx >= lyrics.length) break;
+      if (idx == frame.activeIdx) continue; // 当前行由活跃层画
+      _paintLine(
+        canvas,
+        frame,
+        idx,
+        i * extent + extent / 2,
+        width,
+        active: false,
+      );
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _StaticLinesPainter old) {
+    final a = old.snapshot;
+    final b = snapshot;
+    return !identical(a.lyrics, b.lyrics) ||
+        a.styleVersion != b.styleVersion ||
+        a.extent != b.extent ||
+        a.activeIdx != b.activeIdx ||
+        old.start != start ||
+        old.count != count ||
+        old.width != width;
+  }
+}
+
+/// 活跃层：只有当前行，逐字扫光每帧重画。
+class _ActiveLinePainter extends CustomPainter {
+  _ActiveLinePainter(this.frame, {required Listenable repaint})
       : super(repaint: repaint);
 
   final _PaintFrame frame;
@@ -413,91 +615,110 @@ class _LyricsPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final lyrics = frame.lyrics;
     final extent = frame.extent;
-    if (lyrics.isEmpty || extent <= 0 || size.width <= 0 || size.height <= 0) {
+    final i = frame.activeIdx;
+    if (lyrics.isEmpty || extent <= 0 || i < 0 || i >= lyrics.length) return;
+    if (size.width <= 0 || size.height <= 0) return;
+    final centerY = i * extent + extent / 2 - frame.scroll;
+    if (centerY < -extent * 1.5 || centerY > size.height + extent * 1.5) {
       return;
     }
     canvas.save();
     canvas.clipRect(Offset.zero & size);
-    final n = lyrics.length;
-    final scroll = frame.scroll;
-    final first = math.max(0, ((scroll - extent) / extent).floor());
-    final last = math.min(n, ((scroll + size.height) / extent).ceil() + 1);
-    for (var i = first; i < last; i++) {
-      _paintLine(canvas, i, i * extent + extent / 2 - scroll, size.width);
-    }
+    _paintLine(canvas, frame, i, centerY, size.width, active: true);
     canvas.restore();
-  }
-
-  void _paintLine(Canvas canvas, int i, double centerY, double width) {
-    final isActive = i == frame.activeIdx;
-    final visual = _visualFor(i, isActive, width);
-    final settings = LyricSettings.instance;
-
-    final layoutW = math.max(width - _LiteLyricsViewState.sidePad * 2, 1.0);
-    final textW = math.min(visual.textWidth, layoutW);
-    final startX = lineStartX(
-      viewportWidth: width,
-      textWidth: textW,
-      align: settings.textAlign,
-      sidePad: _LiteLyricsViewState.sidePad,
-    );
-
-    final totalH = visual.mainHeight + visual.subHeight;
-    final top = centerY - totalH / 2;
-
-    // 静态层：未唱色整行。
-    visual.main.paint(canvas, Offset(startX, top));
-
-    // 已唱层：clip 出左侧已唱部分，画预建的已唱色 painter（零分配）。
-    final sung = visual.sung;
-    final fill = frame.fill;
-    if (isActive && sung != null && fill > 0) {
-      final px = fillOffsetToPixel(fill, visual.charEndX);
-      if (px > 0.01) {
-        canvas.save();
-        canvas.clipRect(Rect.fromLTWH(
-          startX,
-          top - 2,
-          px + 0.5,
-          visual.mainHeight + 4,
-        ));
-        sung.paint(canvas, Offset(startX, top));
-        canvas.restore();
-      }
-    }
-
-    // 译文 / 罗马音。
-    final sub = visual.sub;
-    if (sub != null) {
-      sub.paint(canvas, Offset(startX, top + visual.mainHeight));
-    }
-  }
-
-  _LineVisual _visualFor(int i, bool isActive, double width) {
-    final key = '$i|${isActive ? 1 : 0}|${frame.styleVersion}';
-    return frame.cache.putIfAbsent(
-      key,
-      () => _LineVisual.build(
-        text: frame.lyrics.lines[i].displayText,
-        sub: _subOf(frame.lyrics.lines[i]),
-        isActive: isActive,
-        s: LyricSettings.instance,
-        width: math.max(width - _LiteLyricsViewState.sidePad * 2, 1.0),
-      ),
-    );
-  }
-
-  static String? _subOf(LyricLine line) {
-    final t = line.translation;
-    if (t != null && t.isNotEmpty) return t;
-    final r = line.romanization;
-    if (r != null && r.isNotEmpty) return r;
-    return null;
   }
 
   // 重绘完全由 _repaint 驱动（帧数据是共享可变的，无法用字段比较判断）。
   @override
-  bool shouldRepaint(covariant _LyricsPainter old) => true;
+  bool shouldRepaint(covariant _ActiveLinePainter old) => true;
+}
+
+/// 画一行（主文本 + 逐字扫光 + 译文）。两层共用，保证视觉严格一致。
+void _paintLine(
+  Canvas canvas,
+  _PaintFrame frame,
+  int i,
+  double centerY,
+  double width, {
+  required bool active,
+}) {
+  final visual = _visualFor(frame, i, active, width);
+  final settings = LyricSettings.instance;
+
+  final layoutW =
+      math.max(width - _LiteLyricsViewState.sidePad * 2, 1.0);
+  final textW = math.min(visual.textWidth, layoutW);
+  final startX = lineStartX(
+    viewportWidth: width,
+    textWidth: textW,
+    align: settings.textAlign,
+    sidePad: _LiteLyricsViewState.sidePad,
+  );
+
+  final totalH = visual.mainHeight + visual.subHeight;
+  final top = centerY - totalH / 2;
+
+  // 静态层：未唱色整行。
+  visual.main.paint(canvas, Offset(startX, top));
+
+  // 已唱层：clip 出左侧已唱部分，画预建的已唱色 painter（零分配）。
+  final sung = visual.sung;
+  final fill = frame.fill;
+  if (active && sung != null && fill > 0) {
+    final px = fillOffsetToPixel(fill, visual.charEndX);
+    if (px > 0.01) {
+      canvas.save();
+      canvas.clipRect(Rect.fromLTWH(
+        startX,
+        top - 2,
+        px + 0.5,
+        visual.mainHeight + 4,
+      ));
+      sung.paint(canvas, Offset(startX, top));
+      canvas.restore();
+    }
+  }
+
+  // 译文 / 罗马音。
+  final sub = visual.sub;
+  if (sub != null) {
+    sub.paint(canvas, Offset(startX, top + visual.mainHeight));
+  }
+}
+
+/// 取（并按需构建）某行某形态的视觉数据。缓存下标 `i*2 + (active?1:0)`。
+_LineVisual _visualFor(
+  _PaintFrame frame,
+  int i,
+  bool active,
+  double width,
+) {
+  final slot = i * 2 + (active ? 1 : 0);
+  final visuals = frame.visuals;
+  if (slot < visuals.length) {
+    final cached = visuals[slot];
+    if (cached != null) return cached;
+  }
+
+  final line = frame.lyrics.lines[i];
+  final visual = _LineVisual.build(
+    text: line.displayText,
+    sub: _subOf(line),
+    isActive: active,
+    s: LyricSettings.instance,
+    width: math.max(width - _LiteLyricsViewState.sidePad * 2, 1.0),
+  );
+  if (visuals.length <= slot) visuals.length = slot + 1;
+  visuals[slot] = visual;
+  return visual;
+}
+
+String? _subOf(LyricLine line) {
+  final t = line.translation;
+  if (t != null && t.isNotEmpty) return t;
+  final r = line.romanization;
+  if (r != null && r.isNotEmpty) return r;
+  return null;
 }
 
 /// 一行的可复用视觉数据（TextPainter + 字符 x 表）。layout 一次，逐帧复用。
@@ -548,7 +769,8 @@ class _LineVisual {
           ellipsis: '…',
         )..layout(maxWidth: width);
 
-    final main = make(isActive ? s.readableUnsungColor : s.readableInactiveColor);
+    final main =
+        make(isActive ? s.readableUnsungColor : s.readableInactiveColor);
     final sung = isActive ? make(s.readableSungColor) : null;
 
     final subStyle = TextStyle(

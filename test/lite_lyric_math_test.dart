@@ -159,25 +159,57 @@ void main() {
       expect(c.positionAt(us(200)).inMilliseconds, 200);
     });
 
-    test('上报位置有 40ms 噪声时不产生可见跳变', () {
+    test('上报相位锯齿（-200ms）完全不修正，外推绝对平滑', () {
       final c = SmoothPlaybackClock();
       c.sync(Duration.zero, nowUs: us(0), playing: true);
-      // 200ms 时上报 160ms（比外推落后 40ms，在软阈值 45ms 内）
-      c.sync(const Duration(milliseconds: 160),
-          nowUs: us(200), playing: true);
-      // 不硬对齐：仍按连续时钟推进
+      // 200ms 时上报的仍是 0（播放器 200ms 上报一次，值滞后 200ms）。
+      // 这是相位噪声不是漂移：一点都不能往回拽。
+      c.sync(Duration.zero, nowUs: us(200), playing: true);
       expect(c.positionAt(us(216)).inMilliseconds, 216);
+      // 400ms 时上报 200ms（同样滞后 200ms），位置依旧连续
+      c.sync(const Duration(milliseconds: 200), nowUs: us(400), playing: true);
+      expect(c.positionAt(us(416)).inMilliseconds, 416);
     });
 
-    test('中等漂移按比例柔性收敛，不瞬间跳', () {
+    test('真实上报序列下每帧严格单调且速度恒定（核心回归）', () {
       final c = SmoothPlaybackClock();
       c.sync(Duration.zero, nowUs: us(0), playing: true);
-      // 500ms 时上报 200ms（漂移 −300ms，小于硬阈值 400ms）
+      var last = -1;
+      // 每 200ms 上报一次，值恒定滞后 200ms；中间按 16.7ms 出帧
+      for (var frame = 0; frame <= 120; frame++) {
+        final tUs = (frame * 16667);
+        final tMs = tUs ~/ 1000;
+        // 每到 200ms 边界，播放器上报 200ms 之前的位置
+        if (tMs % 200 < 17) {
+          final reported = tMs - 200;
+          c.sync(Duration(milliseconds: reported < 0 ? 0 : reported),
+              nowUs: tUs, playing: true);
+        }
+        final p = c.positionAt(tUs).inMilliseconds;
+        expect(p, greaterThanOrEqualTo(last), reason: 'frame $frame');
+        last = p;
+      }
+      // 2 秒后位置应等于 2 秒（滞后被完整保留，从未被拽回）
+      expect(last, inInclusiveRange(1990, 2010));
+    });
+
+    test('中等漂移限速追赶，位置不回退', () {
+      final c = SmoothPlaybackClock();
+      c.sync(Duration.zero, nowUs: us(0), playing: true);
+      // 时钟先正常推进到 500ms
+      expect(c.positionAt(us(500)).inMilliseconds, 500);
+      // 此刻上报只有 200ms（漂移 -300ms：卡顿/缓冲恢复）
       c.sync(const Duration(milliseconds: 200),
           nowUs: us(500), playing: true);
-      final p = c.positionAt(us(500)).inMilliseconds;
-      // 只吸收 35%：500 + (-300*0.35) = 395，而不是直接跳到 200 或 500
-      expect(p, 395);
+      var last = 500;
+      // 之后每帧减速追赶，但绝不回退
+      for (var t = 516; t <= 1500; t += 16) {
+        final p = c.positionAt(us(t)).inMilliseconds;
+        expect(p, greaterThanOrEqualTo(last));
+        last = p;
+      }
+      // 每帧最多减速 25%，约 1.2s 追平；1s 时应已收回大半偏差
+      expect(last, inInclusiveRange(1200, 1300));
     });
 
     test('超过硬阈值（seek）立即对齐', () {

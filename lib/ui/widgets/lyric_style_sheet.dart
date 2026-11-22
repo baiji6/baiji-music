@@ -194,6 +194,33 @@ class _LyricStyleSheetState extends State<_LyricStyleSheet> {
                   ),
                 ),
                 Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),
+                  child: Row(
+                    children: [
+                      Icon(Icons.translate_rounded,
+                          size: 18, color: AppColors.accentAlt),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text('繁体歌词自动转简体',
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600)),
+                      ),
+                      MiuixSwitch(
+                        value: s.simplifyChinese,
+                        onChanged: (v) => s.setSimplifyChinese(v),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                  child: Text(
+                      '开启后，繁体（含台湾/香港用字）歌词在显示前统一转成简体中文，'
+                      '逐字时间轴保持不变，扫光不会错位。原文歌词与下载的歌词文件不受影响。',
+                      style: TextStyle(
+                          fontSize: 11, color: AppColors.textTertiary)),
+                ),
+                Padding(
                   padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
                   child: GlassCard(
                     padding: const EdgeInsets.all(14),

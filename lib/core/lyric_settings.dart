@@ -77,6 +77,7 @@ class LyricSettings extends ChangeNotifier {
   static const String _kSung = 'sung_color';
   static const String _kUnsung = 'unsung_color';
   static const String _kInactive = 'inactive_color';
+  static const String _kSimplify = 'simplify_chinese';
 
   double _fontSize = defaultFontSize;
   bool _alignLeft = defaultAlignLeft;
@@ -89,6 +90,9 @@ class LyricSettings extends ChangeNotifier {
   Color? _sungCustom;
   Color? _unsungCustom;
   Color? _inactiveCustom;
+
+  /// 繁体歌词是否自动转简体（默认开）。
+  bool _simplifyChinese = true;
 
   /// 歌词字号（逻辑像素）。
   double get fontSize => _fontSize;
@@ -118,6 +122,9 @@ class LyricSettings extends ChangeNotifier {
 
   /// 歌词卡片圆角半径（逻辑像素）。
   double get corner => _corner;
+
+  /// 繁体歌词是否自动转简体中文（默认开）。
+  bool get simplifyChinese => _simplifyChinese;
 
   /// 已唱色（逐字填充的目标色）。未自定义时恒取深色板
   /// （歌词区是恒暗画布，见 [lyricCanvasBg]，与 app 主题明暗无关）。
@@ -243,6 +250,7 @@ class LyricSettings extends ChangeNotifier {
     _sungCustom = _parseColor(sung);
     _unsungCustom = _parseColor(unsung);
     _inactiveCustom = _parseColor(inactive);
+    _simplifyChinese = KvStore.instance.getString('$_prefs:$_kSimplify') != '0';
     if (f == null &&
         a == null &&
         sc == null &&
@@ -335,6 +343,14 @@ class LyricSettings extends ChangeNotifier {
     await KvStore.instance.setString('$_prefs:$_kCorner', next.toStringAsFixed(1));
   }
 
+  Future<void> setSimplifyChinese(bool v) async {
+    if (v == _simplifyChinese) return;
+    _simplifyChinese = v;
+    notifyListeners();
+    await KvStore.instance
+        .setString('$_prefs:$_kSimplify', v ? '1' : '0');
+  }
+
   Future<void> setSungColor(Color c) async {
     if (c == sungColor) return;
     _sungCustom = c;
@@ -368,6 +384,26 @@ class LyricSettings extends ChangeNotifier {
     await KvStore.instance.remove('$_prefs:$_kSung');
     await KvStore.instance.remove('$_prefs:$_kUnsung');
     await KvStore.instance.remove('$_prefs:$_kInactive');
+  }
+
+  /// 测试专用：直接覆写渲染相关字段，不走持久化（KvStore 在单测里
+  /// 未必初始化）。像素级渲染测试用它固定对齐/字号等几何参数。
+  @visibleForTesting
+  void applyForTest({
+    bool? alignLeft,
+    double? fontSize,
+    double? activeScale,
+    bool? simplifyChinese,
+  }) {
+    if (alignLeft != null) _alignLeft = alignLeft;
+    if (fontSize != null) {
+      _fontSize = fontSize.clamp(minFontSize, maxFontSize);
+    }
+    if (activeScale != null) {
+      _activeScale = activeScale.clamp(minActiveScale, maxActiveScale);
+    }
+    if (simplifyChinese != null) _simplifyChinese = simplifyChinese;
+    notifyListeners();
   }
 
   /// 测试专用：直接覆写已唱 / 未唱色，不走持久化（KvStore 在单测里
