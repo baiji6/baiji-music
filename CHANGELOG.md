@@ -6,6 +6,25 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.6.2-fix2
+
+> 修订版（tag `v2.6.2-fix2`）。优化歌词**滚动卡顿/抖动**，对齐同行软件的
+> 平滑逐字扫光观感。
+
+### 🐛 优化
+
+- **歌词卡顿 / 整行跳变 / 轻微抖动**：根因是歌词引擎的进度源 `changes`
+  流每帧转发播放器的 `onPositionChanged`，与引擎自带 Ticker 的逐帧采样
+  形成**双重采样**——每帧一路 `notifyListeners` → LyricView 重建 →
+  `configure()` 清字缓存，真机上掉帧、行切换硬跳。改为 `changes` 只携带
+  离散事件（播放/暂停 + seek 跳变）：新增播放器 `onSeekOccurred` 离散流，
+  `changes` 构造抽成只接收离散流的纯函数 `lyricChangesStream`（类型上杜绝
+  再误接 position）。行位置推进与逐字高亮仍由引擎 Ticker 每帧采样，跟手且平滑。
+- **关闭逐字持续浮动**：appleMusic 预设默认 `lift=2.5 / floatAmplitude=1.4`
+  会常驻一个 float Ticker、每帧对所有可见字做位移重算（空转耗电+掉帧）。
+  关闭后字本身不动，只保留逐字扫光高亮与词级时间轴，与同行参考视频一致。
+- 新增 `lyric_progress_source_test`（3 项）+ adapter 浮动关闭断言，锁定契约。
+
 ## 2.6.2-fix1
 
 > 修订版（tag `v2.6.2-fix1`）。修复 v2.6.2 汽水**加密档首次播放失败**，

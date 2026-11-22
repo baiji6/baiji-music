@@ -238,6 +238,15 @@ class PlayerController {
   final StreamController<Duration> _positionStream = StreamController.broadcast();
   Stream<Duration> get onPositionChanged => _positionStream.stream;
 
+  /// 离散的「位置发生跳转」信号（播放/暂停由 onPlayStateChanged 覆盖）。
+  ///
+  /// 歌词引擎的 progressSource.changes 只应携带【离散事件】——它自带 Ticker
+  /// 每帧采样 position 做逐字高亮。若把 onPositionChanged 每帧转发过去，会和
+  /// 引擎 Ticker 双重采样，每帧触发重建（configure/清缓存），表现为歌词卡顿、
+  /// 抖动。这里只在 seek / 续播定位等【跳变】时发一次，让引擎补采样一次。
+  final StreamController<void> _seekSignal = StreamController.broadcast();
+  Stream<void> get onSeekOccurred => _seekSignal.stream;
+
   final StreamController<Duration> _durationStream = StreamController.broadcast();
   Stream<Duration> get onDurationChanged => _durationStream.stream;
 
@@ -562,6 +571,7 @@ class PlayerController {
         await _player!.seek(target);
         // 主动广播一次续播位置，避免 UI 在 track 加载回调到来前停在 0:00。
         if (!_positionStream.isClosed) _positionStream.add(target);
+        if (!_seekSignal.isClosed) _seekSignal.add(null);
       }
       // 一切就绪后再正式发声，保证用户听到的第一帧就是续播位置。
       await _player!.play();
@@ -769,6 +779,8 @@ class PlayerController {
     // 否则「暂停时点击歌词跳转」后进度条 / 歌词视图停在旧位置不动。
     // 播放时底层自己也会推，重复推送对订阅方是幂等的（只更新基准）。
     if (!_positionStream.isClosed) _positionStream.add(_player!.state.position);
+    // 通知歌词引擎补一次采样（离散 seek，不需逐帧转发 position）。
+    if (!_seekSignal.isClosed) _seekSignal.add(null);
   }
 
   void notifyState() {
@@ -834,6 +846,7 @@ class PlayerController {
     _playState.close();
     _songStream.close();
     _positionStream.close();
+    _seekSignal.close();
     _durationStream.close();
     _completedStream.close();
     _errorStream.close();

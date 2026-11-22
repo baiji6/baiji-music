@@ -99,6 +99,16 @@ amll.LyricPreset lyricPresetFrom(LyricSettings s) {
     // 中端机开销，也避免远处行被糊掉看不清）。
     distanceBlur:
         const amll.LyricDistanceBlur(maxSigma: 0, sigmaPerLine: 0, whenBrowsing: false),
+    // v2.6.2-fix2 卡顿优化：关闭逐字的「持续浮动/弹起」。appleMusic 默认
+    // wordEffects(lift:2.5, floatAmplitude:1.4) 会常驻一个 float Ticker，
+    // 每帧对所有可见行的每个字做位移重算——即使歌词没变化也在空转。同行
+    // 参考视频是干净的逐字扫光、字本身不动。这里关掉浮动，只保留逐字高亮
+    // 填充（highlight）与词级时间轴（simulateTiming 仅对非词级行模拟）。
+    wordEffects: const amll.LyricWordEffects(
+      lift: 0,
+      floatAmplitude: 0,
+      simulateTiming: true,
+    ),
     countdown: amll.LyricCountdown(
       color: s.readableSungColor.withValues(alpha: 0.8),
     ),

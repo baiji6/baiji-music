@@ -118,6 +118,18 @@ void main() {
     expect(p.distanceBlur.sigmaPerLine, 0);
   });
 
+  test('预设映射：关闭逐字持续浮动（v2.6.2-fix2 卡顿优化）', () {
+    // appleMusic 默认 lift=2.5 / floatAmplitude=1.4 会常驻 float Ticker，
+    // 每帧对可见字做位移重算（空转耗电+掉帧）。关掉后字本身不动，只靠
+    // highlight 做逐字扫光——与同行参考视频一致。
+    final p = lyricPresetFrom(LyricSettings.instance);
+    expect(p.wordEffects.lift, 0);
+    expect(p.wordEffects.floatAmplitude, 0);
+    expect(p.wordEffects.extent, 0);
+    // 逐字高亮填充仍在，不能连扫光一起关掉。
+    expect(p.highlight.enabled, isTrue);
+  });
+
   test('预设映射：kunyin 视觉锁定（不放大 + 锚点居中）', () {
     // 当前行不靠放大区分（activeScale 默认 1.0），平滑滚动锚点居中 0.5。
     final p = lyricPresetFrom(LyricSettings.instance);
