@@ -6,6 +6,30 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.6.3
+
+> 正式版（tag `v2.6.3`）。歌词渲染**换用自研轻量引擎**（BaiMusic 架构），
+> 从根上解决逐字扫光卡顿。
+
+### ⚡ 重构
+
+- **歌词引擎自研替换**：逆向 BaiMusic 4.7 的 `LyricPane`/`computeFillOffset`
+  后用纯 Dart + Canvas 重写歌词视图 `LiteLyricsView`，取代 `flutter_lyric`
+  （AMLL）引擎。旧引擎每帧对所有可见行做 `saveLayer` + glyph 栅格化，中端机
+  逐字扫光掉帧；新引擎：
+  - 一个 Ticker 每帧只读一次播放位置，BaiMusic 线性插值算出字符级填充；
+  - 每行一个 `CustomPaint`，**仅当前活跃行**每帧重绘一个薄矩形（`clipRect` +
+    两次 `drawText`，无 `saveLayer`、无逐帧 TextPainter 分配），其它行零重绘；
+  - 切行（低频）才更新状态并 `animateTo` 平滑滚动（140ms easeOut，对齐
+    BaiMusic `tween`）；用户拖动时暂停跟随，松手 4s 回弹。
+- 三色 / 字号 / 字重 / 对齐 / 译文 / 点击跳转等设置与交互全部沿用，观感不变。
+
+### ✅ 验证
+
+- 新增 `lite_lyric_math_test`（逐字填充 / 行索引 / 字符→像素映射 14 项）与
+  `lite_lyric_render_test`（逐字推进 / 切行 / 滚动渲染契约）；
+- `flutter analyze` 零问题，全量 1283 项测试通过。
+
 ## 2.6.2-fix2
 
 > 修订版（tag `v2.6.2-fix2`）。优化歌词**滚动卡顿/抖动**，对齐同行软件的

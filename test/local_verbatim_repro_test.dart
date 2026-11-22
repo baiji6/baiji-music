@@ -15,7 +15,6 @@ import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/ui/pages/player_page.dart';
 import 'package:baiji_music/ui/widgets/amll_lyrics_view.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_lyric/flutter_lyric.dart' as amll;
 import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
@@ -155,11 +154,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    // 逐字渲染由 flutter_lyric（AMLL 风格引擎）承担
-    expect(find.byType(amll.LyricView), findsOneWidget,
-        reason: 'VERBATIM 内嵌歌词必须由 AMLL 引擎渲染');
+    // 逐字渲染由轻量引擎（LiteLyricsView / AmllLyricsView 别名）承担
     expect(find.byType(AmllLyricsView), findsOneWidget,
-        reason: '播放页必须挂载 AmllLyricsView');
+        reason: '播放页必须挂载轻量歌词视图');
 
     // 切到无歌词的歌（FutureBuilder → 暂无歌词 → AmllLyricsView 卸载）
     // 注意顺序：所有原生播放器调用（play/seek）必须排在歌词页手势交互
@@ -190,13 +187,13 @@ void main() {
     }
 
     // 拖动歌词（引擎自己处理浏览/吸附/恢复跟随）
-    await tester.drag(find.byType(amll.LyricView), const Offset(0, 300));
+    await tester.drag(find.byType(AmllLyricsView), const Offset(0, 300));
     for (var i = 0; i < 8; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
     // 点击歌词行跳转（最后一个交互：其 seek 在假异步域内发起，
     // 见上方说明，之后不能再有原生播放器调用）
-    await tester.tapAt(tester.getCenter(find.byType(amll.LyricView)));
+    await tester.tapAt(tester.getCenter(find.byType(AmllLyricsView)));
     await tester.pump();
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 100));

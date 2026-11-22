@@ -20,7 +20,6 @@ import 'package:baiji_music/theme/app_theme.dart';
 import 'package:baiji_music/ui/pages/player_page.dart';
 import 'package:baiji_music/ui/widgets/amll_lyrics_view.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_lyric/flutter_lyric.dart' as amll;
 import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
@@ -207,11 +206,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    // 歌词区必须是 AMLL 引擎（flutter_lyric 的 LyricView）而不是自绘组件
-    expect(find.byType(amll.LyricView), findsOneWidget,
-        reason: '歌词区必须由 flutter_lyric 的 LyricView 渲染');
+    // 歌词区必须由轻量引擎（LiteLyricsView / AmllLyricsView 别名）承载。
     expect(find.byType(AmllLyricsView), findsOneWidget,
-        reason: '播放页必须挂载 AmllLyricsView');
+        reason: '播放页必须挂载轻量歌词视图');
     dir.deleteSync(recursive: true);
   }, timeout: const Timeout(Duration(seconds: 60)));
 }
