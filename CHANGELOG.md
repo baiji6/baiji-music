@@ -6,6 +6,33 @@
 格式约定：每个版本一个 `## 版本号` 二级标题，标题必须与 `pubspec.yaml` 的
 `version` 完全一致（CI 会校验），否则 Release 会构建失败。
 
+## 2.6.3-fix1
+
+> 修订版（tag `v2.6.3-fix1`）。修 v2.6.3 歌词的两处硬伤：**依旧卡顿**、
+> **不居中**（实测文字整体左偏 24dp、当前行不在垂直中心）。
+
+### 🐛 修复
+- **逐字扫光卡顿**：`media_kit` 的 `state.position` 约每 180~250ms 才上报一次
+  （不是每帧），直接拿它算逐字填充，扫光会「停 5 帧、跳 20px」。新增
+  `SmoothPlaybackClock`：用 vsync 间隔本地外推成**每帧连续的时钟**，上报位置
+  只做柔性校准（<45ms 忽略、<400ms 按 35% 收敛、更大视为 seek 硬对齐）。
+- **滚动/扫光不生效**：`CustomPainter` 不可变，v2.6.3 把 `scroll`/`fill` 当构造
+  参数拷贝，`repaint` 只会用旧值重画。改为 State 持有共享 `_PaintFrame`，painter
+  每帧读取最新值。
+- **不居中**：v2.6.3 用 `TextPainter(textAlign: center)` 排版后又叠加
+  `(容器宽-文本宽)/2` 偏移，两者叠加使文字整体左偏 24dp；滚动目标公式也写错
+  （用 `viewport*0.08` 而不是居中）。现在统一由 `lineStartX` 按实测文本宽度算
+  起点，垂直由 `centeredScrollOffset` 精确居中（首行也能居中，不贴顶）。
+- **动画时基**：改用 Ticker 的 vsync 间隔累加代替真实 `Stopwatch`，测试假时钟
+  下动画也能推进；并修正「首帧目标=当前位置被误判静止 → ticker 立刻休眠」。
+- **重绘隔离**：歌词层加 `RepaintBoundary`，逐字每帧重绘不再连带整页。
+
+### 🧪 测试
+- 新增 `SmoothPlaybackClock` 7 项（连续外推、噪声抑制、柔性收敛、seek 硬对齐、
+  暂停冻结、倍速、reset）与居中/命中 7 项（`centeredScrollOffset`、
+  `lineIndexAtScroll`、`lineStartX` 对称性/钳制）。
+- 全量 1296 项通过，`flutter analyze` 零问题。
+
 ## 2.6.3
 
 > 正式版（tag `v2.6.3`）。歌词渲染**换用自研轻量引擎**（BaiMusic 架构），

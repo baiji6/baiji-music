@@ -2,6 +2,8 @@
 //
 // 固化 BaiMusic computeFillOffset 移植语义：字符级线性填充、行索引定位、
 // 字符偏移→像素映射。纯离线，不依赖 Flutter 渲染与网络。
+import 'dart:ui' show TextAlign;
+
 import 'package:baiji_music/lyrics/lite_lyric_math.dart';
 import 'package:baiji_music/lyrics/lyric_model.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -136,6 +138,117 @@ void main() {
       expect(fillOffsetToPixel(-1, x), 0.0);
       expect(fillOffsetToPixel(99, x), 20.0);
       expect(fillOffsetToPixel(2, <double>[0.0]), 0.0);
+    });
+  });
+
+  group('SmoothPlaybackClock（每帧连续播放时钟）', () {
+    int us(int v) => v * 1000; // 毫秒 → 微秒
+
+    test('播放中每 16ms 线性外推，位置连续单调', () {
+      final c = SmoothPlaybackClock();
+      c.sync(Duration.zero, nowUs: us(0), playing: true);
+      // 播放器 200ms 才上报一次；中间每帧都要有连续位置。
+      var last = -1;
+      for (var t = 0; t <= 200; t += 16) {
+        final p = c.positionAt(us(t)).inMilliseconds;
+        expect(p, greaterThanOrEqualTo(last));
+        last = p;
+      }
+      expect(last, 192);
+      // 200ms 处应推进到 200ms（每分钟 60 帧的连续性由 16ms 步进验证）
+      expect(c.positionAt(us(200)).inMilliseconds, 200);
+    });
+
+    test('上报位置有 40ms 噪声时不产生可见跳变', () {
+      final c = SmoothPlaybackClock();
+      c.sync(Duration.zero, nowUs: us(0), playing: true);
+      // 200ms 时上报 160ms（比外推落后 40ms，在软阈值 45ms 内）
+      c.sync(const Duration(milliseconds: 160),
+          nowUs: us(200), playing: true);
+      // 不硬对齐：仍按连续时钟推进
+      expect(c.positionAt(us(216)).inMilliseconds, 216);
+    });
+
+    test('中等漂移按比例柔性收敛，不瞬间跳', () {
+      final c = SmoothPlaybackClock();
+      c.sync(Duration.zero, nowUs: us(0), playing: true);
+      // 500ms 时上报 200ms（漂移 −300ms，小于硬阈值 400ms）
+      c.sync(const Duration(milliseconds: 200),
+          nowUs: us(500), playing: true);
+      final p = c.positionAt(us(500)).inMilliseconds;
+      // 只吸收 35%：500 + (-300*0.35) = 395，而不是直接跳到 200 或 500
+      expect(p, 395);
+    });
+
+    test('超过硬阈值（seek）立即对齐', () {
+      final c = SmoothPlaybackClock();
+      c.sync(Duration.zero, nowUs: us(0), playing: true);
+      c.sync(const Duration(seconds: 60), nowUs: us(100), playing: true);
+      expect(c.positionAt(us(100)).inMilliseconds, 60000);
+      expect(c.positionAt(us(200)).inMilliseconds, 60100);
+    });
+
+    test('暂停后位置冻结，恢复播放从冻结处继续', () {
+      final c = SmoothPlaybackClock();
+      c.sync(Duration.zero, nowUs: us(0), playing: true);
+      c.sync(const Duration(milliseconds: 100),
+          nowUs: us(100), playing: false);
+      expect(c.positionAt(us(900)).inMilliseconds, 100);
+      c.sync(const Duration(milliseconds: 100),
+          nowUs: us(1000), playing: true);
+      expect(c.positionAt(us(1100)).inMilliseconds, 200);
+    });
+
+    test('倍速 2.0 时按倍速外推', () {
+      final c = SmoothPlaybackClock();
+      c.sync(Duration.zero, nowUs: us(0), playing: true, rate: 2.0);
+      expect(c.positionAt(us(100)).inMilliseconds, 200);
+    });
+
+    test('reset 清空状态', () {
+      final c = SmoothPlaybackClock();
+      c.sync(const Duration(seconds: 10), nowUs: us(0), playing: true);
+      c.reset();
+      expect(c.positionAt(us(500)), Duration.zero);
+      expect(c.playing, isFalse);
+    });
+  });
+
+  group('居中与命中（自绘滚动）', () {
+    test('centeredScrollOffset：行中心精确落在视口中心', () {
+      // 行高 60，视口 300；第 2 行内容中心 = 2*60+30 = 150。
+      expect(centeredScrollOffset(2, 60, 300), 150 - 150);
+      // 第 5 行：5*60+30 = 330 → 需滚到 330-150 = 180
+      expect(centeredScrollOffset(5, 60, 300), 180);
+    });
+
+    test('centeredScrollOffset：首行为负值（也能居中，不贴顶）', () {
+      expect(centeredScrollOffset(0, 60, 300), -120);
+    });
+
+    test('lineIndexAtScroll：滚动 + 局部 y 命中正确行', () {
+      // 滚动 180，点击视口 y=90 → 内容 y=270 → 第 4 行
+      expect(lineIndexAtScroll(180, 90, 60, 10), 4);
+      expect(lineIndexAtScroll(180, 0, 60, 10), 3);
+      expect(lineIndexAtScroll(180, 90, 60, 4), -1);
+      expect(lineIndexAtScroll(0, 0, 60, 0), -1);
+    });
+
+    test('lineStartX：居中时左右留白严格对称', () {
+      // 视口 360、文本 200 → 起始 80，右端 280，两侧各 80。
+      expect(lineStartX(viewportWidth: 360, textWidth: 200, align: TextAlign.center), 80);
+      // 文本正好等于可用宽度（360-48=312）→ 起点 24，两侧各 24。
+      expect(lineStartX(viewportWidth: 360, textWidth: 312, align: TextAlign.center), 24);
+    });
+
+    test('lineStartX：左/右对齐贴安全边距', () {
+      expect(lineStartX(viewportWidth: 360, textWidth: 200, align: TextAlign.left), 24);
+      expect(lineStartX(viewportWidth: 360, textWidth: 200, align: TextAlign.right), 136);
+    });
+
+    test('lineStartX：文本超宽时按可用宽度钳制，不越界', () {
+      final x = lineStartX(viewportWidth: 360, textWidth: 999, align: TextAlign.center);
+      expect(x, 24); // (360-312)/2
     });
   });
 }

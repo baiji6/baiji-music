@@ -7,6 +7,9 @@
 // 这里只放**纯函数**，不依赖 Flutter 渲染，便于单测。
 library;
 
+import 'dart:math' as math;
+import 'dart:ui' show TextAlign;
+
 import 'lyric_model.dart';
 
 /// BaiMusic `computeFillOffset` 的 Dart 移植。
@@ -93,6 +96,130 @@ double fillOffsetToPixel(double charOffset, List<double> charEndX) {
   final a = charEndX[i];
   final b = charEndX[i + 1];
   return a + (b - a) * frac;
+}
+
+/// 播放位置的**平滑时钟**（v2.6.3-fix1）。
+///
+/// 为什么需要它：`media_kit` 的 `player.state.position` 来自原生层的位置事件，
+/// 实测约每 180~250ms 才更新一次（不是每帧）。直接拿它算逐字填充，扫光边界
+/// 会「停 5 帧、跳 20px」，真机观感就是一卡一卡。
+///
+/// 做法与 BaiMusic 一致：本地用单调时钟按倍速外推（每帧连续），播放器上报的
+/// 真实位置只用于**柔性校准**——漂移小于 [softDriftMs] 忽略，小于 [hardDriftMs]
+/// 按 [correction] 逐步收敛，超过阈值（seek / 切歌）硬对齐。
+class SmoothPlaybackClock {
+  Duration _anchor = Duration.zero;
+  int _anchorUs = 0;
+  bool _playing = false;
+  bool _primed = false;
+  double _rate = 1.0;
+
+  /// 视为「同一位置、仅噪声」的漂移阈值（毫秒）。
+  static const int softDriftMs = 45;
+
+  /// 视为 seek / 切歌、需要硬对齐的漂移阈值（毫秒）。
+  static const int hardDriftMs = 400;
+
+  /// 每次校准吸收的漂移比例（0~1，越小越平滑、越大越跟手）。
+  static const double correction = 0.35;
+
+  bool get playing => _playing;
+
+  /// 当前平滑位置。
+  Duration positionAt(int nowUs) {
+    if (!_playing) return _anchor;
+    final dt = nowUs - _anchorUs;
+    if (dt <= 0) return _anchor;
+    return _anchor + Duration(microseconds: (dt * _rate).round());
+  }
+
+  /// 用播放器上报的真实位置校准。
+  ///
+  /// [hard] 为 true（seek / 切歌 / 首次）时直接对齐，不做平滑。
+  void sync(
+    Duration actual, {
+    required int nowUs,
+    required bool playing,
+    double rate = 1.0,
+    bool hard = false,
+  }) {
+    _rate = rate <= 0 ? 1.0 : rate;
+    if (!_primed || hard || playing != _playing) {
+      _anchor = actual;
+      _anchorUs = nowUs;
+      _playing = playing;
+      _primed = true;
+      return;
+    }
+    if (!playing) {
+      _anchor = actual;
+      _anchorUs = nowUs;
+      return;
+    }
+    final driftUs = (actual - positionAt(nowUs)).inMicroseconds;
+    final driftMs = driftUs / 1000;
+    if (driftMs.abs() >= hardDriftMs) {
+      _anchor = actual;
+      _anchorUs = nowUs;
+    } else if (driftMs.abs() >= softDriftMs) {
+      _anchor = positionAt(nowUs) +
+          Duration(microseconds: (driftUs * correction).round());
+      _anchorUs = nowUs;
+    }
+    // 漂移在噪声范围内：保持本地连续时钟，不做任何跳动。
+  }
+
+  /// 丢弃全部状态（切歌 / 重新加载时调用）。
+  void reset() {
+    _anchor = Duration.zero;
+    _anchorUs = 0;
+    _playing = false;
+    _primed = false;
+    _rate = 1.0;
+  }
+}
+
+/// 让第 [index] 行**垂直居中**于视口所需的滚动偏移。
+///
+/// 内容坐标里第 i 行占 [i*extent, (i+1)*extent)，行中心 = i*extent + extent/2。
+/// 要让行中心落在视口中心，需要把内容上移 `行中心 - 视口高/2`。
+/// 首行会得到负值（内容整体下移），这样第一行也能居中，不会贴在顶部。
+double centeredScrollOffset(int index, double extent, double viewportHeight) =>
+    index * extent + extent / 2 - viewportHeight / 2;
+
+/// 把视口内的局部 y 换算成命中的行下标（点击跳转用）。
+///
+/// [scroll] 为当前滚动偏移，[localY] 为视口内纵坐标；越界返回 -1。
+int lineIndexAtScroll(
+  double scroll,
+  double localY,
+  double extent,
+  int lineCount,
+) {
+  if (lineCount <= 0 || extent <= 0) return -1;
+  final contentY = scroll + localY;
+  final i = (contentY / extent).floor();
+  if (i < 0 || i >= lineCount) return -1;
+  return i;
+}
+
+/// 一行文本在视口中的起始 x（水平对齐的唯一真源）。
+///
+/// 居中必须按**实测文本宽度**算，不能靠 `TextPainter(textAlign: center)`：
+/// v2.6.3 同时用了 textAlign 居中排版和「(容器宽-文本宽)/2」偏移，两者叠加
+/// 使文字整体左偏 24dp（真机视频可量到），故本函数是唯一的对齐入口。
+double lineStartX({
+  required double viewportWidth,
+  required double textWidth,
+  required TextAlign align,
+  double sidePad = 24.0,
+}) {
+  final w = textWidth.clamp(0.0, math.max(viewportWidth - sidePad * 2, 0.0));
+  return switch (align) {
+    TextAlign.center => (viewportWidth - w) / 2,
+    TextAlign.right => viewportWidth - sidePad - w,
+    _ => sidePad,
+  };
 }
 
 /// 为整行文本预生成每个 UTF-16 单元结束处的 x 坐标。
