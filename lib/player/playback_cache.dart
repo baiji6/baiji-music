@@ -58,6 +58,10 @@ class PlaybackCache {
 
   Directory? _dir;
 
+  /// 原子写临时文件序号：并发写同一块时给各自的 .tmp 加唯一后缀，
+  /// 避免两个 write 共用同名 .tmp、一方 rename 后另一方找不到源文件。
+  int _tmpSeq = 0;
+
   /// 缓存目录（不存在则创建）。失败时返回 null，调用方按「未命中」处理。
   Future<Directory?> _ensureDir() async {
     if (_dir != null) return _dir;
@@ -113,12 +117,15 @@ class PlaybackCache {
     final dir = await _ensureDir();
     if (dir == null) return;
     final target = File(_blockPath(dir, key, index));
-    final tmp = File('${target.path}.tmp');
+    // 每个并发写用独立的临时文件名，杜绝 rename 互相踩踏。
+    final tmp = File('${target.path}.${_tmpSeq++}.tmp');
     try {
       await target.parent.create(recursive: true);
       await tmp.writeAsBytes(data, flush: true);
       await tmp.rename(target.path);
     } catch (e) {
+      // 目标块已被另一路并发写完成（同内容），视为成功而非失败。
+      if (await _existsQuietly(target)) return;
       AppLog.w(_tag, '写入块失败 key=$key idx=$index: $e');
       try {
         if (await tmp.exists()) await tmp.delete();
@@ -126,6 +133,15 @@ class PlaybackCache {
       return;
     }
     unawaited(_evictIfNeeded());
+  }
+
+  /// 无异常的存在性检查（缓存路径上不能因 IO 异常再抛错）。
+  Future<bool> _existsQuietly(File f) async {
+    try {
+      return await f.exists();
+    } catch (_) {
+      return false;
+    }
   }
 
   /// 当前占用（字节）。
@@ -150,7 +166,9 @@ class PlaybackCache {
       final files = <File>[];
       var total = 0;
       await for (final e in dir.list(recursive: true, followLinks: false)) {
-        if (e is File) {
+        // 跳过正在写入的 .tmp：它们是别的 write 的中间态，既不该计入
+        // 占用，更不能被淘汰删除（否则会让对方的 rename 源凭空消失）。
+        if (e is File && !e.path.endsWith('.tmp')) {
           final len = await e.length();
           total += len;
           files.add(e);

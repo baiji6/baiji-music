@@ -100,10 +100,24 @@ class QishuiCencRelayServer {
   }
 
   /// 为一个加密档开流，返回播放器可打开的本地 URL。
+  ///
+  /// 关键：必须等明文落盘后【才】把 URL 交给播放器。CENC 需整曲下载+
+  /// 解密（实测约 7 秒），若先返回 URL，播放器会立即 open，而 [_handle]
+  /// 此时还在等解密、迟迟不回响应头，ffmpeg 判定打开超时（Failed to
+  /// open + 等待轨道加载超时），即便稍后解密完成也只能靠上层重试补救，
+  /// 表现为切档先报错、卡 7 秒才出声。等就绪再返回即可一次成功。
+  /// 解密失败时清掉会话并向上抛，由播放/下载的降级链接住换下一档。
   Future<String> serve(String url, String spadeA, {String ext = 'm4a'}) async {
     final p = await _ensure();
     final token = 'q${_seq++}';
-    _sessions[token] = _QishuiCencSession(url, spadeA, ext);
+    final session = _QishuiCencSession(url, spadeA, ext);
+    _sessions[token] = session;
+    try {
+      await session.plainPath();
+    } catch (_) {
+      _sessions.remove(token);
+      rethrow;
+    }
     return 'http://127.0.0.1:$p/qishui/$token';
   }
 
