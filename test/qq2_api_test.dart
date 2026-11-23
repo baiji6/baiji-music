@@ -57,6 +57,37 @@ void main() {
     });
   });
 
+  group('封面响应解析与尺寸降级', () {
+    test('正常响应取到 artwork 直链', () {
+      expect(
+        Qq2Api.parseCoverResponse({
+          'code': 0,
+          'data': {
+            'artwork': 'https://y.gtimg.cn/T002R1500x1500M000xxx.jpg',
+            'coverType': 'album',
+          },
+        }),
+        'https://y.gtimg.cn/T002R1500x1500M000xxx.jpg',
+      );
+    });
+
+    test('code 非 0 / data 缺失 / artwork 空 → null（触发降级）', () {
+      expect(Qq2Api.parseCoverResponse({'code': -1, 'data': {'artwork': 'x'}}),
+          isNull);
+      expect(Qq2Api.parseCoverResponse({'code': 0, 'data': null}), isNull);
+      expect(Qq2Api.parseCoverResponse({'code': 0, 'data': {}}), isNull);
+      expect(Qq2Api.parseCoverResponse({'code': 0, 'data': {'artwork': ''}}),
+          isNull);
+      expect(Qq2Api.parseCoverResponse('not a map'), isNull);
+      expect(Qq2Api.parseCoverResponse(null), isNull);
+    });
+
+    test('尺寸链从大到小，含 1500/1200/800/500/300', () {
+      expect(Qq2Api.coverSizes,
+          <int>[1500, 1200, 800, 500, 300]);
+    });
+  });
+
   group('音质档位', () {
     test('9 个 level 与文档一致', () {
       expect(

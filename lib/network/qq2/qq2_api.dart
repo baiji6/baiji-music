@@ -150,27 +150,99 @@ class Qq2Api {
     return out;
   }
 
-  /// 取封面直链；失败返回空串（列表用渐变占位兜底）。
-  static Future<String> cover(String mid, {int size = 1500}) async {
+  /// 封面尺寸降级链：从大到小逐个尝试，直到拿到「能真正加载」的图片。
+  ///
+  /// cover.php 对每个 size 都会拼出一个 y.gtimg.cn URL，但服务端只是按
+  /// `T002R<size>x<size>M000<mid>.jpg` 拼字符串，并不保证该尺寸的图片真的
+  /// 存在（下架歌尤其常见「大图是空壳、小图才有」）。所以不能只看接口返回，
+  /// 必须探一下 HEAD：2xx 且 JPEG/PNG 才算可用，否则降一档重试。
+  static const List<int> coverSizes = <int>[1500, 1200, 800, 500, 300];
+
+  /// 取封面直链：按 [coverSizes] 从大到小降级，全失败返回空串（列表用渐变
+  /// 占位兜底）。
+  ///
+  /// 降到最小档 300 仍拿不到可用图片 → 判定官方已删除封面文件，不再尝试
+  /// 更小尺寸或其它通道，直接返回空串交给 UI 渐变占位。
+  static Future<String> cover(String mid, {int? size}) async {
     if (mid.isEmpty) return '';
+    // 指定 size 时只试这一档（测试/特殊场景用）；默认走完整降级链。
+    final sizes = size != null ? <int>[size] : coverSizes;
+    for (final s in sizes) {
+      String artwork;
+      try {
+        final resp = await _dio.get<String>(
+          coverBase,
+          queryParameters: <String, dynamic>{
+            'action': 'qq_cover',
+            'songmid': mid,
+            'size': s,
+          },
+        );
+        artwork = parseCoverResponse(_decode(resp.data)) ?? '';
+      } catch (e) {
+        AppLog.w('Qq2Api', '封面 $mid size=$s 请求失败: $e');
+        continue;
+      }
+      if (artwork.isEmpty) {
+        // 这一档服务端没给 URL，直接降下一档。
+        continue;
+      }
+      // HEAD 探测图片是否真能加载（短超时，避免拖慢搜索首屏）。
+      if (await _coverLoadable(artwork)) return artwork;
+      AppLog.i('Qq2Api', '封面 $mid size=$s 图片不可加载，降级重试');
+    }
+    return '';
+  }
+
+  /// 解析 cover.php 响应，取 artwork 直链。纯函数，便于离线单测。
+  ///
+  /// code 非 0 / data 非 Map / artwork 为空 → 返回 null。
+  static String? parseCoverResponse(dynamic raw) {
+    if (raw is! Map) return null;
+    if (raw['code'] is num && (raw['code'] as num).toInt() != 0) return null;
+    final data = raw['data'];
+    if (data is! Map) return null;
+    final artwork = data['artwork']?.toString() ?? '';
+    return artwork.isEmpty ? null : artwork;
+  }
+
+  /// HEAD 探测图片是否可加载：2xx 且 content-type 是图片即认为可用。
+  ///
+  /// y.gtimg.cn 无 HEAD 时部分 CDN 节点会回 405，此时退化为 range GET 1 字节。
+  /// 网络异常一律当作「本档不可用」交给上层降级。
+  static Future<bool> _coverLoadable(String url) async {
     try {
-      final resp = await _dio.get<String>(
-        coverBase,
-        queryParameters: <String, dynamic>{
-          'action': 'qq_cover',
-          'songmid': mid,
-          'size': size,
-        },
+      final resp = await _dio.head<Object?>(
+        url,
+        options: Options(
+          connectTimeout: const Duration(seconds: 4),
+          receiveTimeout: const Duration(seconds: 4),
+        ),
       );
-      final raw = _decode(resp.data);
-      if (raw is! Map) return '';
-      if (raw['code'] is num && (raw['code'] as num).toInt() != 0) return '';
-      final data = raw['data'];
-      if (data is! Map) return '';
-      return data['artwork']?.toString() ?? '';
-    } catch (e) {
-      AppLog.w('Qq2Api', '封面失败 $mid: $e');
-      return '';
+      final code = resp.statusCode ?? 0;
+      if (code >= 200 && code < 300) {
+        final ct = resp.headers.value(Headers.contentTypeHeader) ?? '';
+        // 没有 content-type 也放行（部分节点 HEAD 不返回头，但状态码正常）。
+        return ct.isEmpty ||
+            ct.startsWith('image/') ||
+            ct.contains('octet-stream');
+      }
+      // 405/501：CDN 不支持 HEAD，改 range GET 验证。
+      if (code == 405 || code == 501) {
+        final r = await _dio.get<List<int>>(
+          url,
+          options: Options(
+            responseType: ResponseType.bytes,
+            headers: <String, String>{'Range': 'bytes=0-0'},
+            connectTimeout: const Duration(seconds: 4),
+            receiveTimeout: const Duration(seconds: 4),
+          ),
+        );
+        return (r.statusCode ?? 0) >= 200 && (r.statusCode ?? 0) < 300;
+      }
+      return false;
+    } catch (_) {
+      return false;
     }
   }
 
