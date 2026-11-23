@@ -182,6 +182,14 @@ class DownloadManager {
       }
       return PlayUrlResult.empty;
     }
+    if (song.isQq2) {
+      for (final q in Qq2Quality.downgradeChain(qqQuality)) {
+        final r = await _try(song, q, neQuality);
+        if (r.isNotEmpty) return r;
+        AppLog.i('DownloadManager', 'QQ 音乐 2 音质 ${q.label} 无直链，继续降级');
+      }
+      return PlayUrlResult.empty;
+    }
     if (song.isKuwo) {
       try {
         final r = await MusicApi.playUrlInfo(song, qqQuality, neQuality,

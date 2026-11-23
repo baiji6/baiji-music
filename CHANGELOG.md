@@ -1,5 +1,39 @@
 # 更新日志
 
+## 2.6.5
+
+> 正式版（tag `v2.6.5`）。新增「QQ 音乐 2」音源：专攻下架歌曲。
+
+### 🆕 QQ 音乐 2（下架歌曲专用）
+
+官方搜索对下架歌返回 `query forbid`、详情页里 `album.mid` 被清空，
+于是三个接口各补一块：
+
+| 能力 | 通道 |
+| --- | --- |
+| 搜索 | POST `c.wwwweb.top/music/search`，返回 mid / 歌名 / 歌手（下架歌照样能搜到） |
+| 封面 | GET molan `cover.php`（从歌手/其他版本反查 album mid，返回 artwork 直链） |
+| 播放 | GET molan `qmc.php?id=&level=`（**API Key 由用户在设置 → 账号里填写，绝不内置**） |
+| 歌词 | 复用 QQ 官方 `PlayLyricInfo`（按 mid 取，下架歌的 QRC 逐字数据仍在歌词库） |
+
+- 9 档音质：`low / standard / exhigh / lossless / hires / zpyz / zpqj / dolby / jymaster`。
+  服务端自带降级链，客户端沿 9 档逐级兜底。
+- `qmc.php` 返回的仍是 QMCv2 加密流 + ekey，复用 QQ 现有的本地流式解密中继；
+  实测 `standard → OggS`、`lossless/zpqj → fLaC`，落盘扩展名按解密后容器推断。
+- **level 参数是档位名不是文件名前缀**（传 `F0M0` 会被静默回落到 `standard`），
+  已做显式映射并有单测覆盖。
+- 搜索结果批量反查封面（分批 6 首、最多 12 首），失败的留空显示渐变占位。
+- 未设置 API Key 时直接给出明确提示，不做 9 次无谓的降级请求。
+
+### 🧪 测试
+
+- 新增 `test/qq2_api_test.dart`（8 项）：搜索解析、异常响应、音质反查/降级链、
+  level 映射、Song 映射。
+- 端到端实测（本地、未入库）：搜索「皇后大道东」命中 `0031mDbk0RU4CX` →
+  封面直链 → `lossless` 返回 `F0M0` 加密流 → 歌词 64 行逐字（wordTiming=true）。
+
+---
+
 ## 2.6.4
 
 > 正式版（tag `v2.6.4`）。歌词流畅度再进一步 + 繁体歌词自动转简体。

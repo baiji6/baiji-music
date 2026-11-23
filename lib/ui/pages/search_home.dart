@@ -407,6 +407,10 @@ class _SearchHomeState extends State<SearchHome> {
       final q = picked as JooxQuality;
       await dm.saveJooxQuality(q);
       qq = dm.qqQuality; ne = dm.neQuality; kw = null; kg = null; mg = null; jx = q; qs = null;
+    } else if (song.isQq2) {
+      final q = picked as Quality;
+      await dm.saveQqQuality(q);
+      qq = q; ne = dm.neQuality; kw = null; kg = null; mg = null; jx = null; qs = null;
     } else if (song.isQishui) {
       final q = picked as QishuiQuality;
       await dm.saveQishuiQuality(q);
@@ -531,6 +535,7 @@ class _SearchHomeState extends State<SearchHome> {
     final migu = song != null && song.isMigu;
     final joox = song != null && song.isJoox;
     final qishui = song != null && song.isQishui;
+    final qq2 = song != null && song.isQq2;
     final netease = song != null && song.isNetease;
     return MiuixOverlayBottomSheet(
       show: _showDownloadSheet && song != null,
@@ -540,7 +545,9 @@ class _SearchHomeState extends State<SearchHome> {
               ? '下载 · 咪咕音乐'
               : joox
                   ? '下载 · JOOX'
-                  : qishui
+                  : qq2
+                      ? '下载 · QQ 音乐 2'
+                      : qishui
                       ? '下载 · 汽水音乐'
                       : kuwo
                       ? '下载 · 酷我音乐'
@@ -610,6 +617,26 @@ class _SearchHomeState extends State<SearchHome> {
                         if (s != null) _downloadLyricOnly(s, mode);
                       },
                     )
+                  : qq2
+                      ? DownloadOptionsSheet<Quality>(
+                          options: filterQualityOptions(
+                              codes, Qq2Quality.downloadOptions, (q) => q.code),
+                          current: DownloadManager.instance.qqQuality,
+                          label: (q) => q.label,
+                          subtitle: (q) => q.bitrate > 0
+                              ? '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}'
+                              : q.ext.replaceFirst('.', '').toUpperCase(),
+                          lyricMode: DownloadExtras.lyricMode,
+                          onConfirm: _onDownloadPicked,
+                          onLyricOnly: (mode) {
+                            final s = _pendingDownloadSong;
+                            setState(() {
+                              _showDownloadSheet = false;
+                              _pendingDownloadSong = null;
+                            });
+                            if (s != null) _downloadLyricOnly(s, mode);
+                          },
+                        )
                   : qishui
                       ? DownloadOptionsSheet<QishuiQuality>(
                           options: filterQualityOptions(

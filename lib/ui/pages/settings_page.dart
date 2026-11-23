@@ -25,6 +25,7 @@ import '../../download/download_extras.dart';
 import '../../download/download_manager.dart';
 import '../../models/models.dart';
 import '../../network/music_api.dart';
+import '../../network/qq2/qq2_api.dart';
 import '../../network/kugou/kugou_auth.dart';
 import '../../network/kuwo/kuwo_auth.dart';
 import '../../player/player_controller.dart';
@@ -78,6 +79,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // ===== 各类弹层 / 对话框的显隐（Miuix 弹窗是声明式的）=====
   bool _showProxyDialog = false;
+  bool _showQq2KeyDialog = false;
   bool _showClearCacheDialog = false;
   bool _showUpdateDialog = false;
   bool _showLyricModeSheet = false;
@@ -99,6 +101,8 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _showWeightDialog = false;
   bool _showCornerDialog = false;
   final _proxyController = TextEditingController();
+  final _qq2KeyController = TextEditingController();
+  String _qq2Key = '';
   UpdateInfo? _updateInfo;
   List<CacheEntry> _cacheEntries = const [];
 
@@ -107,6 +111,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    _qq2Key = Qq2Api.apiKey;
     _loadSettings();
     // 开发者模式是进程级单例；这里兜底 load 一次（main 里也会 load，幂等）
     DevMode.instance.load();
@@ -120,6 +125,7 @@ class _SettingsPageState extends State<SettingsPage> {
     KuwoAuth.removeListener(_onKuwoAuthChanged);
     KugouAuth.removeListener(_onKuwoAuthChanged);
     _proxyController.dispose();
+    _qq2KeyController.dispose();
     super.dispose();
   }
 
@@ -195,6 +201,23 @@ class _SettingsPageState extends State<SettingsPage> {
   void _editProxy() {
     _proxyController.text = _captureProxy;
     setState(() => _showProxyDialog = true);
+  }
+
+  void _editQq2Key() {
+    _qq2KeyController.text = _qq2Key;
+    setState(() => _showQq2KeyDialog = true);
+  }
+
+  Future<void> _saveQq2Key() async {
+    final key = _qq2KeyController.text.trim();
+    setState(() => _showQq2KeyDialog = false);
+    try {
+      await Qq2Api.setApiKey(key);
+      setState(() => _qq2Key = Qq2Api.apiKey);
+      _showSnack(_qq2Key.isEmpty ? '已清除 QQ 音乐 2 的 API Key' : 'QQ 音乐 2 的 API Key 已保存');
+    } catch (e) {
+      _showSnack('保存失败：$e');
+    }
   }
 
   Future<void> _saveProxy() async {
@@ -662,6 +685,21 @@ class _SettingsPageState extends State<SettingsPage> {
                       context,
                       MaterialPageRoute(builder: (_) => const KugouLoginPage()),
                     ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: 'QQ 音乐 2 · API Key',
+                    summary: _qq2Key.isEmpty
+                        ? '未设置 · 下架歌曲取流必须填写'
+                        : '已设置（${_qq2Key.length} 字符）',
+                    startAction: Icon(
+                      _qq2Key.isEmpty ? Icons.key_outlined : Icons.key_rounded,
+                      color: _qq2Key.isEmpty
+                          ? AppColors.textTertiary
+                          : const Color(0xFF12B7F5),
+                      size: 22,
+                    ),
+                    onClick: _editQq2Key,
                   ),
                 ],
               ),
@@ -1344,6 +1382,40 @@ MiuixArrowPreference(
                 ],
               );
             },
+          ),
+        ),
+        // QQ 音乐 2 API Key（用户自填，不内置）
+        MiuixOverlayDialog(
+          show: _showQq2KeyDialog,
+          title: 'QQ 音乐 2 · API Key',
+          summary: '用于下架歌曲取流；留空即清除。密钥只保存在本机，不会内置在安装包里。',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showQq2KeyDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              AppTextField(
+                controller: _qq2KeyController,
+                autofocus: true,
+                label: 'X-API-Key',
+                singleLine: true,
+                leadingIcon: Icon(Icons.key_outlined,
+                    size: 18, color: AppColors.textTertiary),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton('清空', onPressed: () {
+                    _qq2KeyController.text = '';
+                  }),
+                  const SizedBox(width: 8),
+                  MiuixTextButton('保存', onPressed: _saveQq2Key),
+                ],
+              ),
+            ],
           ),
         ),
         // 抓包代理输入

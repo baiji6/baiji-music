@@ -15,6 +15,7 @@ import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/nac/nac_decoder.dart';
 import 'package:baiji_music/network/kuwo/kuwo_link.dart';
 import 'package:baiji_music/network/music_api.dart';
+import 'package:baiji_music/network/qq2/qq2_api.dart';
 import 'package:baiji_music/ra360/ra360_decoder.dart';
 import 'package:baiji_music/viper/viper_super_resolution.dart'
     show ViperUpscaleRate;
@@ -932,6 +933,33 @@ class PlayerController {
         return r.url;
       }
       _clearActual();
+      return '';
+    }
+
+    // QQ 音乐 2（v2.6.5）：按当前档请求 qmc.php，失败沿 9 档链降级。
+    // 音质复用通用 Quality（档位常量见 Qq2Quality）；未设置 API Key 时
+    // 上层会拿到空直链，这里把错误提示给用户。
+    if (song.isQq2) {
+      if (!Qq2Api.hasApiKey) {
+        _clearActual();
+        if (!_noticeStream.isClosed) {
+          _noticeStream.add('请先在设置 → 账号中填写 QQ 音乐 2 的 API Key');
+        }
+        return '';
+      }
+      final chain = Qq2Quality.downgradeChain(effectiveQuality);
+      for (final q in chain) {
+        final r = await _fetch(song, q, effectiveNeteaseQuality);
+        if (r.isNotEmpty) {
+          _applyActual(r);
+          _reportPlay(song, r);
+          return r.url;
+        }
+      }
+      _clearActual();
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('QQ 音乐 2 取流失败，请在设置中填写 API Key 或切换音质');
+      }
       return '';
     }
 

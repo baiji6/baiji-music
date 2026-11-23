@@ -42,8 +42,67 @@ class Source {
   /// 封面用搜索返回的 p3-luna.douyinpic.com 直链。
   static const String qishui = 'qishui';
 
+  /// QQ 音乐 2（v2.6.5 新增，专攻下架歌曲）。
+  ///
+  /// 三个 molan / 第三方接口各司其职：
+  /// - 搜索：POST c.wwwweb.top/music/search（官方搜索对下架歌返回 query forbid）；
+  /// - 封面：GET molan cover.php（从歌手/其他资料反查专辑 mid，官方详情里
+  ///   album.mid 已被清空，拿不到封面）；
+  /// - 取流：GET molan qmc.php?id=&level=（**API Key 由用户在设置页填写，
+  ///   不内置**）。返回的仍是 QMCv2 加密流，复用 QQ 的 QmcRelayServer 解密。
+  /// 歌词直接复用 QQ 的 PlayLyricInfo（按 mid 取，下架歌的 QRC 仍在歌词库）。
+  static const String qq2 = 'qq2';
+
   /// 本地文件（扫描本机磁盘得到，不走任何网络接口）。
   static const String local = 'local';
+}
+
+/// QQ 音乐 2 音质档位（v2.6.5）。
+///
+/// [id] 是 qmc.php 的 `level` 参数，同时也是流文件名前缀（如 `F0M0`），
+/// 因此服务端实际命中的档位可以直接从 URL 反查。这里复用通用的 [Quality]
+/// 类型，让播放器/下载器不必为第九个音源再引入一套参数类型。
+///
+/// [Quality.ext] 记的是**解密后**的容器（服务器返回的是 .mgg/.mflac/.mmp4
+/// 加密壳）：.mgg 解密为 Ogg、.mflac 解密为 FLAC、.mmp4 解密为 MP4。
+class Qq2Quality {
+  static const low = Quality('O4M0', '.ogg', '低音质', 96);
+  static const standard = Quality('O6M0', '.ogg', '标准音质', 128);
+  static const exhigh = Quality('O8M0', '.ogg', '超高音质', 320);
+  static const lossless = Quality('F0M0', '.flac', '无损音质', 0);
+  static const hires = Quality('RSM1', '.flac', '高解析无损', 0);
+  static const zpyz = Quality('Q0M0', '.flac', '臻品音质 2.0', 0);
+  static const zpqj = Quality('Q0M1', '.flac', '臻品全景声 3.0', 0);
+  static const dolby = Quality('D0M1', '.mp4', '杜比全景声', 0);
+  static const jymaster = Quality('AIM0', '.flac', '臻品母带 4.0', 0);
+
+  static const downloadOptions = <Quality>[
+    jymaster, zpqj, zpyz, hires, lossless, exhigh, standard, dolby, low,
+  ];
+  static const playbackOptions = downloadOptions;
+  static const playbackDefault = standard;
+
+  static Quality? fromId(String id) {
+    for (final q in downloadOptions) {
+      if (q.code == id) return q;
+    }
+    return null;
+  }
+
+  /// 从直链文件名前缀反查实际档位（服务端会自动降级）。
+  static Quality? fromUrl(String url) {
+    final name = url.split('/').last.split('?').first;
+    if (name.length < 4) return null;
+    return fromId(name.substring(0, 4));
+  }
+
+  /// qmc.php 自带的降级链：服务端内部也会降，客户端再走一遍是为了
+  /// 在整条链都失败时给出明确提示，并避免每首歌都请求最高档。
+  static List<Quality> downgradeChain(Quality from) {
+    final i = downloadOptions.indexWhere((q) => q.code == from.code);
+    if (i < 0) return const [standard, low];
+    return downloadOptions.sublist(i);
+  }
 }
 
 /// 酷我音质枚举（v2.4.0 新增平台）。
@@ -1116,6 +1175,9 @@ class Song {
   /// 是否汽水音乐歌曲（v2.6.1）。
   bool get isQishui => source == Source.qishui;
 
+  /// 是否 QQ 音乐 2（v2.6.5，下架歌曲专用）。
+  bool get isQq2 => source == Source.qq2;
+
   /// 平台短名（列表角标用）：网易云 / 酷我 / 酷狗 / 咪咕 / JOOX / 汽水 / QQ / 本地。
   ///
   /// v2.4.0-fix2 之前各页面都写成 `isNetease ? '网易云' : 'QQ'`，
@@ -1127,6 +1189,7 @@ class Song {
     if (isMigu) return '咪咕';
     if (isJoox) return 'JOOX';
     if (isQishui) return '汽水';
+    if (isQq2) return 'QQ2';
     if (isNetease) return '网易云';
     return 'QQ';
   }
@@ -1139,6 +1202,7 @@ class Song {
     if (isMigu) return '咪咕音乐';
     if (isJoox) return 'JOOX';
     if (isQishui) return '汽水音乐';
+    if (isQq2) return 'QQ 音乐 2';
     if (isNetease) return '网易云音乐';
     return 'QQ 音乐';
   }

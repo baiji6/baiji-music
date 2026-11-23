@@ -429,6 +429,10 @@ class _PlayerPageState extends State<PlayerPage> {
       await dm.saveQishuiQuality(q);
       await _runDownload(s, qq: dm.qqQuality, ne: dm.neQuality,
           qishui: q, lyric: lyric);
+    } else if (s.isQq2) {
+      final q = picked as Quality;
+      await dm.saveQqQuality(q);
+      await _runDownload(s, qq: q, ne: dm.neQuality, lyric: lyric);
     } else if (s.isNetease) {
       final q = picked as NeteaseQuality;
       await dm.saveNeQuality(q);
@@ -602,24 +606,7 @@ class _PlayerPageState extends State<PlayerPage> {
         // 下载选项：歌词粒度（默认逐字，无逐字回退逐行）+ 音质（按平台）
         MiuixOverlayBottomSheet(
           show: _showDownloadQualitySheet,
-          title: song != null && song.isKugou
-              ? '下载 · 酷狗音乐'
-              : (song != null && song.isMigu
-                  ? '下载 · 咪咕音乐'
-                  : (song != null && song.isJoox
-                      ? '下载 · JOOX'
-                      : (song != null && song.isQishui
-                          ? '下载 · 汽水音乐'
-                          : (song != null && song.isNetease
-                          ? '下载 · 网易云音乐'
-                          : (song != null && song.isKuwo
-                              ? '下载 · 酷我音乐'
-                              : '下载 · QQ 音乐'))))),
-          backgroundColor: AppColors.bg2,
-          onDismissRequest: () => setState(() {
-            _showDownloadQualitySheet = false;
-            _pendingDownloadSong = null;
-          }),
+          title: song != null ? '下载 · ${song.sourceFull}' : '下载 · QQ 音乐',
           content: song != null && song.isKugou
               ? DownloadOptionsSheet<KugouQuality>(
                   options: filterQualityOptions(
@@ -658,7 +645,22 @@ class _PlayerPageState extends State<PlayerPage> {
                               _onDownloadQualityPicked(q, lyric),
                           onLyricOnly: _onLyricOnlyPicked,
                         )
-                      : song != null && song.isQishui
+                      : song != null && song.isQq2
+                          ? DownloadOptionsSheet<Quality>(
+                              options: filterQualityOptions(
+                                  dlCodes, Qq2Quality.downloadOptions,
+                                  (q) => q.code),
+                              current: DownloadManager.instance.qqQuality,
+                              label: (q) => q.label,
+                              subtitle: (q) => q.bitrate > 0
+                                  ? '${q.bitrate} kbps · ${q.ext.replaceFirst('.', '').toUpperCase()}'
+                                  : q.ext.replaceFirst('.', '').toUpperCase(),
+                              lyricMode: DownloadExtras.lyricMode,
+                              onConfirm: (q, lyric) =>
+                                  _onDownloadQualityPicked(q, lyric),
+                              onLyricOnly: _onLyricOnlyPicked,
+                            )
+                          : song != null && song.isQishui
                           ? DownloadOptionsSheet<QishuiQuality>(
                               options: filterQualityOptions(
                                   dlCodes, QishuiQuality.downloadOptions,
@@ -725,21 +727,7 @@ class _PlayerPageState extends State<PlayerPage> {
         // 播放音质切换（按平台）
         MiuixOverlayBottomSheet(
           show: _showPlayQualitySheet,
-          title: song != null && song.isKugou
-              ? '酷狗音乐 · 播放音质'
-              : (song != null && song.isMigu
-                  ? '咪咕音乐 · 播放音质'
-                  : (song != null && song.isJoox
-                      ? 'JOOX · 播放音质'
-                      : (song != null && song.isQishui
-                          ? '汽水音乐 · 播放音质'
-                          : (song != null && song.isNetease
-                          ? '网易云音乐 · 播放音质'
-                          : (song != null && song.isKuwo
-                              ? '酷我音乐 · 播放音质'
-                              : 'QQ 音乐 · 播放音质'))))),
-          backgroundColor: AppColors.bg2,
-          onDismissRequest: () => setState(() => _showPlayQualitySheet = false),
+          title: song != null ? '${song.sourceFull} · 播放音质' : 'QQ 音乐 · 播放音质',
           content: song != null && song.isKugou
               ? _QualitySheet<KugouQuality>(
                   options: filterQualityOptions(
@@ -776,6 +764,21 @@ class _PlayerPageState extends State<PlayerPage> {
                             _pickJooxQuality(q);
                           },
                         )
+                      : song != null && song.isQq2
+                          ? _QualitySheet<Quality>(
+                              options: filterQualityOptions(
+                                  pqCodes, Qq2Quality.playbackOptions,
+                                  (q) => q.code),
+                              current: Qq2Quality.fromId(
+                                          _player.effectiveQuality.code) ??
+                                  Qq2Quality.playbackDefault,
+                              label: (q) => q.label,
+                              onSelect: (q) {
+                                setState(() =>
+                                    _showPlayQualitySheet = false);
+                                _pickQqQuality(q);
+                              },
+                            )
                       : song != null && song.isQishui
                           ? _QualitySheet<QishuiQuality>(
                               options: filterQualityOptions(
@@ -1356,6 +1359,9 @@ class _SourceChip extends StatelessWidget {
     } else if (song.isJoox) {
       label = 'JOOX';
       color = _jooxBrand;
+    } else if (song.isQq2) {
+      label = 'QQ 音乐 2';
+      color = const Color(0xFF12B7F5);
     } else if (song.isQishui) {
       label = '汽水音乐';
       color = _qishuiBrand;
@@ -1842,6 +1848,7 @@ class _QualityButton extends StatelessWidget {
     if (s.isMigu) return _miguMenu();
     if (s.isJoox) return _jooxMenu();
     if (s.isQishui) return _qishuiMenu();
+    if (s.isQq2) return _qq2Menu();
     return s.isNetease ? _neteaseMenu() : _qqMenu();
   }
 
@@ -1858,6 +1865,24 @@ class _QualityButton extends StatelessWidget {
         label: effective.label,
         downgraded: downgraded,
         accent: AppPalette.dark.accent,
+      ),
+    );
+  }
+
+  Widget _qq2Menu() {
+    final player = PlayerController.instance;
+    final fallback = Qq2Quality.playbackDefault;
+    final requested = Qq2Quality.fromId(player.currentQuality.code) ?? fallback;
+    final effective = Qq2Quality.fromId(actualQq?.code ?? '') ?? requested;
+    final downgraded = actualQq != null && actualQq!.code != requested.code;
+
+    return MiuixPressable(
+      onPressed: onOpenSheet,
+      borderRadius: BorderRadius.circular(19),
+      child: _pill(
+        label: effective.label,
+        downgraded: downgraded,
+        accent: const Color(0xFF12B7F5),
       ),
     );
   }

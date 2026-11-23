@@ -7,6 +7,7 @@ import 'package:baiji_music/network/migu/migu_api.dart';
 import 'package:baiji_music/network/joox/joox_api.dart';
 import 'package:baiji_music/network/qishui/qishui_api.dart';
 import 'package:baiji_music/network/qishui/qishui_relay.dart';
+import 'package:baiji_music/network/qq2/qq2_api.dart';
 import '../decrypt/qmc.dart';
 import '../lyrics/lyric_model.dart';
 import '../decrypt/qmc_ekey.dart';
@@ -35,6 +36,8 @@ class AppServices {
     if (source == Source.joox) return false;
     // 汽水走匿名取流（molan 网关 key 内置），无账号体系（v2.6.1）。
     if (source == Source.qishui) return false;
+    // QQ 音乐 2 走用户自填的 API Key，无账号体系（v2.6.5）。
+    if (source == Source.qq2) return false;
     return source == Source.netease ? netease.isLoggedIn() : qq.isLoggedIn();
   }
 }
@@ -156,6 +159,9 @@ class MusicApi {
     if (source == Source.qishui) {
       return searchQishui(keyword, page: page, num: num);
     }
+    if (source == Source.qq2) {
+      return searchQq2(keyword, page: page, num: num);
+    }
     return AppServices.instance.qq.search.searchByType(keyword,
         page: page, num: num);
   }
@@ -181,6 +187,40 @@ class MusicApi {
         duration: s.durationSeconds * 1000,
         cover: s.cover,
         source: Source.qishui,
+      );
+
+  /// QQ 音乐 2 搜索（v2.6.5，下架歌曲专用）。
+  ///
+  /// 搜索接口不返回封面，逐首走 cover.php 反查（限量、分批并发，
+  /// 避免一屏 20 首同时打网关）；失败的留空，UI 自然显示渐变占位。
+  static Future<List<Song>> searchQq2(String keyword,
+      {int page = 1, int num = 20}) async {
+    final list = await Qq2Api.search(keyword, page: page, num: num);
+    final covers = List<String>.filled(list.length, '');
+    for (var i = 0; i < list.length && i < 12; i += 6) {
+      final batch = list.skip(i).take(6).toList();
+      final got = await Future.wait(batch.map((s) => Qq2Api.cover(s.mid)));
+      for (var k = 0; k < got.length; k++) {
+        covers[i + k] = got[k];
+      }
+    }
+    return <Song>[
+      for (var i = 0; i < list.length; i++)
+        qq2SongToSong(list[i], cover: covers[i]),
+    ];
+  }
+
+  /// QQ 音乐 2 搜索结果 → 通用 [Song]。
+  static Song qq2SongToSong(Qq2Song s, {String cover = ''}) => Song(
+        mid: s.mid,
+        songId: s.id,
+        name: s.name,
+        singer: s.singer,
+        album: s.album,
+        albumMid: s.albumMid,
+        duration: 0,
+        cover: cover,
+        source: Source.qq2,
       );
 
   /// JOOX 搜索（v2.6.0，官方 avatar.api.joox.com 接口）。
@@ -348,6 +388,10 @@ class MusicApi {
       } else if (song.isQishui) {
         // v2.6.2：qishui2.php 一次返回全 14 档，按 Q 编号映射实际可用档位。
         codes = await QishuiApi.probeQualityCodes(song.mid);
+      } else if (song.isQq2) {
+        // v2.6.5：qmc.php 服务端内部已有降级链，客户端不做逐档探测，
+        // 直接展示全部 9 档（避免每次打开音质弹层都打 9 次网关）。
+        codes = Qq2Quality.downloadOptions.map((q) => q.code).toSet();
       } else {
         final track = await AppServices.instance.qq.song.getDetail(song.mid);
         if (track != null) codes = Quality.availableCodesFrom(track['file']);
@@ -395,6 +439,21 @@ class MusicApi {
     MiguQuality? miguQuality,
     JooxQuality? jooxQuality,
     QishuiQuality? qishuiQuality}) async {
+    if (song.isQq2) {
+      // v2.6.5：qmc.php 返回 QMCv2 加密流 + ekey，复用 QQ 的本地解密中继。
+      // key 由用户在设置页填写，未填时抛错交给上层提示。
+      final q = qqQuality.code.isEmpty ? Qq2Quality.playbackDefault : qqQuality;
+      final info = await Qq2Api.getStream(song.mid, q);
+      final cipher = InPlaceQmcCipher(
+          QmcV2Cipher(qmcEkeyDecrypt(info.ekey)).decrypt);
+      final relay = await _ensureQqRelay();
+      final actual = info.actualQuality ?? q;
+      final playUrl = relay.urlFor(info.url, info.ekey,
+          ext: actual.ext.replaceFirst('.', ''), cipher: cipher);
+      AppLog.d('MusicApi',
+          'QQ2 档 ${q.code} → 实际 ${actual.code}（${info.quality}），走本地 QMC 中继');
+      return PlayUrlResult._(playUrl, actual, null, actual.ext, null, info.ekey);
+    }
     if (song.isQishui) {
       // v2.6.2：按档位名请求 qishui2.php；命中加密档（hi_res/spatial/
       // lowest 或降级落到加密份）时用本地 CENC 中继解密成可播直链。
@@ -576,6 +635,37 @@ class MusicApi {
 
   /// 按来源取歌词。
   static Future<String> lyric(Song song) async {
+    if (song.isQq2) {
+      // v2.6.5：复用 QQ 官方 PlayLyricInfo（按 mid 查）。下架歌在官方
+      // 搜索里查不到，但歌词库的 QRC 仍在。`type:0` 时逐字密文在
+      // data.lyric（hex）或 data.qrc 里，LyricParser 会自动识别并解密。
+      final param = <String, dynamic>{
+        if (song.songId > 0) 'songID': song.songId else 'songMID': song.mid,
+        'crypt': 1,
+        'qrc': 1,
+        'trans': 1,
+        'roma': 0,
+        'cv': 2111,
+        'ct': 19,
+        'lrc_t': 0,
+        'qrc_t': 0,
+        'roma_t': 0,
+        'trans_t': 0,
+        'type': 0,
+        'interval': song.duration > 0 ? song.duration ~/ 1000 : 0,
+      };
+      final data = await AppServices.instance.qq.execute(BizRequest(
+        module: 'music.musichallSong.PlayLyricInfo',
+        method: 'GetPlayLyricInfo',
+        param: param,
+      ));
+      final v = data['lyric'];
+      if (v is String && v.isNotEmpty) return v;
+      if (v is Map) {
+        return (v['qrc'] ?? v['lyric'] ?? v['trans'] ?? '').toString();
+      }
+      return '';
+    }
     if (song.isKugou) {
       final l = await KugouApi.lyric(song.mid, song.name, song.singer);
       return l.isEmpty ? '' : _kugouLyricsToRaw(l);
