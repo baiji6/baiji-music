@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:baiji_music/core/app_logger.dart';
+import 'package:baiji_music/core/audio_format_sniffer.dart';
+import 'package:baiji_music/core/audio_integrity.dart';
 import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/models/models.dart';
 import 'package:baiji_music/network/music_api.dart';
@@ -298,6 +300,30 @@ class DownloadManager {
         onPart: onPart,
       );
       if (path != null) {
+        if (song.isQq2) {
+          // 加密流极少数情况下会解出成片 0xFF 坏块（上游 Range 异常 /
+          // 缓存坏块 / 截断），头尾看着正常但播放器一读就报 CRC mismatch。
+          // 先快检：坏则删掉，绝不留一个「显示成功却播不了」的文件。
+          if (await AudioIntegrity.hasCorruptFfRun(path)) {
+            AppLog.e('DownloadManager',
+                'QQ2 下载内容损坏（连续 0xFF 坏块），已丢弃: $path');
+            try {
+              File(path).deleteSync();
+            } catch (_) {}
+            return null;
+          }
+          // 落盘扩展名来自加密直链文件名前缀反查，服务端降级时会与真实
+          // 容器错位（典型：杜比档实返 mp4/flac 却被命名成 .ogg）。解密后
+          // 按真实魔数校正后缀。其它音源取流时已用解密后容器定 ext，不动。
+          final fixed = AudioFormatSniffer.correctExtOfFile(path);
+          if (fixed != path) {
+            AppLog.i('DownloadManager',
+                '按真实容器校正扩展名: $path → $fixed');
+          }
+          AppLog.d('DownloadManager',
+              '下载完成: $fixed (${resolved.label})');
+          return fixed;
+        }
         AppLog.d('DownloadManager',
             '下载完成: $path (${resolved.label})');
       }
@@ -431,4 +457,5 @@ class DownloadManager {
     }
     return f;
   }
+
 }
