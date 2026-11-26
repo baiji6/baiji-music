@@ -1,2 +1,6 @@
 # Rust 编译产物（由 tools/build-native-decoders.sh 重建，不入库）
 target/
+
+# 本地 C ABI 调试时 python/ctypes 崩溃留下的 core dump，不入库
+core
+core.*
