@@ -283,4 +283,84 @@ void main() {
       expect(x, 24); // (360-312)/2
     });
   });
+
+  // ===== v2.6.6-fix1：动态行高 + 两行逐字分段 =====
+  group('动态行高几何', () {
+    test('buildLineTops：累积位置逐行累加', () {
+      final tops = buildLineTops([50, 50, 70]);
+      expect(tops, [0, 50, 100]);
+    });
+
+    test('scrollOffsetForLine：让第 i 行中心落在视口中心', () {
+      final tops = buildLineTops([50, 50, 70]);
+      final heights = [50.0, 50.0, 70.0];
+      // 第 1 行中心 = 50+25=75，视口高 300 → 目标 75-150=-75。
+      expect(scrollOffsetForLine(tops, heights, 1, 300), -75);
+    });
+
+    test('lineIndexAtY：按动态高度命中，长行占更多空间', () {
+      final tops = buildLineTops([50, 100, 50]);
+      final heights = [50.0, 100.0, 50.0];
+      expect(lineIndexAtY(tops, heights, 0, 10), 0);
+      expect(lineIndexAtY(tops, heights, 0, 60), 1);
+      expect(lineIndexAtY(tops, heights, 0, 160), 2);
+      expect(lineIndexAtY(tops, heights, 0, 210), -1); // 越界
+    });
+
+    test('visibleLineRange：返回覆盖区间的半开行范围', () {
+      final tops = buildLineTops([50, 50, 50, 50]);
+      final r = visibleLineRange(tops, 60, 130);
+      expect(r.start, lessThanOrEqualTo(1));
+      expect(r.end, greaterThanOrEqualTo(3));
+    });
+  });
+
+  group('两行逐字分段', () {
+    test('buildRowSegments：caret 按行归类，字符区间连续不重叠', () {
+      // 6 个字符：前 3 个在第 0 行（top=0,h=20），后 3 个在第 1 行（top=20,h=20）。
+      final segs = buildRowSegments(
+        textLength: 6,
+        caretX: (i) => (i % 3) * 10.0,
+        caretY: (i) => i < 3 ? 5.0 : 25.0,
+        rowTops: [0.0, 20.0],
+        rowHeights: [20.0, 20.0],
+        rowWidths: [30.0, 30.0],
+      );
+      expect(segs.length, 2);
+      expect(segs[0].startChar, 0);
+      expect(segs[0].endChar, 3);
+      expect(segs[0].charCount, 3);
+      expect(segs[0].localX, [0, 10, 20]);
+      expect(segs[1].startChar, 3);
+      expect(segs[1].endChar, 7); // 含末尾 offset=6 的 caret
+      expect(segs[1].localX.first, 0);
+    });
+
+    test('逐行渲染语义：第一行唱满前不进入第二行', () {
+      // 复刻 _paintLine 的判定：local=(fill-start).clamp(0,charCount)。
+      final segs = buildRowSegments(
+        textLength: 6,
+        caretX: (i) => (i % 3) * 10.0,
+        caretY: (i) => i < 3 ? 5.0 : 25.0,
+        rowTops: [0.0, 20.0],
+        rowHeights: [20.0, 20.0],
+        rowWidths: [30.0, 30.0],
+      );
+      bool rowActive(int seg, double fill) {
+        final local = (fill - segs[seg].startChar)
+            .clamp(0.0, segs[seg].charCount.toDouble());
+        return local > 0;
+      }
+      // fill=2.5（第一行唱到第 3 字一半）：只有第一行渲染。
+      expect(rowActive(0, 2.5), true);
+      expect(rowActive(1, 2.5), false);
+      // fill=3.5（第一行唱满，第二行唱到第 1 字）：两行都渲染，
+      // 第一行 local==charCount → 整行满亮（保持不灰）。
+      expect(rowActive(0, 3.5), true);
+      expect(rowActive(1, 3.5), true);
+      final local0 = (3.5 - segs[0].startChar)
+          .clamp(0.0, segs[0].charCount.toDouble());
+      expect(local0, segs[0].charCount); // 第一行满，不变灰
+    });
+  });
 }

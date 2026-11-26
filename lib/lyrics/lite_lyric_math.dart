@@ -249,6 +249,158 @@ double lineStartX({
   };
 }
 
+/// 由每行高度生成「行顶部在内容坐标系的累积位置」（v2.6.6-fix1）。
+///
+/// tops[i] 是第 i 行的顶部 y，tops[i+1]-tops[i] == heights[i]。短行用基础
+/// 行高、长行（主文本或译文换行）用更高值，从而实现「长歌词占两行、短行
+/// 保持紧凑」而不再全部省略成一行。
+List<double> buildLineTops(List<double> heights) {
+  final tops = List<double>.filled(heights.length, 0.0);
+  var acc = 0.0;
+  for (var i = 0; i < heights.length; i++) {
+    tops[i] = acc;
+    acc += heights[i];
+  }
+  return tops;
+}
+
+/// 动态行高版：让第 [index] 行垂直居中于视口所需的滚动偏移。
+double scrollOffsetForLine(
+  List<double> tops,
+  List<double> heights,
+  int index,
+  double viewportHeight,
+) {
+  if (index < 0 || index >= tops.length) return 0.0;
+  return tops[index] + heights[index] / 2 - viewportHeight / 2;
+}
+
+/// 动态行高版：视口局部 y → 命中行下标（点击跳转用），越界 -1。
+int lineIndexAtY(
+  List<double> tops,
+  List<double> heights,
+  double scroll,
+  double localY,
+) {
+  final n = tops.length;
+  if (n <= 0) return -1;
+  final contentY = scroll + localY;
+  var lo = 0;
+  var hi = n - 1;
+  var ans = -1;
+  while (lo <= hi) {
+    final mid = (lo + hi) >> 1;
+    if (tops[mid] <= contentY) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  if (ans < 0) return -1;
+  if (contentY >= tops[ans] + heights[ans]) return -1;
+  return ans;
+}
+
+/// 主文本折行后的一行渲染段（v2.6.6-fix1）。
+///
+/// [startChar]/[endChar] 是该行覆盖的 UTF-16 字符区间（end 不含），
+/// [localX] 长度 = endChar-startChar+1，是各字符边界相对行首的 x。
+/// 逐字扫光据此把「全行字符偏移」拆成每行局部偏移，实现按时间顺序逐行渲染。
+class LyricRowSegment {
+  LyricRowSegment({
+    required this.startChar,
+    required this.endChar,
+    required this.localX,
+    required this.top,
+    required this.height,
+    required this.width,
+  });
+
+  int startChar;
+  int endChar;
+  List<double> localX;
+  final double top;
+  final double height;
+  final double width;
+
+  int get charCount => endChar - startChar;
+}
+
+/// 把 caret 坐标按行 top/height 归类，构建每行的字符段（纯函数，便于单测）。
+///
+/// [caretX]/[caretY] 由渲染层用 TextPainter.getOffsetForCaret 注入；
+/// [rowTops]/[rowHeights]/[rowWidths] 来自 computeLineMetrics()。
+List<LyricRowSegment> buildRowSegments({
+  required int textLength,
+  required double Function(int) caretX,
+  required double Function(int) caretY,
+  required List<double> rowTops,
+  required List<double> rowHeights,
+  required List<double> rowWidths,
+}) {
+  if (rowTops.isEmpty) return const [];
+  final segs = <LyricRowSegment>[];
+  for (var r = 0; r < rowTops.length; r++) {
+    segs.add(LyricRowSegment(
+      startChar: -1,
+      endChar: -1,
+      localX: <double>[],
+      top: rowTops[r],
+      height: rowHeights[r],
+      width: r < rowWidths.length ? rowWidths[r] : 0.0,
+    ));
+  }
+  for (var i = 0; i <= textLength; i++) {
+    final y = caretY(i);
+    var r = 0;
+    for (; r < rowTops.length - 1; r++) {
+      if (y < rowTops[r] + rowHeights[r]) break;
+    }
+    final seg = segs[r];
+    if (seg.startChar < 0) seg.startChar = i;
+    seg.endChar = i + 1;
+    seg.localX.add(caretX(i));
+  }
+  // 去掉没有字符的空行。
+  return segs.where((s) => s.startChar >= 0).toList();
+}
+
+/// 动态行高版：内容 y 区间 [from, to] 覆盖的半开行范围 [start, end)。
+({int start, int end}) visibleLineRange(
+  List<double> tops,
+  int fromY,
+  int toY,
+) {
+  final n = tops.length;
+  if (n <= 0) return (start: 0, end: 0);
+  // 第一个顶部 >= fromY 的行，再往前退一行（缓冲）。
+  var lo = 0;
+  var hi = n;
+  while (lo < hi) {
+    final mid = (lo + hi) >> 1;
+    if (tops[mid] < fromY) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  final start = (lo - 1).clamp(0, n - 1);
+  // 第一个顶部 > toY 的行。
+  lo = 0;
+  hi = n;
+  while (lo < hi) {
+    final mid = (lo + hi) >> 1;
+    if (tops[mid] <= toY) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  final end = (lo + 1).clamp(start + 1, n);
+  return (start: start, end: end);
+}
+
 /// 为整行文本预生成每个 UTF-16 单元结束处的 x 坐标。
 ///
 /// [measure] 由渲染层注入（依赖 TextPainter），返回第 i 个单元结束处的 x。

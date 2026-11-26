@@ -468,13 +468,17 @@ libmpv 原生库在通用 ffmpeg 基础上额外编入三个音频解码器。`t
 | 解码器 so | 上游 | 角色 | 兜底 |
 | --- | --- | --- | --- |
 | `libac4_baka.so` | [baka-ac4 v0.2.2](https://github.com/Zencok/baka-ac4) | 杜比全景声 AC-4 主解码器 | mpv 内编 `ac4` / `ac4_baka` |
-| `libav3a_baka.so` | [baka-av3a v0.1.2](https://github.com/Zencok/baka-av3a) | 网易云臻音全景声（Audio Vivid）主解码器 | mpv 内编 UWA `av3a` |
+| `libav3a_baka.so` | [baka-av3a v0.1.2](https://github.com/Zencok/baka-av3a) | 下载/转码用（播放见下方说明） | mpv 内编 UWA `av3a` |
 
 - 覆盖 arm64-v8a / armeabi-v7a，仅依赖系统 libc/libm/libdl；构建脚本见
   `tools/build-native-decoders.sh`，上游 crate 源码 vendor 于 `tools/native_decoders/vendor/`；
 - AV3A 的神经模型 `model.bin` + LSF 码本 `lsf.bin` 从官方包提取内置于 `assets/av3a/`，
   sha256 与官方 `assets.json` 一致；MCR / HOA 码本按需可选；
 - so 加载失败 / 非 Android 时自动回退 libmpv 内置解码，UWA 参考解码器完整保留。
+
+> **v2.6.6-fix1**：网易云臻音全景声（AV3A）播放改回 libmpv 内置 UWA 解码器**直解**——
+> av3a 的 mp4 由 mpv 逐包解码直接播放，能 seek、无首次转码等待，不再经
+> `libav3a_baka.so` 解成 WAV。`libav3a_baka.so` 与模型仍保留供下载/转码使用。
 
 ### QQ 音乐臻品 DTS:X 解码（v2.4.2-pre8：dts_glue 独立管线）
 

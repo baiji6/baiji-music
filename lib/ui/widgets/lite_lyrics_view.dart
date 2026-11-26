@@ -104,9 +104,15 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
 
   double _scroll = 0; // 内容坐标 → 视口顶部
   double _target = 0;
-  double _extent = 64; // 单行所占高度（含行距）
+  double _extent = 64; // 单行所占高度（含行距）—— v2.6.6-fix1 起为「基础行高」
   double _viewportW = 0;
   double _viewportH = 0;
+
+  /// v2.6.6-fix1：逐行高度 / 累积顶部坐标。短行 = 基础 extent；
+  /// 主文本或译文折成两行的行更高。所有定位/滚动/点击改走这两张表。
+  List<double> _lineHeights = <double>[];
+  List<double> _lineTops = <double>[];
+  Object? _geometryKey;
 
   int _activeIdx = -1;
   int _lastIdx = -2;
@@ -184,6 +190,15 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
     _repaint.value++;
   }
 
+  /// 让第 [idx] 行居中所需的滚动偏移。geometry 尚未算好时回退到固定行高。
+  double _centerOffset(int idx, double viewportH) {
+    if (_lineTops.length == _lyrics.length &&
+        _lineTops.length == _lineHeights.length) {
+      return scrollOffsetForLine(_lineTops, _lineHeights, idx, viewportH);
+    }
+    return centeredScrollOffset(idx, _extent, viewportH);
+  }
+
   /// 把 State 的最新状态写进共享帧数据（painter 在 paint 时读取）。
   void _syncFrame() {
     _frame
@@ -191,6 +206,8 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
       ..visuals = _visuals
       ..styleVersion = _styleVersion
       ..extent = _extent
+      ..lineTops = _lineTops
+      ..lineHeights = _lineHeights
       ..scroll = _scroll
       ..activeIdx = _activeIdx
       ..fill = _fill;
@@ -250,7 +267,7 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
       _lastIdx = idx;
       _activeIdx = idx;
       if (!_browsing && idx >= 0) {
-        _target = centeredScrollOffset(idx, _extent, _viewportH);
+        _target = _centerOffset(idx, _viewportH);
       }
       changed = true;
       _staticRepaint.value++; // 旧活跃行要画回静态层、新行要让位
@@ -272,7 +289,7 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
       _browsing = false;
       _browseEndUs = null;
       if (_lastIdx >= 0) {
-        _target = centeredScrollOffset(_lastIdx, _extent, _viewportH);
+        _target = _centerOffset(_lastIdx, _viewportH);
       }
     }
 
@@ -303,21 +320,24 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
   double get _minScroll {
     final n = _lyrics.length;
     if (n <= 0) return 0;
-    final first = centeredScrollOffset(0, _extent, _viewportH);
-    final last = centeredScrollOffset(n - 1, _extent, _viewportH);
+    final first = _centerOffset(0, _viewportH);
+    final last = _centerOffset(n - 1, _viewportH);
     return math.min(first, last);
   }
 
   double get _maxScroll {
     final n = _lyrics.length;
     if (n <= 0) return 0;
-    final first = centeredScrollOffset(0, _extent, _viewportH);
-    final last = centeredScrollOffset(n - 1, _extent, _viewportH);
+    final first = _centerOffset(0, _viewportH);
+    final last = _centerOffset(n - 1, _viewportH);
     return math.max(first, last);
   }
 
   void _handleTap(double localY) {
-    final i = lineIndexAtScroll(_scroll, localY, _extent, _lyrics.length);
+    final i = _lineTops.length == _lyrics.length &&
+            _lineTops.length == _lineHeights.length
+        ? lineIndexAtY(_lineTops, _lineHeights, _scroll, localY)
+        : lineIndexAtScroll(_scroll, localY, _extent, _lyrics.length);
     if (i < 0) return;
     final line = _lyrics.lines[i];
     unawaited(widget.onSeek(Duration(milliseconds: line.startMs)));
@@ -350,6 +370,59 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
     final mainH = s.fontSize * 1.25 * math.max(1.0, s.activeScale);
     final subH = hasTrans ? s.fontSize * 0.58 * 1.2 : 0.0;
     return mainH + subH + s.fontSize * 0.8;
+  }
+
+  /// v2.6.6-fix1：按每行实际折行数重算逐行高度与累积顶部坐标。
+  ///
+  /// 短行（1 行主文本 + ≤1 行译文）高度恰为 [_extent]，与旧版一致；
+  /// 主文本/译文折成两行的行按实际行数加高。这样长歌词能完整显示两行，
+  /// 又不会把行高整体撑大、把短歌词撑散。
+  void _recomputeLineGeometry(double width, bool hasTrans) {
+    final s = LyricSettings.instance;
+    final layoutW = math.max(width - sidePad * 2, 1.0);
+    final baseMainLine = s.fontSize * 1.25 * math.max(1.0, s.activeScale);
+    final gap = s.fontSize * 0.8;
+    final subLineH = s.fontSize * 0.58 * 1.2;
+
+    final heights = <double>[];
+    for (final line in _lyrics.lines) {
+      final mainLines = _measureLineCount(
+        line.displayText,
+        s.fontSize * math.max(1.0, s.activeScale),
+        s.activeWeight,
+        layoutW,
+      );
+      final sub = _subOf(line);
+      final subLines = (sub == null || sub.isEmpty)
+          ? 0
+          : _measureLineCount(sub, s.fontSize * 0.58, s.inactiveWeight, layoutW);
+      heights.add(
+        baseMainLine * mainLines + subLineH * subLines + gap,
+      );
+    }
+    _lineHeights = heights;
+    _lineTops = buildLineTops(heights);
+  }
+
+  /// 用一次性 TextPainter 测量文本在给定宽度下折成几行（1 或 2）。
+  static int _measureLineCount(
+    String text,
+    double fontSize,
+    FontWeight weight,
+    double maxWidth,
+  ) {
+    if (text.isEmpty) return 1;
+    final p = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(fontSize: fontSize, fontWeight: weight, height: 1.25),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: 2,
+    )..layout(maxWidth: maxWidth);
+    final n = p.computeLineMetrics().length;
+    p.dispose();
+    return n.clamp(1, 2);
   }
 
   void _clearVisuals() {
@@ -412,19 +485,24 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
       _startTicker();
     }
     final nextExtent = _computeExtent(s, hasTrans);
-    if (nextExtent != _extent) {
-      _extent = nextExtent;
-      // 行高变了（字号/缩放改动）：重新按当前行居中，否则活跃行会偏。
-      if (_lastIdx >= 0 && !_browsing) {
-        _target = centeredScrollOffset(_lastIdx, _extent, _viewportH);
-      }
-    }
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
         if (w > 0 && h > 0) {
+          // v2.6.6-fix1：行高几何依赖宽度、样式与歌词——任一变化时重算逐行
+          // 高度表（长歌词折两行会更高），再按当前行重新居中。
+          final gk = Object.hash(_styleVersion, w.round(), _lyrics);
+          if (_geometryKey != gk) {
+            _geometryKey = gk;
+            _extent = nextExtent;
+            _recomputeLineGeometry(w, hasTrans);
+            if (_lastIdx >= 0 && !_browsing) {
+              _target = scrollOffsetForLine(
+                  _lineTops, _lineHeights, _lastIdx, h);
+            }
+          }
           if ((w - _viewportW).abs() > 0.5 ||
               (h - _viewportH).abs() > 0.5) {
             _viewportW = w;
@@ -432,7 +510,7 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
             final n = _lyrics.length;
             if (n > 0) {
               final idx = _lastIdx < 0 ? 0 : _lastIdx;
-              _target = centeredScrollOffset(idx, _extent, h);
+              _target = scrollOffsetForLine(_lineTops, _lineHeights, idx, h);
               if (_lastIdx < 0) {
                 _scroll = _target; // 首帧直接就位，避免从头滚
                 _scrollN.value = _scroll;
@@ -488,17 +566,33 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
     final extent = _extent;
     if (extent <= 0) return const SizedBox.shrink();
 
-    // 可视窗口 + 上下缓冲；缓冲足够大时，普通切行滚动不会触发重画。
-    var start = (scroll / extent).floor() - _windowBuffer;
-    var end = ((scroll + h) / extent).ceil() + _windowBuffer + 1;
-    start = start.clamp(0, n - 1);
-    end = end.clamp(start + 1, n);
+    // v2.6.6-fix1：动态行高下用 tops 表算可视窗口；geometry 尚未就绪时
+    // 回退固定 extent 的旧算法（结果与旧版一致）。
+    final useDynamic = _lineTops.length == n && _lineHeights.length == n;
+    int start;
+    int end;
+    double originTop;
+    double layerH;
+    if (useDynamic) {
+      final range = visibleLineRange(_lineTops, scroll.floor(), (scroll + h).ceil());
+      start = (range.start - _windowBuffer).clamp(0, n - 1);
+      end = (range.end + _windowBuffer).clamp(start + 1, n);
+      originTop = _lineTops[start];
+      layerH = _lineTops[end - 1] + _lineHeights[end - 1] - originTop;
+    } else {
+      start = (scroll / extent).floor() - _windowBuffer;
+      end = ((scroll + h) / extent).ceil() + _windowBuffer + 1;
+      start = start.clamp(0, n - 1);
+      end = end.clamp(start + 1, n);
+      originTop = start * extent;
+      layerH = (end - start) * extent;
+    }
 
     return Positioned(
       left: 0,
       right: 0,
-      top: start * extent - scroll,
-      height: (end - start) * extent,
+      top: originTop - scroll,
+      height: layerH,
       child: RepaintBoundary(
         child: CustomPaint(
           painter: _StaticLinesPainter(
@@ -507,10 +601,12 @@ class _LiteLyricsViewState extends State<LiteLyricsView>
             start: start,
             count: end - start,
             width: w,
+            originTop: originTop,
             snapshot: _LayerSnapshot(
               lyrics: _lyrics,
               styleVersion: _styleVersion,
               extent: extent,
+              geometryKey: _geometryKey,
               activeIdx: _activeIdx,
             ),
           ),
@@ -530,9 +626,23 @@ class _PaintFrame {
   List<_LineVisual?> visuals = <_LineVisual?>[];
   int styleVersion = -1;
   double extent = 64;
+  List<double> lineTops = <double>[];
+  List<double> lineHeights = <double>[];
   double scroll = 0;
   int activeIdx = -1;
   double fill = 0;
+
+  /// 第 i 行中心的内容坐标（动态行高）；表不可用时回退固定 extent。
+  double centerOf(int i) {
+    if (lineTops.length == lyrics.length &&
+        lineHeights.length == lyrics.length) {
+      return lineTops[i] + lineHeights[i] / 2;
+    }
+    return i * extent + extent / 2;
+  }
+
+  double heightOf(int i) =>
+      (lineHeights.length == lyrics.length) ? lineHeights[i] : extent;
 }
 
 /// 静态层的重绘判据（painter 不可变，必须把关键值快照进构造参数）。
@@ -541,12 +651,14 @@ class _LayerSnapshot {
     required this.lyrics,
     required this.styleVersion,
     required this.extent,
+    required this.geometryKey,
     required this.activeIdx,
   });
 
   final Lyrics lyrics;
   final int styleVersion;
   final double extent;
+  final Object? geometryKey;
   final int activeIdx;
 }
 
@@ -558,6 +670,7 @@ class _StaticLinesPainter extends CustomPainter {
     required this.start,
     required this.count,
     required this.width,
+    required this.originTop,
     required this.snapshot,
   }) : super(repaint: repaint);
 
@@ -565,6 +678,7 @@ class _StaticLinesPainter extends CustomPainter {
   final int start;
   final int count;
   final double width;
+  final double originTop;
   final _LayerSnapshot snapshot;
 
   @override
@@ -582,7 +696,7 @@ class _StaticLinesPainter extends CustomPainter {
         canvas,
         frame,
         idx,
-        i * extent + extent / 2,
+        frame.centerOf(idx) - originTop,
         width,
         active: false,
       );
@@ -597,6 +711,7 @@ class _StaticLinesPainter extends CustomPainter {
     return !identical(a.lyrics, b.lyrics) ||
         a.styleVersion != b.styleVersion ||
         a.extent != b.extent ||
+        a.geometryKey != b.geometryKey ||
         a.activeIdx != b.activeIdx ||
         old.start != start ||
         old.count != count ||
@@ -618,8 +733,9 @@ class _ActiveLinePainter extends CustomPainter {
     final i = frame.activeIdx;
     if (lyrics.isEmpty || extent <= 0 || i < 0 || i >= lyrics.length) return;
     if (size.width <= 0 || size.height <= 0) return;
-    final centerY = i * extent + extent / 2 - frame.scroll;
-    if (centerY < -extent * 1.5 || centerY > size.height + extent * 1.5) {
+    final rowH = frame.heightOf(i);
+    final centerY = frame.centerOf(i) - frame.scroll;
+    if (centerY < -rowH * 1.5 || centerY > size.height + rowH * 1.5) {
       return;
     }
     canvas.save();
@@ -665,24 +781,51 @@ void _paintLine(
   final sung = visual.sung;
   final fill = frame.fill;
   if (active && sung != null && fill > 0) {
-    final px = fillOffsetToPixel(fill, visual.charEndX);
-    if (px > 0.01) {
-      canvas.save();
-      canvas.clipRect(Rect.fromLTWH(
-        startX,
-        top - 2,
-        px + 0.5,
-        visual.mainHeight + 4,
-      ));
-      sung.paint(canvas, Offset(startX, top));
-      canvas.restore();
+    if (visual.rows.isEmpty) {
+      // 单行：精确逐字像素扫光（原行为不变）。
+      final px = fillOffsetToPixel(fill, visual.charEndX);
+      if (px > 0.01) {
+        canvas.save();
+        canvas.clipRect(Rect.fromLTWH(
+          startX, top - 2, px + 0.5, visual.mainHeight + 4));
+        sung.paint(canvas, Offset(startX, top));
+        canvas.restore();
+      }
+    } else {
+      // v2.6.6-fix1：两行按字符时间戳**逐行**渲染——唱满第一行后它保持
+      // 高亮，再接着唱第二行；每行各自 clip，互不串色；切句时两层一起换色。
+      for (final seg in visual.rows) {
+        final local = (fill - seg.startChar).clamp(0.0, seg.charCount.toDouble());
+        if (local <= 0) break; // 尚未唱到本行，后续行更不会唱
+        final px = local >= seg.charCount
+            ? seg.width + 2
+            : fillOffsetToPixel(local, seg.localX);
+        if (px <= 0.01) continue;
+        canvas.save();
+        canvas.clipRect(Rect.fromLTWH(
+          startX,
+          top + seg.top - 1,
+          px + 0.5,
+          seg.height + 2,
+        ));
+        sung.paint(canvas, Offset(startX, top));
+        canvas.restore();
+      }
     }
   }
 
-  // 译文 / 罗马音。
+  // 译文 / 罗马音（v2.6.6-fix1）：按译文**自身宽度**独立排版起点，不再沿用
+  // 主文本的 startX——英文主文本与中文译文宽度差异大时会明显偏位。
   final sub = visual.sub;
   if (sub != null) {
-    sub.paint(canvas, Offset(startX, top + visual.mainHeight));
+    final subW = math.min(visual.subWidth, layoutW);
+    final subStartX = lineStartX(
+      viewportWidth: width,
+      textWidth: subW,
+      align: settings.textAlign,
+      sidePad: _LiteLyricsViewState.sidePad,
+    );
+    sub.paint(canvas, Offset(subStartX, top + visual.mainHeight));
   }
 }
 
@@ -731,6 +874,10 @@ class _LineVisual {
     required this.textWidth,
     required this.mainHeight,
     required this.subHeight,
+    required this.mainLines,
+    required this.subLines,
+    required this.subWidth,
+    required this.rows,
   });
 
   final TextPainter main;
@@ -740,6 +887,19 @@ class _LineVisual {
   final double textWidth;
   final double mainHeight;
   final double subHeight;
+
+  /// v2.6.6-fix1：主文本实际占用的行数（1 或 2），供动态行高使用。
+  final int mainLines;
+
+  /// v2.6.6-fix1：译文实际占用的行数（0/1/2）。
+  final int subLines;
+
+  /// v2.6.6-fix1：译文自身排版宽度（用于译文独立居中，与主文本宽度解耦）。
+  final double subWidth;
+
+  /// v2.6.6-fix1：主文本每行的字符段（仅两行时非空）。逐字扫光据此按字符
+  /// 时间顺序逐行渲染，而不是两行同时从左到右扫。
+  final List<LyricRowSegment> rows;
 
   /// 构造一行的全部 TextPainter（各 layout 一次，逐帧复用，零分配）。
   ///
@@ -761,17 +921,21 @@ class _LineVisual {
           leadingDistribution: TextLeadingDistribution.even,
         );
 
+    // v2.6.6-fix1：长歌词允许折到第二行（最多 2 行），不再一行省略截断。
+    // 不加 ellipsis：maxLines=2 时超出部分才由 Flutter 截断，绝大多数歌词
+    // 单行即可容纳，只有真正很长的句子才占两行。
     TextPainter make(Color color) => TextPainter(
           text: TextSpan(text: text, style: baseStyle(color: color)),
           textAlign: TextAlign.left,
           textDirection: TextDirection.ltr,
-          maxLines: 1,
-          ellipsis: '…',
+          maxLines: 2,
         )..layout(maxWidth: width);
 
     final main =
         make(isActive ? s.readableUnsungColor : s.readableInactiveColor);
     final sung = isActive ? make(s.readableSungColor) : null;
+    // main/sung 同字串同宽度，行数一致；取 main 的真实行数。
+    final mainLines = main.computeLineMetrics().length.clamp(1, 2);
 
     final subStyle = TextStyle(
       fontSize: s.fontSize * 0.58,
@@ -782,31 +946,69 @@ class _LineVisual {
     );
     TextPainter? subPainter;
     double subHeight = 0;
+    int subLines = 0;
+    double subWidth = 0;
     if (sub != null && sub.isNotEmpty) {
       subPainter = TextPainter(
         text: TextSpan(text: sub, style: subStyle),
         textAlign: TextAlign.left,
         textDirection: TextDirection.ltr,
-        maxLines: 1,
-        ellipsis: '…',
+        maxLines: 2,
       )..layout(maxWidth: width);
       subHeight = subPainter.height;
+      subLines = subPainter.computeLineMetrics().length.clamp(1, 2);
+      subWidth = subPainter.width;
     }
 
     // 逐字 x 表：getOffsetForCaret 返回第 i 个 UTF-16 单元边界的 x。
+    // 两行时第二行的 dx 会回绕到行首，直接用作扫光横坐标会倒退；此时退化为
+    // 按字符位置的线性 x（配合逐行分段 clip，见 _paintLine），单行保持精确。
     final charEndX = buildCharEndX(
       text.length,
       (i) => main.getOffsetForCaret(TextPosition(offset: i), Rect.zero).dx,
     );
+    final metrics = main.computeLineMetrics();
+    final maxLineWidth =
+        metrics.fold<double>(0.0, (m, v) => math.max(m, v.width));
+
+    // 两行时为每行构建字符段：caret 的 dy 落在哪一行的 [top, top+height) 就归哪行。
+    // 单行时 rows 留空（走原逐字 x 表），零额外开销。
+    final rows = <LyricRowSegment>[];
+    if (mainLines > 1 && metrics.isNotEmpty) {
+      final rowTops = <double>[];
+      final rowHeights = <double>[];
+      final rowWidths = <double>[];
+      for (final m in metrics) {
+        rowTops.add(m.baseline - m.ascent);
+        rowHeights.add(m.height);
+        rowWidths.add(m.width);
+      }
+      rows.addAll(buildRowSegments(
+        textLength: text.length,
+        caretX: (i) =>
+            main.getOffsetForCaret(TextPosition(offset: i), Rect.zero).dx,
+        caretY: (i) =>
+            main.getOffsetForCaret(TextPosition(offset: i), Rect.zero).dy,
+        rowTops: rowTops,
+        rowHeights: rowHeights,
+        rowWidths: rowWidths,
+      ));
+    }
 
     return _LineVisual(
       main: main,
       sung: sung,
       sub: subPainter,
       charEndX: charEndX,
-      textWidth: charEndX.isEmpty ? 0 : charEndX.last,
+      textWidth: mainLines <= 1
+          ? (charEndX.isEmpty ? 0 : charEndX.last)
+          : maxLineWidth,
       mainHeight: main.height,
       subHeight: subHeight,
+      mainLines: mainLines,
+      subLines: subLines,
+      subWidth: subWidth,
+      rows: rows,
     );
   }
 

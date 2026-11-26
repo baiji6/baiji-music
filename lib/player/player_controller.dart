@@ -1422,13 +1422,14 @@ class PlayerController {
 
   /// v2.6.6：从取流结果判断是否为 baka 主解码器档位。
   ///
-  /// - AC-4：QQ D004/D008、酷我 dolby_ac4、酷狗 dolby2_*（AC-4 变体）；
-  /// - AV3A：网易云臻音全景声（level=vivid）。
+  /// - AC-4：QQ D004/D008、酷我 dolby_ac4、酷狗 dolby2_*（AC-4 变体）。
+  /// - AV3A（网易云臻音全景声 level=vivid）：v2.6.6-fix1 起改回 libmpv
+  ///   内置的 UWA av3a 解码器直解——av3a 的 mp4 由 mpv 逐包解码直接播放，
+  ///   能 seek、无首次转码等待，无需绕 baka so 解成 WAV 再边转边播。
+  ///   baka-av3a 的 so 与模型仍保留，供下载/转码链路使用。
   /// 返回 null 表示不是 baka 档（维持原 mpv 直解路径）。
   BakaConfig? _detectBakaCodec(PlayUrlResult r) {
-    // 网易云臻音全景声 → baka-av3a
-    final ne = r.ne?.level;
-    if (ne == 'vivid') return BakaMusic.av3a;
+    // 网易云臻音全景声（vivid）：走 mpv 内置 UWA 直解，不在此拦截。
     // QQ 杜比全景声 AC-4 → baka-ac4（dolbyAlias 已把 D008 归一到 D004）
     final qq = r.qq?.code;
     if (qq == 'D004' || qq == Quality.atmosDb.code) return BakaMusic.ac4;
