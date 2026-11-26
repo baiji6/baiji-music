@@ -32,6 +32,7 @@ import '../core/audio_transcoder.dart' show FfmpegLocator;
 import '../core/cache_manager.dart' show CacheManager;
 import 'viper_super_resolution.dart';
 import 'viper_wav.dart';
+import 'vns_so.dart' show VnsSoConfig, VnsSoEngine, probeVnsSo, vnsSoEngineTag;
 
 /// 一次升频的产物信息。
 class ViperUpscaleResult {
@@ -62,12 +63,23 @@ class ViperUpscaler {
 
   static const MethodChannel _nativeChannel = MethodChannel('baiji/native');
 
+  /// Android 原生库目录绝对路径（`applicationInfo.nativeLibraryDir`）。
+  /// SO 直调与 ffmpeg 候选都依赖它；失败返回空串。
+  static Future<String> androidNativeLibraryDir() async {
+    if (!Platform.isAndroid) return '';
+    try {
+      return await _nativeChannel.invokeMethod<String>('nativeLibraryDir') ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// Android 内置 ffmpeg 候选（`nativeLibraryDir/libffmpeg_exec.so`）。
   static Future<List<String>> androidEngineCandidates() async {
     if (!Platform.isAndroid) return const <String>[];
     try {
-      final dir = await _nativeChannel.invokeMethod<String>('nativeLibraryDir');
-      if (dir == null || dir.isEmpty) return const <String>[];
+      final dir = await androidNativeLibraryDir();
+      if (dir.isEmpty) return const <String>[];
       return <String>['$dir${Platform.pathSeparator}libffmpeg_exec.so'];
     } catch (_) {
       return const <String>[];
@@ -244,6 +256,9 @@ class ViperUpscaler {
   }
 
   /// 把本地文件升频，写到 [outputPath]（父目录需存在）。
+  ///
+  /// Android arm64-v8a 且内置原版 SO 可用时，优先直调 SO（音质与原 App
+  /// 逐样本一致）；其它平台 / 其它档位 / SO 不可用自动回退纯 Dart 引擎。
   static Future<ViperUpscaleResult> upscaleFile({
     required String inputPath,
     required String outputPath,
@@ -255,6 +270,19 @@ class ViperUpscaler {
   }) async {
     final sw = Stopwatch()..start();
     if (isCancelled?.call() == true) throw const ViperCancelled();
+
+    // —— 原生 SO 探测（仅 Android arm64 / khz192 档）——
+    // MethodChannel 只能在主 isolate 调，这里解析好绝对路径再传给子 isolate。
+    // 真机实测 SO 的第 4 参数是升频倍率：khz192 需传 4 才得 192k（传 2 只有
+    // 96k，会让成品播放快一倍）；96k 档继续用纯 Dart 引擎。任何异常都不阻断。
+    VnsSoConfig? vnsSo;
+    if (rate == ViperUpscaleRate.khz192) {
+      final dir = await androidNativeLibraryDir();
+      vnsSo = probeVnsSo(dir);
+      if (vnsSo != null) {
+        AppLog.i('ViperUpscaler', '蝰蛇母带使用原版 SO 引擎: $vnsSoEngineTag');
+      }
+    }
 
     // 每次调用给中间文件加唯一 token：同一首歌被并发触发两次升频时，
     // 两次各自独占 decoded/tmpOut，先完成者的 finally 不会删掉另一个
@@ -298,6 +326,7 @@ class ViperUpscaler {
           tmpOut,
           rate: rate,
           tapeEnhance: tapeEnhance,
+          vnsSo: vnsSo,
           onProgress: (p) => onProgress?.call(0.10 + p * 0.88),
           isCancelled: isCancelled,
         );
@@ -438,6 +467,7 @@ class ViperUpscaler {
     String outputPath, {
     required ViperUpscaleRate rate,
     required bool tapeEnhance,
+    VnsSoConfig? vnsSo,
     void Function(double progress)? onProgress,
     bool Function()? isCancelled,
   }) async {
@@ -450,6 +480,7 @@ class ViperUpscaler {
         outputPath,
         rate,
         tapeEnhance,
+        vnsSo,
       ),
     );
     _StreamResult? out;
@@ -509,6 +540,7 @@ class _StreamArgs {
     this.outputPath,
     this.rate,
     this.tapeEnhance,
+    this.vnsSo,
   );
 
   final SendPort port;
@@ -516,6 +548,9 @@ class _StreamArgs {
   final String outputPath;
   final ViperUpscaleRate rate;
   final bool tapeEnhance;
+
+  /// 非 null 时优先直调原版 SO（仅 Android arm64 / khz192）。
+  final VnsSoConfig? vnsSo;
 }
 
 /// isolate 内执行体：分块读 PCM → 逐帧升频 → 分块写 24bit WAV。
@@ -527,6 +562,7 @@ void _streamIsolateEntry(_StreamArgs args) {
   try {
     final reader = ViperPcmStreamReader.open(args.sourceWav);
     ViperWav24Writer? writer;
+    VnsSoEngine? soEngine;
     try {
       final header = reader.header;
       final totalIn = reader.frames;
@@ -540,7 +576,25 @@ void _streamIsolateEntry(_StreamArgs args) {
         return;
       }
 
-      final processor = ViperStreamProcessor(
+      // 优先原版 SO（Android arm64 + khz192），失败静默回退纯 Dart 引擎。
+      // 两者共用 pushStereo/flush/ratio 接口，下游写盘逻辑完全一致。
+      ViperEngine? processor;
+      if (args.vnsSo != null) {
+        try {
+          soEngine = VnsSoEngine.open(
+            config: args.vnsSo!,
+            inRate: ViperStreamProcessor.baseRate,
+            inCh: 2,
+            outRate: args.rate.hz,
+          );
+          processor = soEngine;
+        } catch (e) {
+          AppLog.w('ViperUpscaler', '原版 SO 引擎不可用，回退纯 Dart: $e');
+          soEngine = null;
+          processor = null;
+        }
+      }
+      processor ??= ViperStreamProcessor(
         rate: args.rate,
         tapeEnhance: args.tapeEnhance,
       );
@@ -582,6 +636,7 @@ void _streamIsolateEntry(_StreamArgs args) {
       args.port.send(_StreamResult(outFrames, outFrames * 2 * 3 + 44,
           args.rate.hz));
     } finally {
+      soEngine?.close();
       reader.close();
       try {
         writer?.close();

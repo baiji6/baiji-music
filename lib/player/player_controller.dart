@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:baiji_music/core/app_logger.dart';
 import 'package:baiji_music/core/kv_store.dart';
 import 'package:baiji_music/core/telemetry.dart';
+import 'package:baiji_music/baka/baka_decoder.dart';
 import 'package:baiji_music/core/transcode_stream.dart';
 import 'package:baiji_music/dts/dts_decoder.dart';
 import 'package:baiji_music/local/local_scanner.dart';
@@ -1200,6 +1201,52 @@ class PlayerController {
       final r = await _fetch(song, plan.qq, plan.ne);
       if (gen != _resolveGen) return _resolveSuperseded; // 等待期间来了新请求，作废本次结果
       if (r.isNotEmpty) {
+        // ===== baka 主解码器（v2.6.6）=====
+        // AC-4（杜比全景声）/ AV3A（网易云臻音全景声）优先走独立 Rust so
+        // （baka-ac4 v0.2.2 / baka-av3a v0.1.2）边转码边播放；so 不可用时
+        // 维持原路径——mpv 内编的 ac4 与 UWA av3a 解码器作兜底（双解码器）。
+        final baka = _detectBakaCodec(r);
+        if (baka != null) {
+          final supported = BakaMusic.isSupported(baka);
+          if (!supported) {
+            AppLog.i('PlayerController',
+                '${baka.tag} 原生解码器不可用，回退 mpv 内置解码');
+          } else {
+            if (!_noticeStream.isClosed) {
+              _noticeStream.add('${baka.tag} 解码中，首次播放需短暂转码…');
+            }
+            final bkey = '${baka.cacheSubdir}_${song.mid}';
+            final streamUrl = await _streamTranscode(
+              bkey,
+              '${baka.tag} 边转码边播放中…',
+              (out) => BakaMusic.decodeToStreamFile(baka, r.url, song.mid, out),
+              onDecodeFailed: () => _fallbackWholeDecode(
+                song,
+                gen,
+                null,
+                null,
+                null,
+                r.url,
+                song.mid,
+                wav: (u, k) async =>
+                    (await BakaMusic.decodeToWav(baka, u, k))?.wavPath,
+              ),
+            );
+            if (streamUrl != null) {
+              _applyActual(r);
+              _reportPlay(song, r);
+              return streamUrl;
+            }
+            final res = await BakaMusic.decodeToWav(baka, r.url, song.mid);
+            if (gen != _resolveGen) return _resolveSuperseded;
+            if (res != null) {
+              _applyActual(r);
+              _reportPlay(song, r);
+              return Uri.file(res.wavPath).toString();
+            }
+            AppLog.w('PlayerController', '${baka.tag} 解码失败，回退 mpv 内置解码');
+          }
+        }
         // 臻品 DTS:X（DT03）专用管线（v2.4.2-pre8）：mpv 的 ffmpeg 没有
         // DTS UHD(P2) 解码器，走 dts_glue 原生解码 → WAV 缓存 → 本地播放。
         if (r.qq?.code == Quality.dtsX.code) {
@@ -1371,6 +1418,26 @@ class PlayerController {
 
     _clearActual();
     return '';
+  }
+
+  /// v2.6.6：从取流结果判断是否为 baka 主解码器档位。
+  ///
+  /// - AC-4：QQ D004/D008、酷我 dolby_ac4、酷狗 dolby2_*（AC-4 变体）；
+  /// - AV3A：网易云臻音全景声（level=vivid）。
+  /// 返回 null 表示不是 baka 档（维持原 mpv 直解路径）。
+  BakaConfig? _detectBakaCodec(PlayUrlResult r) {
+    // 网易云臻音全景声 → baka-av3a
+    final ne = r.ne?.level;
+    if (ne == 'vivid') return BakaMusic.av3a;
+    // QQ 杜比全景声 AC-4 → baka-ac4（dolbyAlias 已把 D008 归一到 D004）
+    final qq = r.qq?.code;
+    if (qq == 'D004' || qq == Quality.atmosDb.code) return BakaMusic.ac4;
+    // 酷我杜比全景声 AC-4 → baka-ac4
+    if (r.kuwo?.id == 'dolby_ac4') return BakaMusic.ac4;
+    // 酷狗杜比全景声 AC-4 变体（dolby2_*）→ baka-ac4
+    final kg = r.kugou?.id;
+    if (kg != null && (kg.startsWith('dolby2_'))) return BakaMusic.ac4;
+    return null;
   }
 
   /// 广播「实际生效音质 = 臻品 DTS:X」（缓存直通路径没有取流结果可依）。
@@ -1576,9 +1643,27 @@ class PlayerController {
     Future<DtsDecodeResult?> Function(String, String)? dts,
     Future<Ra360DecodeResult?> Function(String, String)? ra360,
     String url,
-    String key,
-  ) async {
+    String key, {
+    Future<String?> Function(String, String)? wav,
+  }) async {
     if (gen != _resolveGen) return;
+    // v2.6.6：baka 解码器用通用 wav 回调（返回成品路径）。
+    if (wav != null) {
+      final path = await wav(url, key);
+      if (gen != _resolveGen) return;
+      if (path == null) {
+        AppLog.w('PlayerController', '流式失败后整曲解码也失败（key=$key）');
+        if (!_errorStream.isClosed) _errorStream.add('该音质解码失败，暂无法播放');
+        if (!_playState.isClosed) _playState.add(false);
+        return;
+      }
+      AppLog.i('PlayerController', '流式失败，回落整曲解码重播: $path');
+      if (!_noticeStream.isClosed) {
+        _noticeStream.add('流式解码失败，已切换为整曲解码重播');
+      }
+      await play(song, Uri.file(path).toString());
+      return;
+    }
     final res = (nac != null)
         ? await nac(url, key)
         : (dts != null)

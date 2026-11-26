@@ -57,6 +57,23 @@ enum ViperUpscaleRate {
 /// 回调必须**同步消费**传入的缓冲：实现方会在下一次调用前复用同一块内存。
 typedef ViperOutputSink = void Function(Float64List interleaved, int frames);
 
+/// 升频引擎公共接口（Dart 隐式接口：实现方无需显式 implements）。
+///
+/// [ViperStreamProcessor]（纯 Dart）与 `VnsSoEngine`（Android 原版 SO）都提供
+/// `ratio` / `pushStereo` / `flush`，流式写盘循环可统一消费。
+abstract class ViperEngine {
+  int get ratio;
+
+  void pushStereo(
+    Float64List left,
+    Float64List right,
+    int count,
+    ViperOutputSink sink,
+  );
+
+  void flush(ViperOutputSink sink);
+}
+
 /// 流式升频处理器。
 ///
 /// 逐帧执行「STFT → 频域带宽扩展 → ISTFT → overlap-add」，输入输出都是
@@ -68,7 +85,7 @@ typedef ViperOutputSink = void Function(Float64List interleaved, int frames);
 /// p.pushStereo(left, right, count, (buf, frames) { /* 写文件 */ });
 /// p.flush((buf, frames) { /* 收尾 */ });
 /// ```
-class ViperStreamProcessor {
+class ViperStreamProcessor implements ViperEngine {
   ViperStreamProcessor({
     required this.rate,
     this.tapeEnhance = true,
@@ -100,6 +117,7 @@ class ViperStreamProcessor {
   static const double knee = 0.70;
 
   /// 升频倍率（96k → 2，192k → 4）。
+  @override
   int get ratio => rate.hz ~/ baseRate;
 
   /// 目标域窗长度。
@@ -168,6 +186,7 @@ class ViperStreamProcessor {
   /// 推入 48 kHz 立体声 PCM（左右各 [count] 个样本）。
   ///
   /// 内部会按需处理整帧，完成的输出通过 [sink] 回调送出。
+  @override
   void pushStereo(
     Float64List left,
     Float64List right,
@@ -199,6 +218,7 @@ class ViperStreamProcessor {
   /// 结束推流：补零冲刷尾部帧并输出剩余样本。
   ///
   /// [sink] 会收到全部剩余输出；输出总帧数 = 输入帧数 × ratio。
+  @override
   void flush(ViperOutputSink sink) {
     final srcLen = _recv[0];
     final numFrames = _planFrames(srcLen);

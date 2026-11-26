@@ -1,0 +1,10 @@
+{
+  "model.bin": {
+    "bytes": 79930,
+    "sha256": "55d56a17dbfa22da21f2fa945ebe13824d246fe8b2669a63e0440316282ae068"
+  },
+  "lsf.bin": {
+    "bytes": 43976,
+    "sha256": "684bd1e6450d240aed9e0621d9bbb3306ffff454d251cfc73610f84e751afd80"
+  }
+}

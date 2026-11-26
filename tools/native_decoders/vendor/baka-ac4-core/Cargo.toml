@@ -1,0 +1,16 @@
+[package]
+name = "baka-ac4-core"
+description = "Pure Rust Dolby AC-4 audio decoder"
+version = "0.2.2"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Zencok/baka"
+readme = "README.md"
+keywords = ["ac4", "audio", "decoder", "codec", "pcm"]
+categories = ["multimedia::audio", "multimedia::encoding"]
+include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "README.md", "LICENSE", "NOTICE"]
+
+[dependencies]
+thiserror = "2"
+rustfft = "6"

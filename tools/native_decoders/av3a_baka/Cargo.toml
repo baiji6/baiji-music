@@ -1,0 +1,12 @@
+[package]
+name = "av3a_baka"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+name = "av3a_baka"
+crate-type = ["cdylib"]
+
+[dependencies]
+baka-av3a-core = { path = "../vendor/baka-av3a-core" }
+baka-av3a-container = { path = "../vendor/baka-av3a-container" }

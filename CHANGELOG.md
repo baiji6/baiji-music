@@ -1,5 +1,30 @@
 # 更新日志
 
+## 2.6.6
+
+> 正式版（tag `v2.6.6`）。蝰蛇母带改用原版 SO 直调；杜比全景声 AC-4、臻音全景声 AV3A 换成独立 Rust 解码器作主解码器；从此只发 Android 包。
+
+### 🐍 蝰蛇母带：Android arm64 直调原版 SO
+
+- 捆绑 Bai music 官方 `libvns.so` / `libeffect0.so` / `libstdc++.so` 到 `jniLibs/arm64-v8a`，用 `dart:ffi` 直调 `vns_stream_*` C ABI，192k 档音质与原版一致（非 arm64 / 非 Android / 96k 档 / SO 损坏自动回退原纯 Dart 引擎）。
+- 真实音频验证时发现并修复严重 bug：SO 的 `vns_stream_open` 第 4 参数是**升频倍率**（非声道数），原实现传 `2` 只升到 96k 却按 192k 写 WAV 头，导致成品播放快一倍。改为按 `outRate/inRate` 传倍率（192k→4），输出帧数与 WAV 头一致；提取纯函数 `vnsSoRatio()` + 4 项回归测试固化。
+
+### 🎧 baka 解码器：AC-4 / AV3A 独立 so 作主解码器
+
+- **杜比全景声 AC-4**：`baka-ac4` 更新到 v0.2.2，Rust 交叉编译为 `libac4_baka.so`，作为 AC-4 主解码器，走 dart:ffi + 边转码边播放。
+- **臻音全景声 AV3A**：新增 `baka-av3a` v0.1.2，Rust 交叉编译为 `libav3a_baka.so`，作为网易云臻音全景声（Audio Vivid）主解码器；模型 `model.bin` / LSF `lsf.bin` 从官方包提取并内置，sha256 校验一致。**UWA 参考解码器保留**，so 不可用时回退 mpv 内置解码（双解码器共存）。
+- 两 so 覆盖 arm64-v8a / armeabi-v7a，仅依赖系统 libc/libm/libdl；构建脚本 `tools/build-native-decoders.sh`，上游 crate vendor 在 `tools/native_decoders/vendor/`，可复现。
+- AC-4 用真实 AC-4 帧验证 C ABI：7 帧解出 51.2kHz/2ch 16bit WAV，波形正常无削波。
+
+### 📦 发布策略
+
+- 从此只构建/发布 Android APK；iOS / macOS / Windows / Linux 的构建步骤保留在仓库但不运行、不打包。
+
+### 🧪 测试
+
+- 新增 `vns_so_test.dart` 倍率回归 4 项、`baka_decoder_test.dart` so 打包契约与模型资产完整性 7 项。
+- `flutter analyze` 零问题，全量测试通过。
+
 ## 2.6.5-fix2
 
 > 修订版（tag `v2.6.5-fix2`）。修复 QQ 音乐 2 下载后无法播放：按真实魔数校正扩展名 + 拦截 FF 坏块。

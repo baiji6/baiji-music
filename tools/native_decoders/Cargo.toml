@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "vendor/baka-ac4-core",
+    "vendor/baka-ac4-cli",
+    "vendor/baka-av3a-core",
+    "vendor/baka-av3a-container",
+    "ac4_baka",
+    "av3a_baka",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Zencok/baka-ac4"
+readme = "README.md"
+
+[workspace.lints.rust]
+unsafe_code = "allow"
+
+# 二进制产物统一输出到项目根目录的 target
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

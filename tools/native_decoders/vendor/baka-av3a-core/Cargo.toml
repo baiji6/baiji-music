@@ -1,0 +1,13 @@
+[package]
+name = "baka-av3a-core"
+version = "0.1.2"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Zencok/baka"
+description = "Pure Rust AV3A audio decoder with multichannel PCM output"
+readme = "README.md"
+keywords = ["av3a", "audio", "decoder", "codec", "pcm"]
+categories = ["multimedia::audio", "multimedia::encoding"]
+include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "README.md", "LICENSE", "NOTICE"]
+

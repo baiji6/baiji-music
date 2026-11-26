@@ -1,0 +1,12 @@
+[package]
+name = "ac4_baka"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+name = "ac4_baka"
+crate-type = ["cdylib"]
+
+[dependencies]
+baka-ac4-core = { path = "../vendor/baka-ac4-core" }
+baka-ac4-cli = { path = "../vendor/baka-ac4-cli" }

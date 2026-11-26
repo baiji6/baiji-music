@@ -181,6 +181,8 @@ jobs:
   # ---------------------------------------------------------------- iOS
   ios:
     name: iOS Release ipa（未签名）
+    # v2.6.6 起只发 Android 包：代码与构建步骤保留，暂不运行。
+    if: ${{ false }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -229,6 +231,8 @@ jobs:
   # ---------------------------------------------------------------- macOS（双架构）
   macos:
     name: macOS Release (${{ matrix.arch }})
+    # v2.6.6 起只发 Android 包：代码与构建步骤保留，暂不运行。
+    if: ${{ false }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -316,6 +320,8 @@ jobs:
   # ---------------------------------------------------------------- Windows
   windows:
     name: Windows Release exe（UPX 加壳）
+    # v2.6.6 起只发 Android 包：代码与构建步骤保留，暂不运行。
+    if: ${{ false }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -402,6 +408,8 @@ jobs:
   # ---------------------------------------------------------------- Linux
   linux:
     name: Linux Release deb（UPX 加壳）
+    # v2.6.6 起只发 Android 包：代码与构建步骤保留，暂不运行。
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -473,7 +481,8 @@ jobs:
   release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [android, ios, macos, windows, linux]
+    # v2.6.6 起只发 Android 包，其余平台 job 已禁用，needs 只留 android。
+    needs: [android]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -524,14 +533,9 @@ jobs:
           # 预发布：版本号带 -pre 后缀（如 2.4.2-pre1）时标记为
           # GitHub Pre-release，不占用「最新 Release」位（v2.4.2 开发期约定）。
           prerelease: ${{ contains(env.APP_VERSION, '-pre') }}
+          # v2.6.6 起只发 Android 包，其余平台构建步骤保留在仓库但不运行/不发布。
           files: |
             dist/baiji-music-${{ env.APP_VERSION }}-android.apk
-            dist/baiji-music-${{ env.APP_VERSION }}-ios.ipa
-            dist/baiji-music-${{ env.APP_VERSION }}-macos-x64.dmg
-            dist/baiji-music-${{ env.APP_VERSION }}-macos-arm64.dmg
-            dist/baiji-music-${{ env.APP_VERSION }}-windows-x64.exe
-            dist/baiji-music-${{ env.APP_VERSION }}-windows-x64.zip
-            dist/baiji-music_${{ env.APP_VERSION }}_amd64.deb
           fail_on_unmatched_files: false
           name: 白姬音乐 v${{ env.APP_VERSION }}
           body: |

@@ -459,6 +459,23 @@ libmpv 原生库在通用 ffmpeg 基础上额外编入三个音频解码器。`t
 - **宿主验证**：av3a 对真实网易云文件 12289 帧解码 0 错误，输出与参考解码器逐样本等价
   （RMS 差异 0.000%，Pearson 相关 0.99996）。
 
+#### v2.6.6：baka 独立 so 作主解码器
+
+上述解码器随 libmpv 一起编译、升级需重编整个原生库。v2.6.6 起 AC-4 / AV3A 新增
+**独立 Rust so 主解码器**，与项目既有的 DTS / 360RA / NAC 一样走 dart:ffi + 边转码边播放，
+可独立升级、不依赖 libmpv 重编：
+
+| 解码器 so | 上游 | 角色 | 兜底 |
+| --- | --- | --- | --- |
+| `libac4_baka.so` | [baka-ac4 v0.2.2](https://github.com/Zencok/baka-ac4) | 杜比全景声 AC-4 主解码器 | mpv 内编 `ac4` / `ac4_baka` |
+| `libav3a_baka.so` | [baka-av3a v0.1.2](https://github.com/Zencok/baka-av3a) | 网易云臻音全景声（Audio Vivid）主解码器 | mpv 内编 UWA `av3a` |
+
+- 覆盖 arm64-v8a / armeabi-v7a，仅依赖系统 libc/libm/libdl；构建脚本见
+  `tools/build-native-decoders.sh`，上游 crate 源码 vendor 于 `tools/native_decoders/vendor/`；
+- AV3A 的神经模型 `model.bin` + LSF 码本 `lsf.bin` 从官方包提取内置于 `assets/av3a/`，
+  sha256 与官方 `assets.json` 一致；MCR / HOA 码本按需可选；
+- so 加载失败 / 非 Android 时自动回退 libmpv 内置解码，UWA 参考解码器完整保留。
+
 ### QQ 音乐臻品 DTS:X 解码（v2.4.2-pre8：dts_glue 独立管线）
 
 DTS UHD（Profile 2 / `dtsx`）无开源解码器、ffmpeg 也不支持，因此**不走 libmpv**，
