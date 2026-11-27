@@ -11,7 +11,7 @@
 //   3. 取流：GET http://molan.guoyue2010.cn/qmc.php?id=<mid>&level=<level>
 //      header X-API-key: <用户在设置页填写的 key，绝不内置>。
 //      返回 data.url（QMCv2 加密直链）+ data.ekey；解密复用 QQ 的
-//      QmcRelayServer。level 全 9 档见 models.Qq2Quality。
+//      QmcRelayServer。level 全 26 档（ogg96~dts）见 models.Qq2Quality。
 //
 // 歌词不走这里：直接复用 LyricApi.qq(song)，按 mid 请求官方
 // PlayLyricInfo —— 下架歌的 QRC 逐字数据仍在歌词库，实测可解。
@@ -290,29 +290,36 @@ class Qq2Api {
     );
   }
 
-  /// [Quality.code]（文件名前缀）→ qmc.php 的 `level` 参数。
+  /// [Quality.code]（加密文件名前缀）→ qmc.php 的 `level` 参数（v2.6.8 共 26 档）。
   static String levelOf(Quality q) {
     switch (q.code) {
-      case 'O4M0':
-        return 'low';
-      case 'O6M0':
-        return 'standard';
-      case 'O8M0':
-        return 'exhigh';
-      case 'F0M0':
-        return 'lossless';
-      case 'RSM1':
-        return 'hires';
-      case 'Q0M0':
-        return 'zpyz';
-      case 'Q0M1':
-        return 'zpqj';
-      case 'D0M1':
-        return 'dolby';
-      case 'AIM0':
-        return 'jymaster';
-      default:
-        return 'standard';
+      case 'O4M0': return 'low';
+      case 'O6M0': return 'standard';
+      case 'O8M0': return 'exhigh';
+      case 'O8M1': return 'ogg640';
+      case 'F0M0': return 'lossless';
+      case 'RSM1': return 'hires';
+      case 'TLM1': return 'nac';
+      case 'D0M1': return 'dolby';
+      case 'D0M2': return 'dolby2';
+      case 'D0M3': return 'dolby3';
+      case 'D0M4': return 'dolby4';
+      case 'D0M5': return 'dolby5';
+      case 'D0M6': return 'dolby6';
+      case 'D0M7': return 'dolby7';
+      case 'D0M8': return 'dolby8';
+      case 'D0M9': return 'dolby9';
+      case 'RAM1': return 'ra1';
+      case 'RAM2': return 'ra2';
+      case 'RAM3': return 'ra3';
+      case 'RAM4': return 'ra4';
+      case 'Q0M0': return 'zpyz';
+      case 'Q0M1': return 'zpqj';
+      case 'Q0M3': return 'zpqj3';
+      case 'V0M0': return 'vinyl';
+      case 'AIM0': return 'jymaster';
+      case 'DTM3': return 'dts';
+      default: return 'standard';
     }
   }
 

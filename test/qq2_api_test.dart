@@ -89,16 +89,43 @@ void main() {
   });
 
   group('音质档位', () {
-    test('9 个 level 与文档一致', () {
+    test('26 个 level 与文档一致（加密前缀）', () {
+      expect(Qq2Quality.downloadOptions, hasLength(26));
       expect(
         Qq2Quality.downloadOptions.map((q) => q.code).toList(),
         [
-          'AIM0', 'Q0M1', 'Q0M0', 'RSM1', 'F0M0',
-          'O8M0', 'O6M0', 'D0M1', 'O4M0',
+          'DTM3', 'AIM0', 'V0M0', 'Q0M3', 'Q0M1', 'Q0M0',
+          'RAM4', 'RAM3', 'RAM2', 'RAM1',
+          'D0M9', 'D0M8', 'D0M7', 'D0M6', 'D0M5', 'D0M4', 'D0M3', 'D0M2', 'D0M1',
+          'RSM1', 'TLM1', 'F0M0',
+          'O8M0', 'O8M1', 'O6M0', 'O4M0',
         ],
       );
-      expect(Qq2Quality.fromId('F0M0')!.label, '无损音质');
+      expect(Qq2Quality.fromId('F0M0')!.label, 'flac');
       expect(Qq2Quality.fromId('unknown'), isNull);
+    });
+
+    test('v2.6.8 新增档位的加密前缀与解密后缀', () {
+      expect(Qq2Quality.fromId('O8M1')!.ext, '.ogg'); // ogg640
+      expect(Qq2Quality.fromId('TLM1')!.ext, '.nac'); // nac
+      expect(Qq2Quality.fromId('Q0M3')!.ext, '.ogg'); // 臻品全景声3.0
+      expect(Qq2Quality.fromId('V0M0')!.ext, '.flac'); // 黑胶
+      expect(Qq2Quality.fromId('DTM3')!.ext, '.mp4'); // dts:x
+      expect(Qq2Quality.fromId('RAM4')!.label, '360RA-4');
+      expect(Qq2Quality.fromId('D0M9')!.label, 'dolby-9');
+      // fromUrl 从加密前缀反查（360RA / dts）
+      expect(
+        Qq2Quality.fromUrl(
+                'https://aqqmusic.tc.qq.com/RAM4001eGhxQ2Yl7zo.mmp4?vkey=X')
+            !.code,
+        'RAM4',
+      );
+      expect(
+        Qq2Quality.fromUrl(
+                'https://aqqmusic.tc.qq.com/DTM3001eGhxQ2Yl7zo.mmp4?vkey=X')
+            !.ext,
+        '.mp4',
+      );
     });
 
     test('从直链文件名前缀反查实际档（服务端降级可识别）', () {
@@ -127,6 +154,14 @@ void main() {
       expect(Qq2Api.levelOf(Qq2Quality.lossless), 'lossless');
       expect(Qq2Api.levelOf(Qq2Quality.zpqj), 'zpqj');
       expect(Qq2Api.levelOf(Qq2Quality.jymaster), 'jymaster');
+      // v2.6.8 新增档位
+      expect(Qq2Api.levelOf(Qq2Quality.ogg640), 'ogg640');
+      expect(Qq2Api.levelOf(Qq2Quality.nac), 'nac');
+      expect(Qq2Api.levelOf(Qq2Quality.dolby9), 'dolby9');
+      expect(Qq2Api.levelOf(Qq2Quality.ra4), 'ra4');
+      expect(Qq2Api.levelOf(Qq2Quality.zpqj3), 'zpqj3');
+      expect(Qq2Api.levelOf(Qq2Quality.vinyl), 'vinyl');
+      expect(Qq2Api.levelOf(Qq2Quality.dts), 'dts');
       expect(Qq2Api.levelOf(const Quality('XX', '.mp3', '', 0)), 'standard');
     });
 

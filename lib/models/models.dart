@@ -66,18 +66,48 @@ class Source {
 /// [Quality.ext] 记的是**解密后**的容器（服务器返回的是 .mgg/.mflac/.mmp4
 /// 加密壳）：.mgg 解密为 Ogg、.mflac 解密为 FLAC、.mmp4 解密为 MP4。
 class Qq2Quality {
-  static const low = Quality('O4M0', '.ogg', '低音质', 96);
-  static const standard = Quality('O6M0', '.ogg', '标准音质', 128);
-  static const exhigh = Quality('O8M0', '.ogg', '超高音质', 320);
-  static const lossless = Quality('F0M0', '.flac', '无损音质', 0);
-  static const hires = Quality('RSM1', '.flac', '高解析无损', 0);
-  static const zpyz = Quality('Q0M0', '.flac', '臻品音质 2.0', 0);
-  static const zpqj = Quality('Q0M1', '.flac', '臻品全景声 3.0', 0);
-  static const dolby = Quality('D0M1', '.mp4', '杜比全景声', 0);
-  static const jymaster = Quality('AIM0', '.flac', '臻品母带 4.0', 0);
+  // v2.6.8：按官方代号表补齐到 ogg96~dts 共 26 档。
+  // [code] 是加密后的文件前缀（第 3 位为 M），[Quality.ext] 记的是**解密后**容器：
+  // .mgg→.ogg / .mflac→.flac / .mmp4→.mp4 / .mnac→.nac。
+  // ogg 系
+  static const low = Quality('O4M0', '.ogg', 'ogg 96', 96);
+  static const standard = Quality('O6M0', '.ogg', 'ogg 192', 192);
+  static const exhigh = Quality('O8M0', '.ogg', 'ogg 320', 320);
+  static const ogg640 = Quality('O8M1', '.ogg', 'ogg 640', 640);
+  // 无损 / 空间音频
+  static const lossless = Quality('F0M0', '.flac', 'flac', 0);
+  static const hires = Quality('RSM1', '.flac', 'hires', 0);
+  static const nac = Quality('TLM1', '.nac', 'nac', 0);
+  // 杜比全景声 1-9
+  static const dolby = Quality('D0M1', '.mp4', 'dolby-1', 0);
+  static const dolby2 = Quality('D0M2', '.mp4', 'dolby-2', 0);
+  static const dolby3 = Quality('D0M3', '.mp4', 'dolby-3', 0);
+  static const dolby4 = Quality('D0M4', '.mp4', 'dolby-4', 0);
+  static const dolby5 = Quality('D0M5', '.mp4', 'dolby-5', 0);
+  static const dolby6 = Quality('D0M6', '.mp4', 'dolby-6', 0);
+  static const dolby7 = Quality('D0M7', '.mp4', 'dolby-7', 0);
+  static const dolby8 = Quality('D0M8', '.mp4', 'dolby-8', 0);
+  static const dolby9 = Quality('D0M9', '.mp4', 'dolby-9', 0);
+  // 360RA 1-4
+  static const ra1 = Quality('RAM1', '.mp4', '360RA-1', 0);
+  static const ra2 = Quality('RAM2', '.mp4', '360RA-2', 0);
+  static const ra3 = Quality('RAM3', '.mp4', '360RA-3', 0);
+  static const ra4 = Quality('RAM4', '.mp4', '360RA-4', 0);
+  // 臻品全景声 / 黑胶 / 母带 / dts:x
+  static const zpyz = Quality('Q0M0', '.flac', '臻品全景声 1.0', 0);
+  static const zpqj = Quality('Q0M1', '.flac', '臻品全景声 2.0', 0);
+  static const zpqj3 = Quality('Q0M3', '.ogg', '臻品全景声 3.0', 0);
+  static const vinyl = Quality('V0M0', '.flac', '黑胶', 0);
+  static const jymaster = Quality('AIM0', '.flac', '母带', 0);
+  static const dts = Quality('DTM3', '.mp4', 'dts:x', 0);
 
+  /// 从高到低排列，顺序即降级顺序（与 qmc.php 的 lowerLevels 一致）。
   static const downloadOptions = <Quality>[
-    jymaster, zpqj, zpyz, hires, lossless, exhigh, standard, dolby, low,
+    dts, jymaster, vinyl, zpqj3, zpqj, zpyz,
+    ra4, ra3, ra2, ra1,
+    dolby9, dolby8, dolby7, dolby6, dolby5, dolby4, dolby3, dolby2, dolby,
+    hires, nac, lossless,
+    exhigh, ogg640, standard, low,
   ];
   static const playbackOptions = downloadOptions;
   static const playbackDefault = standard;
