@@ -21,6 +21,7 @@ import 'core/signature_guard.dart';
 import 'core/telemetry.dart';
 import 'core/theme_controller.dart';
 import 'core/ui_settings.dart';
+import 'core/third_party_source.dart';
 import 'core/update_checker.dart';
 import 'network/kugou/kugou_auth.dart';
 import 'network/kuwo/kuwo_auth.dart';
@@ -54,6 +55,8 @@ Future<void> main() async {
   await DevMode.instance.load();
   // 全局界面偏好（圆角等）：卡片在首帧就要用上正确圆角
   await UiSettings.instance.load();
+  // 第三方音源偏好（内置音源开关 + 用户自填 key）：取流前必须就位
+  await ThirdPartySource.instance.load();
   // 内存图片缓存上限走KvStore，每次启动都要重新应用一次（进程级设置）
   CacheManager.applyMemoryLimit();
   // 本地播放统计（听歌时长/次数/循环，纯本地）：KvStore 就绪后即开始采集

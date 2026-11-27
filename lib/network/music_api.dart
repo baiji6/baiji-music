@@ -8,6 +8,8 @@ import 'package:baiji_music/network/joox/joox_api.dart';
 import 'package:baiji_music/network/qishui/qishui_api.dart';
 import 'package:baiji_music/network/qishui/qishui_relay.dart';
 import 'package:baiji_music/network/qq2/qq2_api.dart';
+import 'package:baiji_music/network/thirdparty/thirdparty_stream_api.dart';
+import 'package:baiji_music/core/third_party_source.dart';
 import '../decrypt/qmc.dart';
 import '../lyrics/lyric_model.dart';
 import '../decrypt/qmc_ekey.dart';
@@ -73,6 +75,9 @@ class PlayUrlResult {
   /// 覆盖扩展名（网易云响应里的真实 `type`）；为空时按音质枚举推断。
   final String? _extOverride;
 
+  /// 覆盖展示名（第三方音源 v2.6.7：无平台枚举时用规范音质串的展示名）。
+  final String? _labelOverride;
+
   /// QMCv2 ekey（QQ 加密档位才有；url 已是本地解密中继地址）。
   final String ekey;
 
@@ -83,7 +88,15 @@ class PlayUrlResult {
       this.kugou,
       this.migu,
       this.joox,
-      this.qishui]);
+      this.qishui,
+      this._labelOverride]);
+
+  /// 第三方聚合音源结果（v2.6.7）：明文直链，扩展名 / 展示名由调用方按
+  /// 规范音质串传入（无对应平台的 Quality 枚举）。
+  factory PlayUrlResult.thirdParty(String url,
+          {required String ext, required String label}) =>
+      PlayUrlResult._(url, null, null, ext, null, '', null, null, null, null,
+          label);
 
   static const empty = PlayUrlResult._('', null, null);
 
@@ -102,8 +115,8 @@ class PlayUrlResult {
       '.mp3';
 
   /// 音质标签；无则空串。
-  String get label => kuwo?.label ??
-      kugou?.label ??
+  String get label => _labelOverride ??
+      kuwo?.label ??
       migu?.label ??
       joox?.label ??
       qishui?.label ??
@@ -439,6 +452,27 @@ class MusicApi {
     MiguQuality? miguQuality,
     JooxQuality? jooxQuality,
     QishuiQuality? qishuiQuality}) async {
+    // v2.6.7：关掉「内置音源」开关且已填 key 时，取流走第三方聚合接口。
+    // 仅覆盖六个平台（JOOX / QQ2 / 本地无第三方通道，自动落到内置逻辑）。
+    // 第三方失败（无该档 / 网络异常）静默回退内置，用户无感。
+    if (ThirdPartySource.instance.shouldUseThirdParty) {
+      final t = await ThirdPartyStreamApi.fetch(
+        song,
+        qqQuality: qqQuality,
+        neQuality: neQuality,
+        kuwoQuality: kuwoQuality,
+        kugouQuality: kugouQuality,
+        miguQuality: miguQuality,
+        qishuiQuality: qishuiQuality,
+      );
+      if (t != null) {
+        AppLog.i('MusicApi',
+            '第三方音源取流 ${song.source}:${song.mid} → ${t.quality}');
+        return PlayUrlResult.thirdParty(t.url,
+            ext: ThirdPartyStreamApi.extOf(t.quality),
+            label: ThirdPartyStreamApi.labelOf(t.quality));
+      }
+    }
     if (song.isQq2) {
       // v2.6.5：qmc.php 返回 QMCv2 加密流 + ekey，复用 QQ 的本地解密中继。
       // key 由用户在设置页填写，未填时抛错交给上层提示。

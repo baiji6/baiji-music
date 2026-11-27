@@ -17,6 +17,7 @@ import '../../core/device_guid.dart';
 import '../../core/dev_mode.dart';
 import '../../core/log_store.dart';
 import '../../core/lyric_settings.dart';
+import '../../core/third_party_source.dart';
 import '../../core/telemetry.dart';
 import '../../core/theme_controller.dart';
 import '../../core/ui_settings.dart';
@@ -103,6 +104,10 @@ class _SettingsPageState extends State<SettingsPage> {
   final _proxyController = TextEditingController();
   final _qq2KeyController = TextEditingController();
   String _qq2Key = '';
+  // v2.6.7：第三方音源 key（用户自填，不内置）+ 输入弹窗状态
+  final _thirdPartyKeyController = TextEditingController();
+  String _thirdPartyKey = '';
+  bool _showThirdPartyKeyDialog = false;
   UpdateInfo? _updateInfo;
   List<CacheEntry> _cacheEntries = const [];
 
@@ -112,6 +117,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _qq2Key = Qq2Api.apiKey;
+    _thirdPartyKey = ThirdPartySource.instance.apiKey;
     _loadSettings();
     // 开发者模式是进程级单例；这里兜底 load 一次（main 里也会 load，幂等）
     DevMode.instance.load();
@@ -126,6 +132,7 @@ class _SettingsPageState extends State<SettingsPage> {
     KugouAuth.removeListener(_onKuwoAuthChanged);
     _proxyController.dispose();
     _qq2KeyController.dispose();
+    _thirdPartyKeyController.dispose();
     super.dispose();
   }
 
@@ -206,6 +213,25 @@ class _SettingsPageState extends State<SettingsPage> {
   void _editQq2Key() {
     _qq2KeyController.text = _qq2Key;
     setState(() => _showQq2KeyDialog = true);
+  }
+
+  void _editThirdPartyKey() {
+    _thirdPartyKeyController.text = _thirdPartyKey;
+    setState(() => _showThirdPartyKeyDialog = true);
+  }
+
+  Future<void> _saveThirdPartyKey() async {
+    final key = _thirdPartyKeyController.text.trim();
+    setState(() => _showThirdPartyKeyDialog = false);
+    try {
+      await ThirdPartySource.instance.setApiKey(key);
+      setState(() => _thirdPartyKey = ThirdPartySource.instance.apiKey);
+      _showSnack(_thirdPartyKey.isEmpty
+          ? '已清除聆澜音源 API Key'
+          : '聆澜音源 API Key 已保存（仅存本机）');
+    } catch (e) {
+      _showSnack('保存失败：$e');
+    }
   }
 
   Future<void> _saveQq2Key() async {
@@ -700,6 +726,43 @@ class _SettingsPageState extends State<SettingsPage> {
                       size: 22,
                     ),
                     onClick: _editQq2Key,
+                  ),
+                  const MiuixHorizontalDivider(),
+                  // v2.6.7：内置音源开关（开=内置取流，关=走第三方）
+                  AnimatedBuilder(
+                    animation: ThirdPartySource.instance,
+                    builder: (ctx, _) => MiuixSwitchPreference(
+                      title: '内置音源',
+                      summary: ThirdPartySource.instance.useBuiltIn
+                          ? '开启 · 取流走各平台内置接口（默认）'
+                          : '关闭 · 取流走第三方聚合接口（当前：聆澜）',
+                      startAction: const Icon(Icons.source_rounded,
+                          color: AppColors.aqua, size: 22),
+                      value: ThirdPartySource.instance.useBuiltIn,
+                      onChanged: (v) async {
+                        await ThirdPartySource.instance.setUseBuiltIn(v);
+                        if (!mounted) return;
+                        setState(() {});
+                        _showSnack(v ? '取流已切回内置音源' : '取流将使用第三方音源');
+                      },
+                    ),
+                  ),
+                  const MiuixHorizontalDivider(),
+                  MiuixArrowPreference(
+                    title: '聆澜音源 · API Key',
+                    summary: _thirdPartyKey.isEmpty
+                        ? '未设置 · 关闭内置音源后必须填写'
+                        : '已设置（${_thirdPartyKey.length} 字符）',
+                    startAction: Icon(
+                      _thirdPartyKey.isEmpty
+                          ? Icons.key_outlined
+                          : Icons.key_rounded,
+                      color: _thirdPartyKey.isEmpty
+                          ? AppColors.textTertiary
+                          : AppColors.aqua,
+                      size: 22,
+                    ),
+                    onClick: _editThirdPartyKey,
                   ),
                 ],
               ),
@@ -1413,6 +1476,40 @@ MiuixArrowPreference(
                   }),
                   const SizedBox(width: 8),
                   MiuixTextButton('保存', onPressed: _saveQq2Key),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // 第三方音源 API Key（用户自填，不内置，v2.6.7）
+        MiuixOverlayDialog(
+          show: _showThirdPartyKeyDialog,
+          title: '聆澜音源 · API Key',
+          summary: '关闭「内置音源」后取流走聆澜接口；留空即清除。密钥只保存在本机，不会内置在安装包里。',
+          backgroundColor: AppColors.bg2,
+          onDismissRequest: () =>
+              setState(() => _showThirdPartyKeyDialog = false),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              AppTextField(
+                controller: _thirdPartyKeyController,
+                autofocus: true,
+                label: 'X-API-Key',
+                singleLine: true,
+                leadingIcon: Icon(Icons.key_outlined,
+                    size: 18, color: AppColors.textTertiary),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MiuixTextButton('清空', onPressed: () {
+                    _thirdPartyKeyController.text = '';
+                  }),
+                  const SizedBox(width: 8),
+                  MiuixTextButton('保存', onPressed: _saveThirdPartyKey),
                 ],
               ),
             ],
